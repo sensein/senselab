@@ -49,6 +49,7 @@ from senselab_core.runtime.execution.executor import (
     PlanFragment,
     QueueHeld,
     ResultRef,
+    RunCancelled,
 )
 from senselab_core.runtime.execution.in_process import fragment_keys, job_checksum, node_fragment, plan_keys
 from senselab_core.runtime.execution.run import PYDRA_DIR
@@ -80,10 +81,6 @@ Interrupted = (QueueHeld, StaleCoordinator)
 newer coordinator."""
 _CANCELLED = (asyncio.CancelledError, FutureCancelled)
 """The cancellations a submission can raise; each is the run's `RunCancelled`."""
-
-
-class RunCancelled(RuntimeError):
-    """The run was cancelled: a job not yet sent to the executor was not sent."""
 
 
 @dataclass(frozen=True)
@@ -130,8 +127,7 @@ class _EpochLease:
 class SenselabStore:
     """pydra's `ResultStore` over one run: completion records in memory by checksum and context slot, never pickled.
 
-    A job's results live in senselab's store, which the executor serves under the run's reuse policy; this store
-    holds what pydra reads to resolve a downstream input and to mark a job done, and `lookup` returns a record of its
+    It holds what pydra reads to resolve a downstream input and to mark a job done; `lookup` returns a record of its
     own context's slot only. `cache_root` holds only the workflow job's own files; a lease writes nothing there.
     """
 
@@ -513,6 +509,7 @@ class _Driver:
         self.first: dict[str, ResultRef] = {}
         self.twins: dict[str, dict[tuple[int, ...], Job]] = {}
         self.reported: set[str] = set()
+        self.halt = threading.Event()
 
     def drive(self, task: Any) -> None:  # noqa: ANN401 - a pydra workflow task
         """Drive `task`'s `GraphRunner` until no job can progress and no fragment is open.
@@ -530,9 +527,10 @@ class _Driver:
                 self._loop(graph)
                 foreign = [e for e in graph.entries if _label(e.job_name, e.state_index) not in self.reported]
             finally:
+                self.halt.set()
                 graph.close()
-                self.poller.close()
                 self.senders.shutdown(cancel_futures=True)
+                self.poller.close()
         if self.errors:
             raise self.errors[0]
         if foreign:
@@ -584,7 +582,7 @@ class _Driver:
             node, element = _senselab(job)
             if node is None:
                 graph.complete(job, self._row(job))
-            elif self._stopping():
+            elif self._stopped():
                 graph.complete(job, NotRun("the run was stopped before it was sent", held=self._held()))
             else:
                 grouped.setdefault(node, {}).setdefault(element, job)
@@ -592,7 +590,7 @@ class _Driver:
             settled = True
         twins, self.twins = self.twins, {}
         sends = [(n, js, False) for n, js in grouped.items()]
-        sends += [] if self._stopping() else [(n, js, True) for n, js in twins.items()]
+        sends += [] if self._stopped() else [(n, js, True) for n, js in twins.items()]
         items = [item for node, chosen, served in sends for item in self._fragments(graph, node, chosen, served)]
         if items:
             self.open.update(batch for batch, _ in items)
@@ -616,11 +614,24 @@ class _Driver:
         self.store.record(job.checksum, result)
         return result
 
-    def _stopping(self) -> bool:
-        """Whether no fragment is sent any more: the run is cancelled or held by a newer coordinator."""
-        if self.cancel.is_set() and not any(isinstance(e, RunCancelled) for e in self.errors):
-            self.errors.append(RunCancelled(f"run {self.placed.hash} was cancelled before every fragment was sent"))
+    def _stopped(self) -> bool:
+        """Whether no fragment is sent any more: the run is cancelled or held by a newer coordinator.
+
+        A cancel seen here for the first time is recorded as the run's `RunCancelled`.
+        """
+        if self.cancel.is_set():
+            self._record(RunCancelled(f"run {self.placed.hash} was cancelled before every fragment was sent"))
         return self.cancel.is_set() or any(isinstance(e, (RunCancelled, StaleCoordinator)) for e in self.errors)
+
+    def _record(self, error: Exception) -> None:
+        """Hold `error` as one of the run's, a cancellation once."""
+        cancelled = isinstance(error, RunCancelled) and any(isinstance(e, RunCancelled) for e in self.errors)
+        if not cancelled and not any(e is error for e in self.errors):
+            self.errors.append(error)
+
+    def _stop(self) -> bool:
+        """Whether a submission not yet started is to be skipped: the run is cancelled, or the driver has ended."""
+        return self.cancel.is_set() or self.halt.is_set()
 
     def _held(self) -> bool:
         """Whether a newer coordinator stopped the run, which holds every job not yet sent."""
@@ -667,22 +678,39 @@ class _Driver:
         return {source: list(refs.values()) for source, refs in found.items()}
 
     def _send(self, items: Sequence[tuple[_Batch, PlanFragment | BaseException]]) -> None:
-        """Submit a round's fragments in one `submit_many`, following each handle and posting each refusal."""
-        formed = [(batch, f) for batch, f in items if isinstance(f, PlanFragment)]
-        for batch, error in items:
-            if not isinstance(error, PlanFragment):
-                self.inbox.put(("refused", batch, error))
-        if not formed:
-            return
+        """Submit a round's fragments in one `submit_many`, following each handle and posting each refusal.
+
+        Whatever this raises is posted as the refusal of every batch not yet followed or refused, so each batch of the
+        round ends once.
+        """
+        ended: set[int] = set()
         try:
-            taken: Sequence[Handle | BaseException] = self.executor.submit_many([f for _, f in formed])
-        except BaseException as error:  # noqa: BLE001 - every fragment's refusal, a cancellation included
-            taken = [error] * len(formed)
-        for (batch, _), handle in zip(formed, taken, strict=True):
-            if isinstance(handle, Handle):
-                self.poller.follow(handle, batch)
-            else:
-                self.inbox.put(("refused", batch, handle))
+            formed = [(batch, f) for batch, f in items if isinstance(f, PlanFragment)]
+            for batch, error in items:
+                if not isinstance(error, PlanFragment):
+                    self._refuse(batch, error, ended)
+            if not formed:
+                return
+            try:
+                taken: Sequence[Handle | BaseException] = self.executor.submit_many(
+                    [f for _, f in formed], stop=self._stop
+                )
+            except BaseException as error:  # noqa: BLE001 - every fragment's refusal, a cancellation included
+                taken = [error] * len(formed)
+            for (batch, _), handle in zip(formed, taken, strict=True):
+                if isinstance(handle, Handle):
+                    self.poller.follow(handle, batch)
+                    ended.add(id(batch))
+                else:
+                    self._refuse(batch, handle, ended)
+        except BaseException as error:  # noqa: BLE001 - posted for the driver, which raises it after the run
+            for batch, _ in items:
+                if id(batch) not in ended:
+                    self._refuse(batch, error, ended)
+
+    def _refuse(self, batch: _Batch, error: BaseException, ended: set[int]) -> None:
+        self.inbox.put(("refused", batch, error))
+        ended.add(id(batch))
 
     def _receive(self, graph: GraphRunner, timeout: float | None) -> None:
         """Apply the next message, waiting up to `timeout` (None: until one comes), then every message waiting."""
@@ -733,7 +761,7 @@ class _Driver:
         self, graph: GraphRunner, batch: _Batch, elements: Sequence[tuple[int, ...]], error: BaseException
     ) -> None:
         """Give each job of `elements` its outcome for `error`, which kept it from a result (`_Driver`)."""
-        if isinstance(error, (FutureCancelled, *_CANCELLED)):
+        if isinstance(error, _CANCELLED):
             cancelled = RunCancelled(f"run {self.placed.hash}: the submission of node {batch.node!r} was cancelled")
             cancelled.__cause__ = error
             error = cancelled
@@ -742,8 +770,8 @@ class _Driver:
         held = isinstance(error, (RunCancelled, *Interrupted))
         outcome = NotRun(str(error), held=isinstance(error, Interrupted)) if held else Failed(error)
         failure = None if held else FaultRecord.from_exception(error)
-        if not isinstance(error, LicenseRefused) and not any(e is error for e in self.errors):
-            self.errors.append(error)
+        if not isinstance(error, LicenseRefused):
+            self._record(error)
         for element in elements:
             job = batch.jobs[element]
             if failure is not None:

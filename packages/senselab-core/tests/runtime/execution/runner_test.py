@@ -8,6 +8,7 @@ import stat
 import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, ClassVar, TypeVar
 
 import pytest
@@ -157,10 +158,12 @@ class Recording:
         self.fragments.append(fragment)
         return self.inner.submit(fragment)
 
-    def submit_many(self, fragments: Sequence[PlanFragment]) -> list[Handle | Exception]:
+    def submit_many(
+        self, fragments: Sequence[PlanFragment], stop: Callable[[], bool] | None = None
+    ) -> list[Handle | Exception]:
         """Record the round's nodes and submit its fragments through `submit`, as `InProcess` runs them."""
         self.rounds.append([f.node for f in fragments])
-        return submit_each(self, fragments, width=self.inner.workers.bound)
+        return submit_each(self, fragments, width=self.inner.workers.bound, stop=stop, slots=self.inner.slots)
 
     def status(self, handle: Handle) -> Status:
         """Return the status `InProcess` gives."""
@@ -658,6 +661,100 @@ def test_a_round_goes_to_the_executor_in_one_submit_many(tmp_path: Path) -> None
     first = executor.rounds[0]
     assert status.done and sorted(first) == ["a", "a", "a", "c", "c", "c"]
     assert sum(len(r) for r in executor.rounds) == len(executor.fragments)
+
+
+class CancellingAtFirst(Recording):
+    """A `Recording` executor whose first `submit` sets `cancel`."""
+
+    def __init__(self, store: ResultStore, cancel: threading.Event) -> None:
+        """Run on `store`, setting `cancel` as the first fragment is submitted."""
+        super().__init__(store)
+        self.run_cancel = cancel
+
+    def submit(self, fragment: PlanFragment) -> Handle:
+        """Set `cancel`, then submit."""
+        self.run_cancel.set()
+        return super().submit(fragment)
+
+
+@pytest.mark.contract
+def test_a_cancel_during_a_round_sends_at_most_the_bound_of_its_fragments(tmp_path: Path) -> None:
+    """A round of 12 one-job fragments, cancelled as its first is submitted: at most `WorkerSet.bound` are submitted."""
+    placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": f"t{i}"} for i in range(12)])
+    cancel = threading.Event()
+    executor = CancellingAtFirst(ResultStore(tmp_path / "store"), cancel)
+    with pytest.raises(runner.RunCancelled):
+        runner.PydraRunner(profile=PROFILE, work_dir=tmp_path / "pydra").run_plan(
+            placed, executor, values=values, events=EventLog(tmp_path / "events", "a1", 1), cancel=cancel
+        )
+    assert executor.rounds[0] == ["a"] * 12
+    assert 1 <= len(executor.sizes("a")) <= WORKERS.bound and executor.sizes("b") == []
+
+
+class Short(Recording):
+    """A `Recording` executor whose `submit_many` returns one entry too few for a round of several fragments."""
+
+    def submit_many(
+        self, fragments: Sequence[PlanFragment], stop: Callable[[], bool] | None = None
+    ) -> list[Handle | Exception]:
+        """Submit the round and drop its last entry."""
+        taken = super().submit_many(fragments, stop)
+        return taken[:-1] if len(taken) > 1 else taken
+
+
+@pytest.mark.contract
+@pytest.mark.timeout(60)
+def test_a_sender_that_raises_ends_the_run_with_its_error_and_leaks_no_thread(tmp_path: Path) -> None:
+    """A round whose `submit_many` breaks its contract: the run raises the sender's error, every thread ended."""
+    placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": f"t{i}"} for i in range(3)])
+    with pytest.raises(ValueError, match="zip"):
+        runner.PydraRunner(profile=PROFILE, work_dir=tmp_path / "pydra").run_plan(
+            placed, Short(ResultStore(tmp_path / "store")), values=values, events=EventLog(tmp_path / "events", "a1", 1)
+        )
+    running = {t.name.rsplit("_", 1)[0] for t in threading.enumerate()}
+    assert not running & {"senselab-send", "senselab-poll"}
+
+
+class Holding:
+    """An executor stand-in whose `submit` holds until `release` is set, counting the submissions inside it."""
+
+    def __init__(self) -> None:
+        """Start empty, released by nobody."""
+        self.inside = self.peak = 0
+        self.lock = threading.Lock()
+        self.entered = threading.Condition(self.lock)
+        self.release = threading.Event()
+
+    def submit(self, fragment: Any) -> Handle:  # noqa: ANN401 - any stand-in fragment
+        """Count this submission in, hold until released, count it out."""
+        with self.entered:
+            self.inside += 1
+            self.peak = max(self.peak, self.inside)
+            self.entered.notify_all()
+        assert self.release.wait(30)
+        with self.lock:
+            self.inside -= 1
+        return Handle(id=f"held-{id(fragment)}")
+
+
+@pytest.mark.logic
+def test_rounds_sharing_slots_run_at_most_the_slots_at_once_between_them() -> None:
+    """Two rounds of three, each three wide, over two shared slots: no third submission starts while two are held."""
+    executor, slots = Holding(), threading.BoundedSemaphore(2)
+    fragments: list[Any] = [SimpleNamespace(node="a") for _ in range(3)]
+    rounds = [
+        threading.Thread(target=submit_each, args=(executor, fragments), kwargs={"width": 3, "slots": slots})
+        for _ in range(2)
+    ]
+    for one in rounds:
+        one.start()
+    with executor.entered:
+        assert executor.entered.wait_for(lambda: executor.inside == 2, 30)
+        third = executor.entered.wait_for(lambda: executor.inside > 2, 0.2)
+    executor.release.set()
+    for one in rounds:
+        one.join(30)
+    assert not third and executor.peak == 2
 
 
 @pytest.mark.logic

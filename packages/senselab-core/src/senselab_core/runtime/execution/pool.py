@@ -38,7 +38,7 @@ import sys
 import threading
 import weakref
 from collections import Counter
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -615,7 +615,11 @@ class Pool:
             raise taken
         return taken
 
-    def submit_many(self, fragments: Sequence[PlanFragment]) -> list[Handle | Exception]:
+    def submit_many(
+        self,
+        fragments: Sequence[PlanFragment],
+        stop: Callable[[], bool] | None = None,  # noqa: ARG002 - a put returns at once; a cancel ends the follow
+    ) -> list[Handle | Exception]:
         """Put each of a round's `fragments` as `submit` does, then wake the scaler once, seeing the whole round.
 
         Returns each fragment's handle, or the exception it was refused with (as `submit` raises it), in order.

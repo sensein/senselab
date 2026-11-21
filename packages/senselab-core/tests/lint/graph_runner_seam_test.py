@@ -1,9 +1,7 @@
-"""The runner meets pydra's `GraphRunner` through a run-scoped store that pydra never reads results from.
+"""The runner's store serves no hit and its `GraphRunner` looks nothing up before dispatch, read from the source.
 
-`SenselabStore` defines none of the store methods through which `GraphRunner.ready` serves a job without sending it
-(`read_succeeded`, `find`, `withdraw_success`, `work_dir`), and the runner builds its `GraphRunner` with
-`lookup_before_dispatch=False`, so every leaf job reaches senselab's executor, which serves hits under the run's
-reuse policy. Read from the source, so the check needs no pydra.
+`SenselabStore` defines no `read_succeeded`, `find`, `withdraw_success` or `work_dir`, and the one `GraphRunner(...)`
+call passes `lookup_before_dispatch=False`.
 """
 
 import ast

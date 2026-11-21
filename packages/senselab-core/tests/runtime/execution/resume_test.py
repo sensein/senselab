@@ -507,9 +507,11 @@ class Delegating:
         """Submit through `inner`."""
         return self.inner.submit(fragment)
 
-    def submit_many(self, fragments: Sequence[PlanFragment]) -> list[Handle | Exception]:
+    def submit_many(
+        self, fragments: Sequence[PlanFragment], stop: Callable[[], bool] | None = None
+    ) -> list[Handle | Exception]:
         """Submit the round through `inner`."""
-        return self.inner.submit_many(fragments)
+        return self.inner.submit_many(fragments, stop)
 
     def status(self, handle: Handle) -> Status:
         """Return the status `inner` gives."""

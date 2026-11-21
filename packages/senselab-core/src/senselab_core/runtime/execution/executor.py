@@ -1,12 +1,14 @@
 """The `Executor` protocol and the documents it carries: plan fragments in, result references out."""
 
+import contextlib
 import contextvars
 import logging
 import os
 import pwd
 import re
 import socket
-from collections.abc import Iterator, Mapping, Sequence
+import threading
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, Protocol
@@ -354,6 +356,10 @@ class WorkersBroken(QueueHeld):
         self.reason = reason
 
 
+class RunCancelled(RuntimeError):
+    """The run was cancelled: a job not yet sent to the executor was not sent."""
+
+
 class Executor(Protocol):
     """Runs plan fragments of admitted plans: `admit` a plan, `submit` its fragments, follow, stop and read them.
 
@@ -384,8 +390,13 @@ class Executor(Protocol):
     def submit(self, fragment: PlanFragment) -> Handle:
         """Take `fragment` and return its handle."""
 
-    def submit_many(self, fragments: Sequence[PlanFragment]) -> list[Handle | Exception]:
-        """Take a round's `fragments`; return, in their order, each one's handle or the exception that refused it."""
+    def submit_many(
+        self, fragments: Sequence[PlanFragment], stop: Callable[[], bool] | None = None
+    ) -> list[Handle | Exception]:
+        """Take a round's `fragments`; return, in their order, each one's handle or the exception that refused it.
+
+        A fragment not yet started once `stop()` is true is not submitted: its slot holds `RunCancelled`.
+        """
 
     def status(self, handle: Handle) -> Status:
         """Return where the fragment of `handle` is."""
@@ -397,24 +408,40 @@ class Executor(Protocol):
         """Return the results of `handle` landed and not yet given, and whether every one is given; never wait."""
 
 
-def submit_each(executor: Executor, fragments: Sequence[PlanFragment], *, width: int = 1) -> list[Handle | Exception]:
+def submit_each(  # noqa: PLR0913 - the executor and round, then keyword-only limits
+    executor: Executor,
+    fragments: Sequence[PlanFragment],
+    *,
+    width: int = 1,
+    stop: Callable[[], bool] | None = None,
+    slots: threading.Semaphore | None = None,
+) -> list[Handle | Exception]:
     """Submit `fragments` through `executor.submit`, at most `width` at once: each one's handle, or what it raised.
 
-    The results are in the order of `fragments`. A `BaseException` that is not an `Exception` (a cancellation) is
-    raised once every submission has ended.
+    The results are in the order of `fragments`. Each submission first takes one of `slots`, when given (a bound
+    shared by every round of the executor), then checks `stop`: once it is true, the fragment is not submitted and its
+    slot holds `RunCancelled`. A `BaseException` that is not an `Exception` propagates.
     """
     if width <= 1 or len(fragments) <= 1:
-        return [_submitted(executor, f) for f in fragments]
+        return [_submitted(executor, f, stop, slots) for f in fragments]
     with ThreadPoolExecutor(min(width, len(fragments)), thread_name_prefix="senselab-submit") as running:
-        sent = [running.submit(contextvars.copy_context().run, _submitted, executor, f) for f in fragments]
+        sent = [running.submit(contextvars.copy_context().run, _submitted, executor, f, stop, slots) for f in fragments]
     return [taken.result() for taken in sent]
 
 
-def _submitted(executor: Executor, fragment: PlanFragment) -> Handle | Exception:
-    try:
-        return executor.submit(fragment)
-    except Exception as refused:  # noqa: BLE001 - the fragment's outcome, returned in its place
-        return refused
+def _submitted(
+    executor: Executor,
+    fragment: PlanFragment,
+    stop: Callable[[], bool] | None,
+    slots: threading.Semaphore | None,
+) -> Handle | Exception:
+    with slots if slots is not None else contextlib.nullcontext():
+        if stop is not None and stop():
+            return RunCancelled(f"the run was cancelled before node {fragment.node!r} was submitted")
+        try:
+            return executor.submit(fragment)
+        except Exception as refused:  # noqa: BLE001 - the fragment's outcome, returned in its place
+            return refused
 
 
 def follow(
