@@ -4,7 +4,7 @@ import atexit
 import itertools
 import threading
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import ClassVar
 
@@ -35,6 +35,7 @@ from senselab_core.runtime.execution.executor import (
     ResultRef,
     Status,
     UpstreamRef,
+    submit_each,
 )
 from senselab_core.runtime.execution.job import Failed, Job, JobOutcome, Upstream, execute
 from senselab_core.runtime.execution.outputs import anchors_of
@@ -465,6 +466,8 @@ class InProcess:
         self._outcomes: dict[str, list[JobOutcome]] = {}
         self._status: dict[str, Status] = {}
         self._ids = itertools.count()
+        self.slots = threading.BoundedSemaphore(self.workers.bound)
+        """The fragments `submit_many` runs at once, over every round: the worker set's bound."""
 
     logs_claims: ClassVar[bool] = False
     splits_fragments: ClassVar[bool] = False
@@ -531,6 +534,16 @@ class InProcess:
             self._outcomes[handle.id] = outcomes
             self._status[handle.id] = Status.DONE
         return handle
+
+    def submit_many(
+        self, fragments: Sequence[PlanFragment], stop: Callable[[], bool] | None = None
+    ) -> list[Handle | Exception]:
+        """Run each of a round's `fragments` as `submit` does, at most `slots` at once across every round.
+
+        Returns each fragment's handle, or the exception its `submit` raised, in the order of `fragments`; a fragment
+        not started once `stop()` is true holds `RunCancelled`.
+        """
+        return submit_each(self, fragments, width=self.workers.bound, stop=stop, slots=self.slots)
 
     def _run(self, jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:
         """Run `jobs` in runs of one batch each: a run ends where the batch for a job's length changes."""

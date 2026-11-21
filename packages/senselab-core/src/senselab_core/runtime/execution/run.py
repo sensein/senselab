@@ -46,7 +46,7 @@ from senselab_core.runtime.execution.events import (
     status_from,
     terminal_events,
 )
-from senselab_core.runtime.execution.executor import Executor, FaultRecord
+from senselab_core.runtime.execution.executor import Executor, FaultRecord, RunCancelled
 from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
 from senselab_core.runtime.execution.records import add_plan_entity
 from senselab_core.runtime.execution.telemetry import Actuals, Placements
@@ -1026,7 +1026,7 @@ def start(
     """
     if importlib.util.find_spec("pydra") is None:
         raise MissingExtra("pydra")
-    from senselab_core.runtime.execution.runner import PydraRunner, RunCancelled  # noqa: PLC0415 - needs pydra
+    from senselab_core.runtime.execution.runner import PydraRunner  # noqa: PLC0415 - needs pydra
 
     placed = placed.fit()
     provenance = ProvStore()

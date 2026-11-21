@@ -1,7 +1,6 @@
 """`PydraRunner`: a placed plan run through an `Executor`, batched, per element, keyed by senselab (fake stack)."""
 
 import asyncio
-import concurrent.futures
 import dataclasses
 import os
 import platform
@@ -9,6 +8,7 @@ import stat
 import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, ClassVar, TypeVar
 
 import pytest
@@ -31,10 +31,19 @@ from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.datasets import RecordSet
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.events import TERMINAL, EventLog, read_events, status_from
-from senselab_core.runtime.execution.executor import Admission, Handle, PlanFragment, ResultRef, Status, follow
+from senselab_core.runtime.execution.executor import (
+    Admission,
+    Handle,
+    PlanFragment,
+    QueueHeld,
+    ResultRef,
+    Status,
+    follow,
+    submit_each,
+)
 from senselab_core.runtime.execution.in_process import InProcess, node_fragment
 from senselab_core.runtime.execution.workers import WorkerSet
-from senselab_core.runtime.licenses import license_record
+from senselab_core.runtime.licenses import LicenseRefused, license_record
 from senselab_core.runtime.locks import LeaseTimeout
 from senselab_core.runtime.measures import MeasureSource, MeasureUnit
 from senselab_core.runtime.planner import Plan, UnmappedOutput, plan
@@ -130,6 +139,7 @@ class Recording:
             store=store, profile=profile, run=RunConfig(), workers=WORKERS, measures=measures, units=units
         )
         self.fragments: list[PlanFragment] = []
+        self.rounds: list[list[str]] = []
 
     def admit(self, placed: Plan, values: Mapping[InputIdentity, object]) -> Admission:
         """Admit through `InProcess`."""
@@ -147,6 +157,13 @@ class Recording:
         """Record `fragment` and submit it."""
         self.fragments.append(fragment)
         return self.inner.submit(fragment)
+
+    def submit_many(
+        self, fragments: Sequence[PlanFragment], stop: Callable[[], bool] | None = None
+    ) -> list[Handle | Exception]:
+        """Record the round's nodes and submit its fragments through `submit`, as `InProcess` runs them."""
+        self.rounds.append([f.node for f in fragments])
+        return submit_each(self, fragments, width=self.inner.workers.bound, stop=stop, slots=self.inner.slots)
 
     def status(self, handle: Handle) -> Status:
         """Return the status `InProcess` gives."""
@@ -285,44 +302,6 @@ def test_errored_element_fails_only_its_descendants(tmp_path: Path) -> None:
     assert status.blocked["d"] == ((1,),) and status.blocked["g"] == ((),) and not status.done
     assert {(e.node, e.job.element) for e in events if e.kind == "failed" and e.job} == {("a", (1,))}
     assert {(n, e) for n, elements in status.blocked.items() for e in elements} == {("b", (1,)), ("d", (1,)), ("g", ())}
-
-
-class Finishing(asyncio.SelectorEventLoop):
-    """An event loop whose `run_in_executor` runs the call at once and returns its future already done."""
-
-    def run_in_executor(
-        self, executor: concurrent.futures.Executor | None, func: Callable[..., T], *args: object
-    ) -> asyncio.Future[T]:
-        """Run `func` in this thread and return its finished future, as a pool that finished before it was awaited."""
-        future: asyncio.Future[T] = self.create_future()
-        try:
-            future.set_result(func(*args))
-        except BaseException as error:  # noqa: BLE001 - held by the future, as a pool thread holds it
-            future.set_exception(error)
-        return future
-
-
-@pytest.mark.contract
-def test_every_result_settles_its_own_element_when_the_fragment_ends_before_it_is_awaited(tmp_path: Path) -> None:
-    """A fragment whose call has ended before the loop awaits it still gives each element its result, failure too."""
-    placed, values = _plan(
-        _graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": t} for t in ("one", "fail", "two")]
-    )
-    loop = Finishing()
-    asyncio.set_event_loop(loop)
-    try:
-        status, _, events = _run(placed, values, tmp_path)
-    finally:
-        asyncio.set_event_loop(None)
-        loop.close()
-    assert [(r.job.element, r.failure is None) for r in status.results["a"]] == [
-        ((0,), True),
-        ((1,), False),
-        ((2,), True),
-    ]
-    assert status.blocked["b"] == ((1,),)
-    terminal = [(e.node, e.job.element) for e in events if e.kind in ("finished", "failed") and e.job]
-    assert sorted(terminal) == [("a", (0,)), ("a", (1,)), ("a", (2,)), ("b", (0,)), ("b", (2,))]
 
 
 @pytest.mark.contract
@@ -561,6 +540,7 @@ def test_the_runner_holds_pydras_lease_protocol_but_not_its_directory_lease() ->
     held = runner.SenselabStore(Path("root")).acquire("c", {})
     assert isinstance(held, lease_module.Lease) and not isinstance(held, lease_module.DirectoryLease)
     assert not hasattr(runner.PydraRunner(profile=PROFILE), "lease")
+    assert held.try_take() is None
     with held as entered:
         assert entered is held
 
@@ -576,15 +556,275 @@ class Cancelling(Recording):
 
 
 @pytest.mark.contract
-def test_a_cancellation_beside_a_failed_element_propagates(tmp_path: Path) -> None:
-    """Element 1 of `a` fails and `b`'s submission is cancelled: the cancellation propagates, not a run status."""
+def test_a_cancellation_beside_a_failed_element_is_the_runs_cancellation(tmp_path: Path) -> None:
+    """Element 1 of `a` fails and `b`'s submission is cancelled: the run raises `RunCancelled` from it.
+
+    The cancelled job is logged `cancelled`; the failed element's descendant is not sent.
+    """
     placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": t} for t in ("one", "fail")])
     executor = Cancelling(ResultStore(tmp_path / "store"))
-    with pytest.raises(asyncio.CancelledError) as raised:
+    with pytest.raises(runner.RunCancelled) as raised:
         runner.PydraRunner(profile=PROFILE, work_dir=tmp_path / "pydra").run_plan(
             placed, executor, values=values, events=EventLog(tmp_path / "events", "a1", 1)
         )
-    assert type(raised.value.__cause__).__name__ == "WorkflowError" and executor.sizes("a") == [1, 1]
+    assert isinstance(raised.value.__cause__, asyncio.CancelledError) and executor.sizes("a") == [1, 1]
+    ended = {(e.node, e.job.element): e.kind for e in read_events(tmp_path / "events") if e.kind in TERMINAL and e.job}
+    assert ended == {("a", (0,)): "finished", ("a", (1,)): "failed", ("b", (0,)): "cancelled", ("b", (1,)): "cancelled"}
+
+
+class Raising(Recording):
+    """A `Recording` executor whose `submit` raises the exception `raise_for` gives a fragment's node, if any."""
+
+    def __init__(self, store: ResultStore, raise_for: Callable[[str], Exception | None]) -> None:
+        """Run on `store`, refusing as `raise_for` says."""
+        super().__init__(store)
+        self.raise_for = raise_for
+
+    def submit(self, fragment: PlanFragment) -> Handle:
+        """Raise what `raise_for` gives for the fragment's node; submit it otherwise."""
+        error = self.raise_for(fragment.node)
+        if error is not None:
+            raise error
+        return super().submit(fragment)
+
+
+def _outcomes(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, Any]]:
+    """Return the list each `GraphRunner.complete` of the test appends (job name, outcome) to."""
+    seen: list[tuple[str, Any]] = []
+    complete = runner.GraphRunner.complete
+
+    def spied(self: Any, job: Any, outcome: Any) -> None:  # noqa: ANN401 - pydra's job and outcome
+        seen.append((job.name, outcome))
+        complete(self, job, outcome)
+
+    monkeypatch.setattr(runner.GraphRunner, "complete", spied)
+    return seen
+
+
+SIDE = _graph(
+    [*CHAINED, ("c", SCORE)],
+    [*CHAIN_EDGES, ("input.other", "c.text", "map")],
+    text="list[json]",
+    other="list[json]",
+)
+SIDE_ROWS = [{"text": f"t{i}", "other": f"o{i}"} for i in range(2)]
+
+
+@pytest.mark.contract
+def test_a_license_refusal_fails_every_job_of_its_fragment_and_is_not_raised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`execute` refuses `b`'s license: each job of `b` is `Failed(LicenseRefused)`, logged failed; nothing raises."""
+    seen = _outcomes(monkeypatch)
+    placed, values = _plan(SIDE, SIDE_ROWS)
+    refusal = LicenseRefused("GPL-3.0-only is refused")
+    executor = Raising(ResultStore(tmp_path / "store"), lambda node: refusal if node == "b" else None)
+    status = runner.PydraRunner(profile=PROFILE, work_dir=tmp_path / "pydra").run_plan(
+        placed, executor, values=values, events=EventLog(tmp_path / "events", "a1", 1)
+    )
+    refused = [o for name, o in seen if name == "n_b"]
+    assert len(refused) == 2 and all(isinstance(o, runner.Failed) for o in refused)
+    assert all(isinstance(o.error, LicenseRefused) for o in refused)
+    assert [r.failure.type for r in status.results["b"] if r.failure] == ["LicenseRefused"] * 2
+    assert status.blocked["b"] == () and len(status.results["c"]) == 2 and not status.done
+    failed = [e for e in read_events(tmp_path / "events") if e.kind == "failed"]
+    assert sorted(e.job.element for e in failed if e.job and e.node == "b") == [(0,), (1,)]
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize(
+    "held", [QueueHeld("cpu", "host", 2, "lost"), runner.StaleCoordinator(1, 2)], ids=["queue", "stale"]
+)
+def test_a_held_queue_leaves_each_job_not_run_and_the_run_raises_the_hold(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, held: Exception
+) -> None:
+    """`b`'s queue is held: each job of `b` is `NotRun(held=True)`, no job gets a terminal event, the hold is raised."""
+    seen = _outcomes(monkeypatch)
+    placed, values = _plan(SIDE, SIDE_ROWS)
+    executor = Raising(ResultStore(tmp_path / "store"), lambda node: held if node == "b" else None)
+    with pytest.raises(type(held)):
+        runner.PydraRunner(profile=PROFILE, work_dir=tmp_path / "pydra").run_plan(
+            placed, executor, values=values, events=EventLog(tmp_path / "events", "a1", 1)
+        )
+    not_run = [o for name, o in seen if name == "n_b"]
+    assert len(not_run) == 2 and all(isinstance(o, runner.NotRun) and o.held for o in not_run)
+    ended = {(e.node, e.kind) for e in read_events(tmp_path / "events") if e.kind in TERMINAL}
+    assert ("b", "blocked") not in ended and ("b", "failed") not in ended and ("b", "cancelled") not in ended
+
+
+@pytest.mark.contract
+def test_a_round_goes_to_the_executor_in_one_submit_many(tmp_path: Path) -> None:
+    """Five records batched by two: `a`'s three fragments, and the side node `c`, reach the executor as rounds."""
+    profile, measures = _batching()
+    placed, values = _plan(SIDE, [{"text": f"t{i}", "other": f"o{i}"} for i in range(5)], profile=profile)
+    status, executor, _ = _run(placed, values, tmp_path, profile, measures)
+    first = executor.rounds[0]
+    assert status.done and sorted(first) == ["a", "a", "a", "c", "c", "c"]
+    assert sum(len(r) for r in executor.rounds) == len(executor.fragments)
+
+
+class CancellingAtFirst(Recording):
+    """A `Recording` executor whose first `submit` sets `cancel`."""
+
+    def __init__(self, store: ResultStore, cancel: threading.Event) -> None:
+        """Run on `store`, setting `cancel` as the first fragment is submitted."""
+        super().__init__(store)
+        self.run_cancel = cancel
+
+    def submit(self, fragment: PlanFragment) -> Handle:
+        """Set `cancel`, then submit."""
+        self.run_cancel.set()
+        return super().submit(fragment)
+
+
+@pytest.mark.contract
+def test_a_cancel_during_a_round_sends_at_most_the_bound_of_its_fragments(tmp_path: Path) -> None:
+    """A round of 12 one-job fragments, cancelled as its first is submitted: at most `WorkerSet.bound` are submitted."""
+    placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": f"t{i}"} for i in range(12)])
+    cancel = threading.Event()
+    executor = CancellingAtFirst(ResultStore(tmp_path / "store"), cancel)
+    with pytest.raises(runner.RunCancelled):
+        runner.PydraRunner(profile=PROFILE, work_dir=tmp_path / "pydra").run_plan(
+            placed, executor, values=values, events=EventLog(tmp_path / "events", "a1", 1), cancel=cancel
+        )
+    assert executor.rounds[0] == ["a"] * 12
+    assert 1 <= len(executor.sizes("a")) <= WORKERS.bound and executor.sizes("b") == []
+
+
+class Short(Recording):
+    """A `Recording` executor whose `submit_many` returns one entry too few for a round of several fragments."""
+
+    def submit_many(
+        self, fragments: Sequence[PlanFragment], stop: Callable[[], bool] | None = None
+    ) -> list[Handle | Exception]:
+        """Submit the round and drop its last entry."""
+        taken = super().submit_many(fragments, stop)
+        return taken[:-1] if len(taken) > 1 else taken
+
+
+@pytest.mark.contract
+@pytest.mark.timeout(60)
+def test_a_sender_that_raises_ends_the_run_with_its_error_and_leaks_no_thread(tmp_path: Path) -> None:
+    """A round whose `submit_many` breaks its contract: the run raises the sender's error, every thread ended."""
+    placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": f"t{i}"} for i in range(3)])
+    with pytest.raises(ValueError, match="zip"):
+        runner.PydraRunner(profile=PROFILE, work_dir=tmp_path / "pydra").run_plan(
+            placed, Short(ResultStore(tmp_path / "store")), values=values, events=EventLog(tmp_path / "events", "a1", 1)
+        )
+    running = {t.name.rsplit("_", 1)[0] for t in threading.enumerate()}
+    assert not running & {"senselab-send", "senselab-poll"}
+
+
+class Holding:
+    """An executor stand-in whose `submit` holds until `release` is set, counting the submissions inside it."""
+
+    def __init__(self) -> None:
+        """Start empty, released by nobody."""
+        self.inside = self.peak = 0
+        self.lock = threading.Lock()
+        self.entered = threading.Condition(self.lock)
+        self.release = threading.Event()
+
+    def submit(self, fragment: Any) -> Handle:  # noqa: ANN401 - any stand-in fragment
+        """Count this submission in, hold until released, count it out."""
+        with self.entered:
+            self.inside += 1
+            self.peak = max(self.peak, self.inside)
+            self.entered.notify_all()
+        assert self.release.wait(30)
+        with self.lock:
+            self.inside -= 1
+        return Handle(id=f"held-{id(fragment)}")
+
+
+class CountingSlots(threading.BoundedSemaphore):
+    """A bounded semaphore that counts the threads holding it and the threads blocked on it."""
+
+    def __init__(self, value: int) -> None:
+        """Hold `value` slots, none taken."""
+        super().__init__(value)
+        self.held = self.waiting = 0
+        self.changed = threading.Condition()
+
+    def acquire(self, blocking: bool = True, timeout: float | None = None) -> bool:  # noqa: FBT001, FBT002 - as threading's
+        """Take a slot, counted as waiting while blocked and as held once taken."""
+        got = super().acquire(blocking=False)
+        if not got and blocking:
+            with self.changed:
+                self.waiting += 1
+                self.changed.notify_all()
+            got = super().acquire(timeout=timeout)
+            with self.changed:
+                self.waiting -= 1
+        if got:
+            with self.changed:
+                self.held += 1
+                self.changed.notify_all()
+        return got
+
+    def __enter__(self, blocking: bool = True, timeout: float | None = None) -> bool:  # noqa: FBT001, FBT002
+        """Take a slot, as `acquire` does."""
+        return self.acquire(blocking, timeout)
+
+    def release(self, n: int = 1) -> None:
+        """Give back `n` slots."""
+        with self.changed:
+            self.held -= n
+        super().release(n)
+
+
+@pytest.mark.logic
+def test_rounds_sharing_slots_run_at_most_the_slots_at_once_between_them() -> None:
+    """Two rounds of three over two shared slots: with four submissions blocked on the slots, two are inside."""
+    executor, slots = Holding(), CountingSlots(2)
+    fragments: list[Any] = [SimpleNamespace(node="a") for _ in range(3)]
+    rounds = [
+        threading.Thread(target=submit_each, args=(executor, fragments), kwargs={"width": 3, "slots": slots})
+        for _ in range(2)
+    ]
+    for one in rounds:
+        one.start()
+    with slots.changed:
+        assert slots.changed.wait_for(lambda: slots.waiting == 4, 30)
+    with executor.entered:
+        assert executor.entered.wait_for(lambda: executor.inside == 2, 30)
+        inside = executor.inside
+    executor.release.set()
+    for one in rounds:
+        one.join(30)
+    assert inside == 2 and executor.peak == 2
+
+
+class FirstCancels(InProcess):
+    """An `InProcess` whose first `submit` sets `cancel`; each `submit` records whether it held one of `slots`."""
+
+    def __init__(self, store: ResultStore, cancel: threading.Event) -> None:
+        """Run on `store` under the test profile, setting `cancel` at the first submission."""
+        super().__init__(store=store, profile=PROFILE, run=RunConfig(), workers=WORKERS)
+        self.counted = CountingSlots(WORKERS.bound)
+        self.slots = self.counted
+        self.run_cancel = cancel
+        self.held: list[int] = []
+
+    def submit(self, fragment: PlanFragment) -> Handle:
+        """Record the slots held, set `cancel`, then submit."""
+        with self.counted.changed:
+            self.held.append(self.counted.held)
+        self.run_cancel.set()
+        return super().submit(fragment)
+
+
+@pytest.mark.contract
+def test_a_cancel_during_an_in_process_round_submits_at_most_its_bound_each_in_a_slot(tmp_path: Path) -> None:
+    """`InProcess.submit_many` over a round of 12, cancelled at the first: at most the bound run, each in a slot."""
+    placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": f"t{i}"} for i in range(12)])
+    cancel = threading.Event()
+    executor = FirstCancels(ResultStore(tmp_path / "store"), cancel)
+    with pytest.raises(runner.RunCancelled):
+        runner.PydraRunner(profile=PROFILE, work_dir=tmp_path / "pydra").run_plan(
+            placed, executor, values=values, events=EventLog(tmp_path / "events", "a1", 1), cancel=cancel
+        )
+    assert 1 <= len(executor.held) <= WORKERS.bound and all(held >= 1 for held in executor.held)
 
 
 @pytest.mark.logic
@@ -658,47 +898,48 @@ def test_the_pydra_work_dir_is_private_under_a_permissive_umask(tmp_path: Path) 
 
 
 @pytest.mark.logic
-def test_the_submitter_is_built_over_a_senselab_store_with_no_readonly_caches(tmp_path: Path) -> None:
-    """`PydraRunner` submits through `SenselabStore` and passes no `readonly_caches`, so no cache is read."""
+def test_the_graph_runner_is_built_over_a_senselab_store_with_no_lookup_and_no_readonly_caches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`PydraRunner` drives a `GraphRunner` over `SenselabStore`: no `lookup_before_dispatch`, no read-only cache."""
+    built: list[Any] = []
+
+    class Spied(runner.GraphRunner):  # type: ignore[misc, name-defined]
+        def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: ANN401 - pydra's signature
+            super().__init__(*args, **kwargs)
+            built.append(self)
+
+    monkeypatch.setattr(runner, "GraphRunner", Spied)
     placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": "one"}])
-    store = runner.SenselabStore(tmp_path / "pydra")
-    executor, cancel = Recording(ResultStore(tmp_path / "store"), PROFILE), threading.Event()
-    run = runner._Run(
-        placed,
-        executor.admit(placed, values),
-        values,
-        executor,
-        store,
-        EventLog(tmp_path / "run", "a1", 1),
-        cancel,
-        concurrent.futures.ThreadPoolExecutor(1),
-        runner.Follower(executor, cancel, first_s=0.01, max_s=0.1, cancel_check_s=0.05),
-    )
-    submitter = runner._submitter(run, store, ["cpu"])
-    assert type(submitter.store) is runner.SenselabStore
-    assert submitter.readonly_caches is None and not hasattr(submitter.store, "readonly_caches")
+    status, _, _ = _run(placed, values, tmp_path)
+    [graph] = built
+    assert status.done and type(graph.store) is runner.SenselabStore and graph.lookup_before_dispatch is False
+    assert graph.submitter.readonly_caches is None and not hasattr(graph.store, "readonly_caches")
 
 
 @pytest.mark.logic
-def test_a_follower_checks_cancel_every_cancel_check_s(tmp_path: Path) -> None:
-    """A follower waiting between rounds wakes at `cancel_check_s`, however long its pause."""
+def test_the_poll_thread_checks_cancel_every_cancel_check_s(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The poll thread waiting between rounds wakes at `cancel_check_s`, however long its pause."""
     waits: list[float] = []
 
-    class Clock(ManualClock):
-        def wait(self, event: threading.Event, timeout: float) -> bool:
-            waits.append(timeout)
-            return super().wait(event, timeout)
+    clock = ManualClock(poll_s=0.001, hang_s=5.0, waits="spend")
+    wait = clock.wait
 
-    clock = Clock(poll_s=0.001, hang_s=5.0, waits="spend")
-    follower = runner.Follower(
+    def recorded(event: threading.Event, timeout: float) -> bool:
+        waits.append(timeout)
+        return bool(wait(event, timeout))
+
+    monkeypatch.setattr(clock, "wait", recorded)
+    poller = runner._Poller(
         Recording(ResultStore(tmp_path / "store"), PROFILE),
         threading.Event(),
+        lambda message: None,
         first_s=1,
         max_s=1,
         cancel_check_s=0.25,
         clock=clock,
     )
-    follower._nap(1.0)
+    poller._nap(1.0)
     assert waits == [0.25] * 4
 
 
