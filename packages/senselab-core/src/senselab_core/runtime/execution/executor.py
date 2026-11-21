@@ -1,11 +1,13 @@
 """The `Executor` protocol and the documents it carries: plan fragments in, result references out."""
 
+import contextvars
 import logging
 import os
 import pwd
 import re
 import socket
 from collections.abc import Iterator, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, Protocol
 
@@ -395,15 +397,24 @@ class Executor(Protocol):
         """Return the results of `handle` landed and not yet given, and whether every one is given; never wait."""
 
 
-def submit_each(executor: Executor, fragments: Sequence[PlanFragment]) -> list[Handle | Exception]:
-    """Submit `fragments` one by one through `executor.submit`: each one's handle, or the exception it raised."""
-    taken: list[Handle | Exception] = []
-    for fragment in fragments:
-        try:
-            taken.append(executor.submit(fragment))
-        except Exception as refused:  # noqa: BLE001 - the fragment's outcome, returned in its place
-            taken.append(refused)
-    return taken
+def submit_each(executor: Executor, fragments: Sequence[PlanFragment], *, width: int = 1) -> list[Handle | Exception]:
+    """Submit `fragments` through `executor.submit`, at most `width` at once: each one's handle, or what it raised.
+
+    The results are in the order of `fragments`. A `BaseException` that is not an `Exception` (a cancellation) is
+    raised once every submission has ended.
+    """
+    if width <= 1 or len(fragments) <= 1:
+        return [_submitted(executor, f) for f in fragments]
+    with ThreadPoolExecutor(min(width, len(fragments)), thread_name_prefix="senselab-submit") as running:
+        sent = [running.submit(contextvars.copy_context().run, _submitted, executor, f) for f in fragments]
+    return [taken.result() for taken in sent]
+
+
+def _submitted(executor: Executor, fragment: PlanFragment) -> Handle | Exception:
+    try:
+        return executor.submit(fragment)
+    except Exception as refused:  # noqa: BLE001 - the fragment's outcome, returned in its place
+        return refused
 
 
 def follow(

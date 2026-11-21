@@ -158,9 +158,9 @@ class Recording:
         return self.inner.submit(fragment)
 
     def submit_many(self, fragments: Sequence[PlanFragment]) -> list[Handle | Exception]:
-        """Record the round's nodes and submit each of its fragments through `submit`."""
+        """Record the round's nodes and submit its fragments through `submit`, as `InProcess` runs them."""
         self.rounds.append([f.node for f in fragments])
-        return submit_each(self, fragments)
+        return submit_each(self, fragments, width=self.inner.workers.bound)
 
     def status(self, handle: Handle) -> Status:
         """Return the status `InProcess` gives."""
@@ -751,7 +751,7 @@ def test_the_graph_runner_is_built_over_a_senselab_store_with_no_lookup_and_no_r
 
 
 @pytest.mark.logic
-def test_the_poll_thread_checks_cancel_every_cancel_check_s(tmp_path: Path) -> None:
+def test_the_poll_thread_checks_cancel_every_cancel_check_s(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The poll thread waiting between rounds wakes at `cancel_check_s`, however long its pause."""
     waits: list[float] = []
 
@@ -762,7 +762,7 @@ def test_the_poll_thread_checks_cancel_every_cancel_check_s(tmp_path: Path) -> N
         waits.append(timeout)
         return bool(wait(event, timeout))
 
-    clock.wait = recorded
+    monkeypatch.setattr(clock, "wait", recorded)
     poller = runner._Poller(
         Recording(ResultStore(tmp_path / "store"), PROFILE),
         threading.Event(),

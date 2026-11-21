@@ -1,12 +1,10 @@
 """`InProcess`: the `Executor` that runs a fragment's jobs through `execute` in this process."""
 
 import atexit
-import contextvars
 import itertools
 import threading
 import uuid
 from collections.abc import Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from typing import ClassVar
 
@@ -540,12 +538,7 @@ class InProcess:
 
         Returns each fragment's handle, or the exception its `submit` raised, in the order of `fragments`.
         """
-        if len(fragments) <= 1:
-            return submit_each(self, fragments)
-        width = min(len(fragments), self.workers.bound)
-        with ThreadPoolExecutor(width, thread_name_prefix="senselab-in-process") as running:
-            sent = [running.submit(contextvars.copy_context().run, submit_each, self, [f]) for f in fragments]
-            return [taken.result()[0] for taken in sent]
+        return submit_each(self, fragments, width=self.workers.bound)
 
     def _run(self, jobs: Sequence[Job], placement: Placement) -> list[JobOutcome]:
         """Run `jobs` in runs of one batch each: a run ends where the batch for a job's length changes."""
