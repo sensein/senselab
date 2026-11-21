@@ -907,12 +907,19 @@ MIRROR_NEEDLES = (MIRROR_INDEX, "user:secret", "mirror.internal")
 
 
 def identities_in(data: bytes, base: Path, needles: Sequence[str] = ()) -> list[str]:
-    """Return each real name `data` holds as a whole token, and each home, `base`, mirror or `needles` string."""
+    """Return each home, `base`, mirror or `needles` string `data` holds, and each real name it holds as a whole token.
+
+    A name found only inside a reported path is part of that path and is not reported again.
+    """
     import re
 
     paths = {str(Path.home()), str(base), str(base.resolve()), *needles, *MIRROR_NEEDLES}
-    names = [n for n in sorted(real_names()) if re.search(rb"(?<![\w-])" + re.escape(n.encode()) + rb"(?![\w-])", data)]
-    return names + [p for p in sorted(paths) if p.encode() in data]
+    found = [p for p in sorted(paths) if p.encode() in data]
+    rest = data
+    for p in sorted(found, key=len, reverse=True):
+        rest = rest.replace(p.encode(), b"\0")
+    names = [n for n in sorted(real_names()) if re.search(rb"(?<![\w-])" + re.escape(n.encode()) + rb"(?![\w-])", rest)]
+    return names + found
 
 
 def identity_leaks(root: Path, base: Path, needles: Sequence[str] = ()) -> list[tuple[str, str]]:

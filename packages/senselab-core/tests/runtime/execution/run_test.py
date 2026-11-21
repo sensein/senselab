@@ -117,6 +117,16 @@ def test_the_sweep_matches_a_name_as_a_token_and_a_path_anywhere(tmp_path: Path)
 
 
 @pytest.mark.logic
+def test_a_name_inside_a_reported_path_is_reported_once_as_the_path(tmp_path: Path) -> None:
+    """A base that runs through a directory named for the account is one finding, the path, and not the name too."""
+    account = sorted(real_names())[0]
+    base = tmp_path / account / "work"
+    base.mkdir(parents=True)
+    assert identities_in(f"at {base}/x".encode(), base) == [str(base)]
+    assert identities_in(f"{account} at {base}/x".encode(), base) == [account, str(base)]
+
+
+@pytest.mark.logic
 def test_a_stored_fault_message_names_no_host(tmp_path: Path) -> None:
     """This host's name and its first label, as a peer address or a node name in a fault, are rendered to `<host>`."""
     host = socket.gethostname()
