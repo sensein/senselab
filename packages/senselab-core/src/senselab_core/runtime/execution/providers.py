@@ -25,6 +25,7 @@ from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.services import service_registry
 from senselab_core.runtime.execution.workers import (
     Server,
+    ServerStart,
     WorkerLoadFailed,
     host_model_key,
     loaded,
@@ -157,9 +158,17 @@ class _Provider:
 
 
 class SenselabWorker(_Provider):
-    """`senselab-worker@3`: an isolated backend's worker process, or a server backend over a server."""
+    """`senselab-worker@3`: an isolated backend's worker process, or a server backend over a server.
+
+    `start` starts a server backend's server (a module-level function, so the provider pickles with a job).
+    """
 
     name: ClassVar[str] = WORKER
+
+    def __init__(self, start: ServerStart = start_vllm) -> None:
+        """Start servers with `start`."""
+        super().__init__()
+        self.start = start
 
     def load(self, spec: Mapping[str, Any], device: object) -> Model:  # noqa: ARG002 - the spec names the device
         """Start the worker process (or the server and its in-process worker) `spec` names and load its model.
@@ -171,7 +180,7 @@ class SenselabWorker(_Provider):
         found = self._loader(spec)
         init = worker_init(found.device, found.model)
         if found.backend.env.kind == "server":
-            server, stops = _server(found)
+            server, stops = server_of(found, self.start)
             return Model(server_worker(found.backend, init, server), stops)
         profile = found.profile
         return Model(
@@ -189,29 +198,45 @@ class SenselabWorker(_Provider):
         )
 
 
-def _server(found: Loader) -> tuple[Server, tuple[Callable[[], None], ...]]:
+def server_of(found: Loader, start: ServerStart) -> tuple[Server, tuple[Callable[[], None], ...]]:
     """Return the server of `found`: a live registered service attesting its expectation, else one started here.
+
+    A server started here is registered on the host's registry for other pool workers to consume, and withdrawn once
+    stopped.
 
     Raises:
         WorkerLoadFailed: the server did not start, or attests other than expected.
+        LeaseTimeout: another worker is starting this server.
     """
     if found.model is None or found.expected is None:
         raise WorkerLoadFailed(
             f"backend {found.backend.name!r} is a server backend; its model and attestation are needed"
         )
+    model, expected = found.model, found.expected
     registry = service_registry(found.profile)
-    consumer = registry.consume(found.expected)
-    if registry.lookup(found.expected) is not None:
+    consumer = registry.consume(expected)
+    if registry.lookup(expected) is not None:
         return consumer, (consumer.stop,)
     consumer.stop()
-    server = loaded(lambda: start_vllm(found.backend, found.env, found.model, found.profile))  # type: ignore[arg-type]
-    if server.attestation != found.expected:
-        attested = server.attestation
-        server.stop()
-        raise WorkerLoadFailed(f"server of {server.label}") from AttestationMismatch(
-            f"the server of {server.label} attests {attested}, the lock declares {found.expected}"
-        )
-    return server, (server.stop,)
+    service = registry.reserve(expected)
+    try:
+        server = loaded(lambda: start(found.backend, found.env, model, found.profile))
+        if server.attestation != expected:
+            attested = server.attestation
+            server.stop()
+            raise WorkerLoadFailed(f"server of {server.label}") from AttestationMismatch(
+                f"the server of {server.label} attests {attested}, the lock declares {expected}"
+            )
+        try:
+            assert server.url is not None
+            service.publish(server.url)
+        except BaseException:
+            server.stop()
+            raise
+    except BaseException:
+        service.close()
+        raise
+    return server, (server.stop, service.close)
 
 
 class SenselabHost(_Provider):

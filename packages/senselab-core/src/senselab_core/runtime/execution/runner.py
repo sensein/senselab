@@ -35,7 +35,7 @@ from senselab_core.kernel.graph import Edge, fan_out_issues, mapped_nodes, order
 from senselab_core.kernel.identity import InputIdentity, ReusePolicy, gather_identity, port_output_identity
 from senselab_core.runtime.call import RunConfig, packaged
 from senselab_core.runtime.execution.batching import BucketGrid, keyed_formation, recording_span_ns
-from senselab_core.runtime.execution.events import TERMINAL, EventKind, EventLog, run_dir_of
+from senselab_core.runtime.execution.events import TERMINAL, UNPLACEABLE, EventKind, EventLog, run_dir_of
 from senselab_core.runtime.execution.executor import (
     Admission,
     FaultRecord,
@@ -747,14 +747,8 @@ def ref_of(sent: _Sent, outcome: object) -> ResultRef:
     if outcome.errored:
         errors = outcome.errors or {}
         text = "\n".join(errors.get("error message", [])) if isinstance(errors, dict) else str(errors)
-        failure = item_failure(text) or FaultRecord.of(
-            {
-                "type": "TaskError",
-                "message": outcome.failure or text.strip().splitlines()[-1:] or "",
-                "fault": "content",
-                "gap": False,
-            }
-        )
+        last = outcome.failure or " ".join(text.strip().splitlines()[-1:])
+        failure = item_failure(text) or FaultRecord.from_pool({"kind": "content", "message": last}, "TaskError")
         return ResultRef(job=ref, key_digest=key, failure=failure)
     outputs = dict(getattr(outcome.outputs, OUTPUTS))
     read = decoded(doc.job.call.task, outputs)
@@ -769,27 +763,14 @@ def ref_of(sent: _Sent, outcome: object) -> ResultRef:
     )
 
 
-_KINDS = {"content": "content", "resource": "resource", "infrastructure": "infrastructure", "policy": "content"}
-
-
 def pool_failure(error: BaseException) -> FaultRecord:
     """Return the senselab fault record of a job the pool failed: from the pool's own record when it carries one."""
     fault = getattr(error, "fault", None)
     if isinstance(fault, Mapping):
         carried = item_failure(str(fault.get("message", "")))
-        if carried is not None:
-            return carried
-        kind = _KINDS.get(str(fault.get("kind")), "infrastructure")
-        return FaultRecord.of(
-            {
-                "type": fault.get("type") or type(error).__name__,
-                "message": str(fault.get("message", "")),
-                "fault": kind,
-                "gap": bool(fault.get("gap", False)),
-            }
-        )
+        return carried if carried is not None else FaultRecord.from_pool(fault, type(error).__name__)
     if isinstance(error, UnplaceableJob):
-        return FaultRecord.of({"type": "Unplaceable", "message": str(error), "fault": "resource", "gap": False})
+        return FaultRecord.from_pool({"kind": "resource", "message": str(error)}, UNPLACEABLE)
     return FaultRecord.from_exception(error)
 
 

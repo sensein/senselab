@@ -176,7 +176,7 @@ ignore_imports =
     senselab_core.runtime.config -> yaml
 
 [importlinter:contract:one-pydra-importer]
-name = only the pool adapters (runner, warm, portable) of senselab_core.runtime.execution import pydra
+name = only the pool adapters (runner, warm, portable, testing.pools) of senselab_core import pydra
 type = forbidden
 source_modules =
     senselab_worker
@@ -190,3 +190,4 @@ ignore_imports =
     senselab_core.runtime.execution.runner -> pydra
     senselab_core.runtime.execution.warm -> pydra
     senselab_core.runtime.execution.portable -> pydra
+    senselab_core.testing.pools -> pydra

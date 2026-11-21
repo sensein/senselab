@@ -48,7 +48,7 @@ substrate:
 pool:
   quantum_items: 100
   quantum_s: 300
-  poll_s: 30
+  poll_s: 1
   first_poll_s: 0.05
   presence_refresh_s: 1
   segment_items: 512

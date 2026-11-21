@@ -85,9 +85,10 @@ class RealWorkers:
             model = ResolvedModel(
                 ref=ModelRef.parse(f"{entry.id}@{entry.revision}"), identity=entry.revision, license=entry.license
             )
+            expected = expected_of(backend, env.lock, model)
             server = start_vllm(backend, env, model, self.profile)
             self.servers.append(server)
-            if server.attestation != expected_of(backend, env.lock, model):
+            if server.attestation != expected:
                 raise ValueError(f"the server of {server.label} attests other than its lock declares")
             return server_worker(backend, init, server)
         worker = WorkerClient(env.python, backend.worker, init=init)

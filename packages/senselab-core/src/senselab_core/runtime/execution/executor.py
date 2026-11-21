@@ -167,6 +167,22 @@ class FaultRecord(Frozen):
         return cls.of({"type": kind, "message": message, "fault": FaultClass.INFRASTRUCTURE.value, "gap": True})
 
     @classmethod
+    def from_pool(cls, fault: Mapping[str, Any], name: str) -> "FaultRecord":
+        """Return the record of a pydra pool fault (`kind`, `type`, `message`, `gap`); a `policy` fault is content.
+
+        `name` is the type when the fault names none.
+        """
+        kind = {"content": "content", "resource": "resource", "policy": "content"}.get(str(fault.get("kind")))
+        return cls.of(
+            {
+                "type": fault.get("type") or name,
+                "message": str(fault.get("message", "")),
+                "fault": kind or FaultClass.INFRASTRUCTURE.value,
+                "gap": bool(fault.get("gap", False)),
+            }
+        )
+
+    @classmethod
     def of(cls, error: Mapping[str, Any]) -> "FaultRecord":
         """Return the record of a worker's error object (`error_record`): charged for a content fault, not a gap.
 

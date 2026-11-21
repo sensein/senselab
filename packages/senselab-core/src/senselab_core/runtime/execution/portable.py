@@ -8,7 +8,6 @@ cross-context hits for verification. Each executed entry's activity is written t
 entry is renamed into place (`record_execution`, the store's `on_commit`), and each reuse when it is served.
 """
 
-import json
 import logging
 import threading
 from collections.abc import Mapping, Sequence
@@ -17,9 +16,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
-import attrs
 from pydra.engine.portable.reuse import Candidate, Verdict
 from pydra.engine.portable.store import PortableStore
+from senselab_worker.canonical import jcs_dumps
 
 from senselab_core.kernel import prov as kprov
 from senselab_core.kernel.identity import (
@@ -160,7 +159,7 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-@attrs.frozen
+@dataclass(frozen=True)
 class SenselabIdentity:
     """`senselab-identity@1`: the key is the job's `LogicalKey`, the slot its context's `context@5` fingerprint."""
 
@@ -200,6 +199,24 @@ class SenselabIdentity:
 
 def _member_name(evidence: EquivalenceEvidence) -> str:
     return f"{evidence.canonical_digest()}.json"
+
+
+def record_evidence(store: PortableStore, evidence: EquivalenceEvidence) -> None:
+    """Write one verify-sampling comparison to the store's sidecar, named by its digest."""
+    store.write_sidecar(EVIDENCE, _member_name(evidence), jcs_dumps(evidence.model_dump(mode="json")))
+
+
+def stored_evidence(store: PortableStore) -> list[EquivalenceEvidence]:
+    """Return every verify-sampling comparison the store holds, by digest; an unreadable one is logged and skipped."""
+    found = []
+    with store.sidecar(EVIDENCE) as side:
+        for name in sorted(side.names()):
+            try:
+                with side.open_read(name) as member:
+                    found.append(read_evidence(name, member.read()))
+            except (OSError, ValueError) as err:
+                logger.warning("an equivalence record was skipped: %s", err)
+    return found
 
 
 def ranked(
@@ -275,14 +292,7 @@ class SenselabReuse:
 
     def _evidence(self) -> list[EquivalenceEvidence]:
         assert self._store is not None
-        found = []
-        with self._store.sidecar(EVIDENCE) as side:
-            for name in sorted(side.listdir()):
-                try:
-                    found.append(read_evidence(name.removesuffix(".json"), side.read_bytes(name)))
-                except (OSError, ValueError) as err:
-                    logger.warning("an equivalence record was skipped: %s", err)
-        return found
+        return stored_evidence(self._store)
 
     def rank(
         self, current: Mapping[str, Any], stored: Sequence[tuple[Any, Mapping[str, Any], str]], task: object
@@ -337,9 +347,7 @@ class SenselabReuse:
             run=doc.attempt,
         )
         if self._store is not None:
-            self._store.write_sidecar(
-                EVIDENCE, _member_name(evidence), json.dumps(evidence.model_dump(mode="json")).encode()
-            )
+            record_evidence(self._store, evidence)
         if not comparison.agree:
             logger.warning(
                 "verify: %s disagrees with its stored result in %s", doc.key.backend, ", ".join(comparison.paths)
@@ -348,7 +356,9 @@ class SenselabReuse:
 
 
 def _run_dir(plan_hash: str) -> Path:
-    return run_dir_of(plan_hash)
+    found = run_dir_of(plan_hash)
+    found.mkdir(parents=True, exist_ok=True)
+    return found
 
 
 def record_execution(
@@ -374,7 +384,7 @@ def record_execution(
     provenance = ProvStore()
     agent, activity = execution_records(logical, here, section["profile"], used, output, started, attributes, ref)
     entities = (kprov.entity(i, core_vocabulary()) for i in dict.fromkeys([*(i for _, i in used), output]))
-    provenance.add(*entities, agent, activity)
+    provenance.add(kprov.plan(ref.plan_hash, core_vocabulary()), *entities, agent, activity)
     provenance.write(_run_dir(ref.plan_hash))
 
 
@@ -406,7 +416,13 @@ def record_reuse(doc: JobDoc, stored: ExecutionContext, outputs: Mapping[str, ob
         ended=now,
     )
     provenance = ProvStore()
-    provenance.add(kprov.entity(identity, core_vocabulary()), agent, stored_agent, reuse)
+    provenance.add(
+        kprov.plan(doc.ref.plan_hash, core_vocabulary()),
+        kprov.entity(identity, core_vocabulary()),
+        agent,
+        stored_agent,
+        reuse,
+    )
     provenance.write(_run_dir(doc.ref.plan_hash))
 
 

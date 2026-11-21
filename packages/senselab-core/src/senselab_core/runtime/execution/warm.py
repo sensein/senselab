@@ -269,7 +269,7 @@ class PoolSession:
             classify=classify,
             settings=pool_settings if pool_settings is not None else settings(profile),
         )
-        self.submitter = Submitter(worker=self.pool, providers=list(self.providers))
+        self.submitter = Submitter(worker=self.pool, providers=list(self.providers), telemetry=False)
 
     @property
     def epoch(self) -> int:

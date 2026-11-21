@@ -588,11 +588,11 @@ class Run:
         return status
 
     def _stopped(self) -> bool:
-        """Return whether the pool the run's latest attempt used has no live coordinator."""
+        """Return whether the pool the run's latest attempt opened has no live coordinator; one not open yet has."""
         from senselab_core.runtime.execution.warm import coordinator_live  # noqa: PLC0415 - needs pydra
 
         pool = self.manifest().get("pool")
-        return not (isinstance(pool, str) and coordinator_live(Path(pool)))
+        return isinstance(pool, str) and (Path(pool) / "pool.json").is_file() and not coordinator_live(Path(pool))
 
     @property
     def cancelled(self) -> threading.Event:
@@ -640,7 +640,8 @@ class Run:
         shared = {name: _later(reader, [name], None) for name in outputs if name not in mine}
         return ResultSet(entries, shared, run=self)
 
-    def _opened_store(self) -> Any:  # noqa: ANN401 - a PortableStore; pydra is imported only here
+    def store(self) -> Any:  # noqa: ANN401 - a PortableStore; pydra is imported only here
+        """Return the result store the run's results are read from, opened once."""
         from senselab_core.runtime.execution.portable import open_store  # noqa: PLC0415 - needs pydra
 
         if self._opened is None:
@@ -657,7 +658,7 @@ class Run:
         """Return the stored outputs and context of output identity `identity` under key digest `key`, or None."""
         from senselab_core.runtime.execution.portable import read_entry  # noqa: PLC0415 - needs pydra
 
-        return read_entry(self._opened_store(), key, identity)
+        return read_entry(self.store(), key, identity)
 
     def reused(self, key: str) -> ReusePolicy | None:
         """Return the policy a stored result of key digest `key` was served under, None when it was computed."""
@@ -946,7 +947,8 @@ def start(
     from senselab_core.runtime.execution.runner import PydraRunner  # noqa: PLC0415 - needs pydra
     from senselab_core.runtime.execution.warm import PoolSession  # noqa: PLC0415 - needs pydra
 
-    profile = placed.execution if placed.execution is not None else ExecutionProfile.load()
+    default = session.profile if session is not None else ExecutionProfile.load()
+    profile = placed.execution if placed.execution is not None else default
     if profile.canonical_digest() != placed.placement.profile_digest:
         raise ValueError(f"plan {placed.hash} was placed under another execution profile; give the session to run on")
     owned = session is None
