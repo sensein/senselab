@@ -154,6 +154,17 @@ def _no_boot_id() -> str:
     raise OSError("no boot id")
 
 
+def _open_fds() -> set[int]:
+    found = set()
+    for name in os.listdir("/dev/fd"):
+        try:
+            os.fstat(int(name))
+        except OSError:
+            continue
+        found.add(int(name))
+    return found
+
+
 @pytest.mark.logic
 def test_host_secret_is_created_once_under_a_race(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A rival that creates the file between this process's write and its link wins; both read the one value."""
@@ -163,14 +174,20 @@ def test_host_secret_is_created_once_under_a_race(tmp_path: Path, monkeypatch: p
 
     class Rival(FileOps):
         def link(self, src: str, dst: str, *, src_dir_fd: int, dst_dir_fd: int) -> None:
-            assert os.read(os.open(src, os.O_RDONLY, dir_fd=src_dir_fd), 64) != b"", "the staged file is complete"
+            fd = os.open(src, os.O_RDONLY, dir_fd=src_dir_fd)
+            try:
+                assert os.read(fd, 64) != b"", "the staged file is complete"
+            finally:
+                os.close(fd)
             if not racing:
                 racing.append(True)
                 rival.append(host_secret(run=lambda _: "", boot_id=_no_boot_id))
             super().link(src, dst, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd)
 
+    before = _open_fds()
     with using_file_ops(Rival()):
         mine = host_secret(run=lambda _: "", boot_id=_no_boot_id)
+    assert _open_fds() == before, "no descriptor is left open on a file that was unlinked"
     files = sorted(p.name for p in tmp_path.iterdir())
     assert rival and mine == rival[0] != "" and files == [f"senselab-host-{os.getuid()}"]
 
