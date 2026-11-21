@@ -81,7 +81,7 @@ orcd_driver() {
 # queued or running. A `squeue` that fails is not read as "no job". SELECTOR names the run's jobs: `prefix:P` (jobs named
 # P*, when the run's hash is known) or `runs:GLOB` (the run directories COMMAND creates; from the moment one exists
 # the watchdog counts only the jobs `exitlib.slurm_prefix` gives it, another run's jobs under the same login do not
-# count; until then any `senselab-` job does). Otherwise it returns COMMAND's status.
+# count; until then any `pydra-` job does). Otherwise it returns COMMAND's status.
 orcd_watched() {
   local log="$1" selector="$2" rc=0 where=()
   shift 2

@@ -56,9 +56,9 @@ def seconds(node: Mapping[str, Any], key: str) -> float:
 
 
 def boundary_of(events: Sequence[Event]) -> float:
-    """Return the time of the first event of the run's last epoch, in seconds."""
-    last = max(e.epoch for e in events)
-    return min(e.t_ns for e in events if e.epoch == last) / 1e9
+    """Return the time of the first event of the run's last attempt, in seconds."""
+    last = max(e.ordinal for e in events)
+    return min(e.t_ns for e in events if e.ordinal == last) / 1e9
 
 
 def activity_rows(run: Path, boundary: float) -> list[Row]:
@@ -86,12 +86,12 @@ def diagnose(run: Path, out: Callable[[str], None] = print) -> list[Finding]:
         keyjoin.JoinFailure: the provenance keys and the event keys share none.
     """
     events = read_events(run)
-    last = max(e.epoch for e in events)
+    last = max(e.ordinal for e in events)
     boundary = boundary_of(events)
-    out(f"events {len(events)}, epochs {sorted({e.epoch for e in events})}, boundary {boundary}")
-    before = [e for e in events if e.epoch < last]
+    out(f"events {len(events)}, attempts {sorted({e.ordinal for e in events})}, boundary {boundary}")
+    before = [e for e in events if e.ordinal < last]
     held = {e.key for job, e in terminal_events(before).items() if e.kind in RESULTS and job[1] and e.key}
-    finished = Counter(e.key for e in events if e.epoch == last and e.kind == "finished" and e.key)
+    finished = Counter(e.key for e in events if e.ordinal == last and e.kind == "finished" and e.key)
     rows = activity_rows(run, boundary)
     start_exec = {r.key: r.document for r in rows if r.phase == "start" and r.kind == "execution"}
     keyjoin.join(

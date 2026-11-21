@@ -1,4 +1,4 @@
-"""The benchmark harness: suites run on `InProcess`, scored by metric tasks, written as `benchmark-result@2`.
+"""The benchmark harness: suites run on a warm pool session, scored by metric tasks, written as `benchmark-result@2`.
 
 A suite (`suites/<name>.yaml`, `benchmark-suite@1.0`) lists benchmarks; each names a data manifest in `manifests/`
 (`data-manifest@2.0`, fetched by `senselab_core.runtime.fetch`, the engine behind `senselab data fetch`), an adapter
@@ -14,6 +14,7 @@ import io
 import json
 import logging
 import tarfile
+import time
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -37,10 +38,12 @@ from senselab_core.kernel.results import Embedding, Intervals, Metric, TextSpans
 from senselab_core.kernel.signals import PlainText
 from senselab_core.runtime.call import Result, TaskCall, placement_of
 from senselab_core.runtime.config import ConfigError, load_yaml
-from senselab_core.runtime.execution.in_process import CallFailed, InProcess
+from senselab_core.runtime.execution.calls import CallFailed, call
+from senselab_core.runtime.execution.events import runs_root
+from senselab_core.runtime.execution.warm import PoolSession
 from senselab_core.runtime.fetch import DataManifest, fetch
 from senselab_core.runtime.profiles import ExecutionProfile, NoDevice
-from senselab_core.runtime.store import ResultStore
+from senselab_core.runtime.provenance import ProvStore
 from senselab_core.testing.synth import tone
 
 SUITE_FORMAT = "benchmark-suite@1.0"
@@ -573,7 +576,7 @@ def _run_benchmark(  # noqa: PLR0913 - the benchmark and everything it runs unde
     files: Mapping[str, Path],
     adapter: Adapter,
     execution: ExecutionProfile,
-    store: ResultStore,
+    session: PoolSession,
     work: Path,
     contexts: dict[str, ExecutionContext],
 ) -> tuple[Row, ...]:
@@ -581,16 +584,15 @@ def _run_benchmark(  # noqa: PLR0913 - the benchmark and everything it runs unde
     records: dict[str, CallRecord] = {}
     outputs: dict[str, Mapping[str, Any]] = {}
     rows: list[Row] = []
-    executor = InProcess(store=store, profile=execution)
     for item in items:
         if item.fault is not None:
             rows.append(Row(label=item.id, split=item.split, fault=item.fault))
             continue
-        call = TaskCall.model_validate(
+        task = TaskCall.model_validate(
             {"task": bench.task, "inputs": item.inputs, "params": bench.params, "model": bench.model}
         )
         try:
-            result = executor.call(call)
+            result = call(task, profile=execution, session=session)
         except CallFailed as err:
             rows.append(Row(label=item.id, split=item.split, fault=_fault_text(err.failure.model_dump(mode="json"))))
             continue
@@ -602,7 +604,7 @@ def _run_benchmark(  # noqa: PLR0913 - the benchmark and everything it runs unde
             {"task": bench.metric, "inputs": scoring.inputs, "params": bench.metric_params}
         )
         try:
-            scored = executor.call(metric_call)
+            scored = call(metric_call, profile=execution, session=session)
         except CallFailed as err:
             fault = _fault_text(err.failure.model_dump(mode="json"))
             rows.append(Row(label=scoring.label, split=scoring.split, fault=fault))
@@ -639,23 +641,25 @@ def run_suite(  # noqa: PLR0913 - the suite and where everything it reads and wr
     data_cache: Path,
     out: Path,
     run_id: str,
-    store: ResultStore | None = None,
+    store: Path | None = None,
     opener: Callable[[str], BinaryIO] | None = None,
     adapters: Mapping[str, Callable[[], Adapter]] = ADAPTERS,
 ) -> Path:
     """Run every benchmark of `suite` and write `<out>/<run_id>/result.json` and the run's PROV documents.
 
-    Each manifest is fetched into `data_cache` (a present, hash-checked file is not fetched again). Returns the run
-    directory.
+    Each manifest is fetched into `data_cache` (a present, hash-checked file is not fetched again). Every call runs on
+    one `PoolSession` over `<out>/<run_id>/pool`, its results in the store at `store` (`<out>/results` by default), and
+    the provenance the calls' runs wrote during the suite is written beside the result. Returns the run directory.
 
     Raises:
         SuiteError: a benchmark names an adapter or a manifest that does not exist.
-        As `fetch` and `InProcess.call`, but a call the backend fails (`CallFailed`) is recorded as a row's fault.
+        As `fetch` and `calls.call`, but a call the backend fails (`CallFailed`) is recorded as a row's fault.
     """
     log_each_warning_once()
     run = out / run_id
     run.mkdir(parents=True, exist_ok=False)
-    store = store if store is not None else ResultStore(out / "results")
+    session = PoolSession(execution, run / "pool", store if store is not None else out / "results")
+    began = time.time()
     started = datetime.now(timezone.utc).isoformat()
     contexts: dict[str, ExecutionContext] = {}
     entries = []
@@ -687,9 +691,13 @@ def run_suite(  # noqa: PLR0913 - the suite and where everything it reads and wr
                 )
             manifest = DataManifest.load(path)
             files = fetch(manifest, cache_root=data_cache, opener=opener)
-        rows = _run_benchmark(
-            bench, files, adapters[bench.adapter](), execution, store, run / "work" / bench.name, contexts
-        )
+        try:
+            rows = _run_benchmark(
+                bench, files, adapters[bench.adapter](), execution, session, run / "work" / bench.name, contexts
+            )
+        except BaseException:
+            session.close()
+            raise
         entries.append(
             Entry(
                 benchmark=bench.name,
@@ -710,8 +718,10 @@ def run_suite(  # noqa: PLR0913 - the suite and where everything it reads and wr
         entries=tuple(entries),
         contexts=tuple(contexts[k] for k in sorted(contexts)),
     )
+    session.close()
     (run / "result.json").write_text(document.model_dump_json(indent=2), "utf-8")
-    store.provenance.write(run)
+    written = sorted(d for d in runs_root().glob("*/prov/*.jsonld") if d.stat().st_mtime >= began)
+    ProvStore.from_documents({d.name: d.read_bytes() for d in written}).write(run)
     return run
 
 

@@ -448,11 +448,9 @@ def cmd_prov(args: argparse.Namespace) -> int:  # noqa: PLR0915 - one verdict, o
     )
     plans = [r.id for r in ProvStore.from_documents(ProvStore.read_documents(run)).plans()]
     check("exactly one plan entity", plans == [f"plan:{args.hash}"], str(plans))
-    claims = Counter((e.epoch, e.job.element) for e in events if e.kind == "claimed" and e.job is not None)
-    twice_claimed = Counter(epoch for (epoch, _), n in claims.items() if n > 1)
-    print(
-        f"informational: items claimed twice within one attempt (epoch), from events: {dict(twice_claimed) or 'none'}"
-    )
+    claims = Counter((e.ordinal, e.job.element) for e in events if e.kind == "started" and e.job is not None)
+    twice_claimed = Counter(ordinal for (ordinal, _), n in claims.items() if n > 1)
+    print(f"informational: items started twice within one attempt, from events: {dict(twice_claimed) or 'none'}")
     return check.verdict(
         args.out,
         hash=args.hash,
@@ -629,7 +627,7 @@ def build_parser() -> argparse.ArgumentParser:
         cmd_watch,
         ("--log", path),
         ("--verdict", path),
-        ("--prefix", {"default": "senselab-"}),
+        ("--prefix", {"default": "pydra-"}),
         ("--runs-glob", {}),
         ("--profile", {"type": Path}),
         ("--stall-s", {"type": float, "default": 1800.0}),

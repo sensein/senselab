@@ -1,4 +1,4 @@
-"""Run a JSON array of calls on `InProcess`, each validated as a user call is.
+"""Run a JSON array of calls on one warm pool session, each validated as a user call is.
 
 uv run python scripts/run_calls.py calls.json --execution laptop
 
@@ -13,24 +13,27 @@ from pathlib import Path
 from typing import Any
 
 from senselab_core.runtime.call import TaskCall, packaged
-from senselab_core.runtime.execution.in_process import InProcess
+from senselab_core.runtime.execution.calls import call as run_call
+from senselab_core.runtime.execution.run import results_root
+from senselab_core.runtime.execution.warm import PoolSession
+from senselab_core.runtime.revision import cache_root
 from senselab_core.runtime.profiles import ExecutionProfile
 
 
 def run_calls(calls: Sequence[Any], execution: ExecutionProfile) -> list[str]:
     """Return one result line per call: `task: ok <output types>` or `task: FAILED <error type>: <message>`."""
     lines = []
-    executor = InProcess(profile=execution)
-    for call in calls:
-        task = call.get("task", "?") if isinstance(call, dict) else "?"
-        try:
-            result = executor.call(TaskCall.model_validate(call))
-        except Exception as error:  # noqa: BLE001 - the harness reports every failure of a call
-            lines.append(f"{task}: FAILED {type(error).__name__}: {' '.join(str(error).split())}")
-            continue
-        spec = packaged().registry.spec(task)
-        lines.append(f"{task}: ok {' '.join(f'{p}:{t}' for p, t in spec.outputs.items())}")
-        assert set(result.outputs) == set(spec.outputs)
+    with PoolSession(execution, cache_root() / "2x" / "calls", results_root()) as session:
+        for call in calls:
+            task = call.get("task", "?") if isinstance(call, dict) else "?"
+            try:
+                result = run_call(TaskCall.model_validate(call), profile=execution, session=session)
+            except Exception as error:  # noqa: BLE001 - the harness reports every failure of a call
+                lines.append(f"{task}: FAILED {type(error).__name__}: {' '.join(str(error).split())}")
+                continue
+            spec = packaged().registry.spec(task)
+            lines.append(f"{task}: ok {' '.join(f'{p}:{t}' for p, t in spec.outputs.items())}")
+            assert set(result.outputs) == set(spec.outputs)
     return lines
 
 

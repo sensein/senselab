@@ -651,8 +651,8 @@ def account_resume(before: Sequence[Event], after: Sequence[Event], items: int) 
         ResumeMismatch: the run was not interrupted part way, a committed job executed again, a group executed twice,
             or an item has no result.
     """
-    top = max((e.epoch for e in before), default=-1)
-    new = [e for e in after if e.epoch > top]
+    top = max((e.ordinal for e in before), default=-1)
+    new = [e for e in after if e.ordinal > top]
     committed = committed_jobs(before)
     keys = {(e.node, e.job.element): e.key for e in after if e.job is not None and e.key is not None and e.node}
     jobs = {(e.node, e.job.element) for e in after if e.job is not None and e.node and e.job.element}
