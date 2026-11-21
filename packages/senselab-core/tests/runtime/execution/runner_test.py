@@ -737,10 +737,46 @@ class Holding:
         return Handle(id=f"held-{id(fragment)}")
 
 
+class CountingSlots(threading.BoundedSemaphore):
+    """A bounded semaphore that counts the threads holding it and the threads blocked on it."""
+
+    def __init__(self, value: int) -> None:
+        """Hold `value` slots, none taken."""
+        super().__init__(value)
+        self.held = self.waiting = 0
+        self.changed = threading.Condition()
+
+    def acquire(self, blocking: bool = True, timeout: float | None = None) -> bool:  # noqa: FBT001, FBT002 - as threading's
+        """Take a slot, counted as waiting while blocked and as held once taken."""
+        got = super().acquire(blocking=False)
+        if not got and blocking:
+            with self.changed:
+                self.waiting += 1
+                self.changed.notify_all()
+            got = super().acquire(timeout=timeout)
+            with self.changed:
+                self.waiting -= 1
+        if got:
+            with self.changed:
+                self.held += 1
+                self.changed.notify_all()
+        return got
+
+    def __enter__(self, blocking: bool = True, timeout: float | None = None) -> bool:  # noqa: FBT001, FBT002
+        """Take a slot, as `acquire` does."""
+        return self.acquire(blocking, timeout)
+
+    def release(self, n: int = 1) -> None:
+        """Give back `n` slots."""
+        with self.changed:
+            self.held -= n
+        super().release(n)
+
+
 @pytest.mark.logic
 def test_rounds_sharing_slots_run_at_most_the_slots_at_once_between_them() -> None:
-    """Two rounds of three, each three wide, over two shared slots: no third submission starts while two are held."""
-    executor, slots = Holding(), threading.BoundedSemaphore(2)
+    """Two rounds of three over two shared slots: with four submissions blocked on the slots, two are inside."""
+    executor, slots = Holding(), CountingSlots(2)
     fragments: list[Any] = [SimpleNamespace(node="a") for _ in range(3)]
     rounds = [
         threading.Thread(target=submit_each, args=(executor, fragments), kwargs={"width": 3, "slots": slots})
@@ -748,13 +784,47 @@ def test_rounds_sharing_slots_run_at_most_the_slots_at_once_between_them() -> No
     ]
     for one in rounds:
         one.start()
+    with slots.changed:
+        assert slots.changed.wait_for(lambda: slots.waiting == 4, 30)
     with executor.entered:
         assert executor.entered.wait_for(lambda: executor.inside == 2, 30)
-        third = executor.entered.wait_for(lambda: executor.inside > 2, 0.2)
+        inside = executor.inside
     executor.release.set()
     for one in rounds:
         one.join(30)
-    assert not third and executor.peak == 2
+    assert inside == 2 and executor.peak == 2
+
+
+class FirstCancels(InProcess):
+    """An `InProcess` whose first `submit` sets `cancel`; each `submit` records whether it held one of `slots`."""
+
+    def __init__(self, store: ResultStore, cancel: threading.Event) -> None:
+        """Run on `store` under the test profile, setting `cancel` at the first submission."""
+        super().__init__(store=store, profile=PROFILE, run=RunConfig(), workers=WORKERS)
+        self.counted = CountingSlots(WORKERS.bound)
+        self.slots = self.counted
+        self.run_cancel = cancel
+        self.held: list[int] = []
+
+    def submit(self, fragment: PlanFragment) -> Handle:
+        """Record the slots held, set `cancel`, then submit."""
+        with self.counted.changed:
+            self.held.append(self.counted.held)
+        self.run_cancel.set()
+        return super().submit(fragment)
+
+
+@pytest.mark.contract
+def test_a_cancel_during_an_in_process_round_submits_at_most_its_bound_each_in_a_slot(tmp_path: Path) -> None:
+    """`InProcess.submit_many` over a round of 12, cancelled at the first: at most the bound run, each in a slot."""
+    placed, values = _plan(_graph(CHAINED, CHAIN_EDGES, text="list[json]"), [{"text": f"t{i}"} for i in range(12)])
+    cancel = threading.Event()
+    executor = FirstCancels(ResultStore(tmp_path / "store"), cancel)
+    with pytest.raises(runner.RunCancelled):
+        runner.PydraRunner(profile=PROFILE, work_dir=tmp_path / "pydra").run_plan(
+            placed, executor, values=values, events=EventLog(tmp_path / "events", "a1", 1), cancel=cancel
+        )
+    assert 1 <= len(executor.held) <= WORKERS.bound and all(held >= 1 for held in executor.held)
 
 
 @pytest.mark.logic

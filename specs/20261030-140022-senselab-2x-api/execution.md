@@ -630,7 +630,7 @@ are recorded here (R-200).
   no hit is served past the executor's reuse policy (`tests/lint/graph_runner_seam_test.py`). Workaround retired with
   the merge: the `Finishing` event-loop case of `runner_test.py`, which guarded the asyncio path's
   `run_in_executor` ordering; no event loop runs in the driver. `_EpochLease.try_take` returns `None`: the epoch is
-  the run's exclusion and a job lease is held at once. Fix round 1: `submit_many(fragments, stop)` takes the runner's stop check, tested
+  the run's exclusion and a job lease is held at once. `submit_many(fragments, stop)` takes the runner's stop check, tested
   before each fragment after it takes a slot, so a cancel (or the driver ending, as on Ctrl-C) leaves every fragment
   not yet started as `RunCancelled` in its slot and at most the bound's worth runs on; the Pool ignores `stop`, its
   put returning at once. A sender that raises posts its error as the refusal of every batch of its round not yet
