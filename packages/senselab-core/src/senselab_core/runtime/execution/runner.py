@@ -427,7 +427,7 @@ class _Driver:
         self.first: dict[str, ResultRef] = {}
         self.twins: dict[str, dict[tuple[int, ...], Job]] = {}
         self.reported: set[str] = set()
-        self.held: list[str] = []
+        self.held: list[tuple[str, str]] = []
         self.cancelled = False
         self.completed = 0
 
@@ -461,7 +461,8 @@ class _Driver:
         if self.errors:
             raise self.errors[0]
         if self.held:
-            raise QueueHeld("pool", "pool", len(self.held), self.held[0])
+            resource_class, reason = self.held[0]
+            raise QueueHeld(resource_class, sum(c == resource_class for c, _ in self.held), reason)
         if foreign:
             listed = "\n".join(f"{_label(e.job_name, e.state_index)} ({e.phase}): {e.message}" for e in foreign)
             raise WorkflowError(
@@ -490,19 +491,13 @@ class _Driver:
             if self._receive(graph, wait):
                 self.moved = time.monotonic()
             elif self.sent and time.monotonic() - self.moved >= self.no_progress_s:
-                if not self.session.working(self.sent, self._waiting()):
-                    raise self._stalled()
+                if not self.session.working(self._waiting()):
+                    raise NoProgress(self.no_progress_s, self._waiting())
                 self.moved = time.monotonic()
 
     def _waiting(self) -> tuple[str, ...]:
         """The resource classes the run's open pool jobs were placed on."""
         return tuple(sorted({s.doc.placement.resource_class for s in self.sent.values()}))
-
-    def _stalled(self) -> NoProgress:
-        """Return the run's `NoProgress`: the classes its open pool jobs wait on, and the pool's latest start errors."""
-        classes = self._waiting()
-        causes = getattr(self.session.pool, "_cause", {})
-        return NoProgress(self.no_progress_s, classes, {c: str(causes[c]) for c in classes if c in causes})
 
     def _check_cancel(self) -> None:
         """Once `cancel` is set, record the run's cancellation and withdraw its jobs still open in the pool."""
@@ -703,7 +698,7 @@ class _Driver:
     def _not_run(self, graph: GraphRunner, sent: _Sent, outcome: NotRun) -> None:
         """Give a job the pool did not run its outcome: a hold (raised after the run) or a cancellation."""
         if outcome.held:
-            self.held.append(str(outcome.reason))
+            self.held.append((sent.doc.placement.resource_class, str(outcome.reason)))
         job = sent.batch.jobs[sent.element]
         if not sent.batch.served:
             graph.complete(job, NotRun(str(outcome.reason), held=outcome.held))

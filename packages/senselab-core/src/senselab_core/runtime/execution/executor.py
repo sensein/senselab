@@ -318,55 +318,34 @@ class ResultRef(Frozen):
 
 
 class QueueHeld(RuntimeError):
-    """An executor holds the queue of a fragment's jobs: env `env` failed `failures` times by infrastructure faults.
+    """The pool held `jobs` of a run's jobs placed on `resource_class`; they have no terminal event.
 
-    The jobs are not failed; they wait in the queue for a later attempt. `reason` is the latest fault's message.
+    The pool holds a job when its residency failed past the infrastructure budget, or when its worker class broke
+    because no worker of it became ready; `reason` is the pool's, naming the latest load or start error. The jobs
+    are not failed: a later run, or a retry once the cause is fixed, runs them.
     """
 
-    def __init__(self, queue: str, env: str, failures: int, reason: str) -> None:
-        """Name the queue, the env, its failures and the latest cause."""
-        super().__init__(
-            f"queue {queue!r} is held: env {env!r} failed {failures} times by infrastructure faults: {reason}"
-        )
-        self.queue = queue
-        self.env = env
-        self.failures = failures
-        self.reason = reason
-
-
-class WorkersBroken(QueueHeld):
-    """The workers of a resource class (`*`: the substrate) failed to start `failures` times in a row.
-
-    The jobs are not failed; they wait in the queue for a later epoch, like a held env's. `reason` is the latest cause.
-    """
-
-    def __init__(self, queue: str, resource_class: str, failures: int, reason: str) -> None:
-        """Name the queue, the class (or `*`), its failures and the latest cause."""
-        super().__init__(queue, f"workers:{resource_class}", failures, reason)
-        RuntimeError.__init__(
-            self, f"queue {queue!r} is held: workers of {resource_class!r} failed to start {failures} times: {reason}"
-        )
-        self.resource_class = resource_class
-        self.reason = reason
+    def __init__(self, resource_class: str, jobs: int, reason: str) -> None:
+        """Name the class, how many jobs were held and the pool's reason."""
+        super().__init__(f"the pool held {jobs} job(s) on resource class {resource_class!r}: {reason}")
+        self.resource_class, self.jobs, self.reason = resource_class, jobs, reason
 
 
 class NoProgress(RuntimeError):
     """A run's pool jobs made no progress for `bound_s` (`pool.no_progress_s`).
 
-    No outcome came back, no job was sent, and no worker of theirs was ready, starting or beating its claim.
-    `classes` are the resource classes of the jobs still waiting; `start_errors` the pool's latest start error of
-    each that has one.
+    No outcome came back, no job was sent, no worker of their classes was listed by the substrate and no claim lease
+    on their queues beat. `classes` are the resource classes of the jobs still waiting. A class whose workers fail
+    to start is held by the pool with the start error (`QueueHeld`) before this bound.
     """
 
-    def __init__(self, bound_s: float, classes: tuple[str, ...], start_errors: Mapping[str, str]) -> None:
-        """Name the bound, the waiting classes and each one's latest start error."""
-        errors = "; ".join(f"{c}: {e}" for c, e in start_errors.items()) or "the pool reported none"
+    def __init__(self, bound_s: float, classes: tuple[str, ...]) -> None:
+        """Name the bound and the waiting classes."""
         super().__init__(
             f"no outcome and no ready, starting or beating worker for {bound_s:g} s (pool.no_progress_s) while jobs"
-            " wait on resource classes"
-            f" {', '.join(classes)}; latest start errors: {errors}"
+            f" wait on resource classes {', '.join(classes)}"
         )
-        self.bound_s, self.classes, self.start_errors = bound_s, classes, dict(start_errors)
+        self.bound_s, self.classes = bound_s, classes
 
 
 class RunCancelled(RuntimeError):

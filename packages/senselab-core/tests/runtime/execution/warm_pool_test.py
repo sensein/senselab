@@ -10,8 +10,10 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+import attrs
 import pytest
 from pool_stack_fixture import packaged, planned, registry, scoring
+from pydra.workers.pool import NodeLocalStorage
 from senselab_core.kernel.identity import ReusePolicy
 from senselab_core.runtime.call import RunConfig, TaskCall
 from senselab_core.runtime.execution import warm
@@ -19,7 +21,7 @@ from senselab_core.runtime.execution.calls import call
 from senselab_core.runtime.execution.events import read_events
 from senselab_core.runtime.execution.executor import NoProgress, QueueHeld
 from senselab_core.runtime.execution.run import start
-from senselab_core.runtime.execution.warm import NodeLocalRoot, PoolSession, node_local
+from senselab_core.runtime.execution.warm import PoolSession, claim_leases, newest_beat
 from senselab_core.runtime.licenses import LicensePolicy
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.site_placement import PlacementAnswer, PlacementRequest, PlacementValues, load_overrides
@@ -252,7 +254,7 @@ def test_a_failed_open_of_a_new_default_session_closes_the_one_it_replaced(
             call(TaskCall.model_validate({"task": TASK.name, "inputs": {"text": "a"}}), profile=RESIDENT)
             [first] = warm._DEFAULTS.values()
             monkeypatch.setenv("SENSELAB_CACHE", str(local))
-            with pytest.raises(NodeLocalRoot):
+            with pytest.raises(NodeLocalStorage):
                 call(
                     TaskCall.model_validate({"task": TASK.name, "inputs": {"text": "b"}}),
                     profile=ExecutionProfile.load(CLUSTER),
@@ -523,30 +525,51 @@ def test_a_class_whose_worker_is_still_starting_is_not_stalled(tmp_path: Path, p
     assert status.cancelled
 
 
-def test_the_no_progress_error_names_the_pools_latest_start_error(tmp_path: Path, planted: Path) -> None:
-    """Every start is refused: the run's `NoProgress` carries the refusal the pool recorded for the class."""
+def test_a_class_whose_starts_are_refused_holds_its_jobs_with_the_start_error(tmp_path: Path, planted: Path) -> None:
+    """Every start is refused: past its start deadline, and inside the no-progress bound, the pool breaks the class.
+
+    The run raises the hold, naming the class and the refusal; the job has no terminal event.
+    """
+    deadline = attrs.evolve(warm.settings(BOUNDED), start_deadline_s=0.2, start_deadline_failures=2)
     with (
         packaged(registry(TASK, worker=BACKEND), tmp_path / "cache"),
-        PoolSession(BOUNDED, tmp_path / "session", tmp_path / "store", substrate=_Refusing(), here=True) as session,
+        PoolSession(
+            BOUNDED, tmp_path / "session", tmp_path / "store", substrate=_Refusing(), pool_settings=deadline, here=True
+        ) as session,
     ):
         placed, values = planned(TASK, BOUNDED, ["a"])
         run = start(placed, session, values=values)
-        with pytest.raises(NoProgress, match="invalid partition") as caught:
+        with pytest.raises(QueueHeld, match="invalid partition") as caught:
             run.wait(timeout=60)
-    assert "invalid partition" in caught.value.start_errors["cpu"]
+    assert caught.value.resource_class == "cpu" and caught.value.jobs == 1
+    assert _kinds(run.run_dir) == []
 
 
 def test_a_slurm_session_refuses_a_pool_root_on_node_local_storage(tmp_path: Path) -> None:
-    """A Slurm substrate's workers run on other nodes: a root under the temporary directory is refused at open."""
+    """A Slurm substrate's workers run on other nodes: pydra refuses a root under the temporary directory, unwritten."""
     profile = ExecutionProfile.load(CLUSTER)
     root = Path(tempfile.gettempdir()) / f"senselab-node-local-{os.getpid()}" / "session"
-    with pytest.raises(NodeLocalRoot, match="every node"):
+    with pytest.raises(NodeLocalStorage, match="every node"):
         PoolSession(profile, root, tmp_path / "store")
     assert not root.exists()
 
 
-def test_node_local_names_temporary_directories_and_not_the_checkout() -> None:
-    """A temporary directory is node-local; the source checkout, on the storage the suite runs from, is not."""
-    assert node_local(Path(tempfile.gettempdir()) / "x") is not None
-    assert node_local(Path("/tmp/x")) is not None
-    assert node_local(Path(__file__).parent) is None
+def test_a_running_jobs_claim_lease_is_where_the_pool_layout_puts_it_and_beats(
+    tmp_path: Path, planted: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """While a job runs, `claim_leases` finds its ticket's claim in pydra's pool layout and `newest_beat` moves."""
+    monkeypatch.setenv("SENSELAB_TEST_SLEEP_S", "4")
+    with packaged(registry(TASK, worker=BACKEND), tmp_path / "cache"), served(tmp_path) as (session, _):
+        placed, values = planned(TASK, PROFILE, ["a"])
+        run = start(placed, session, values=values)
+        pool = session.root / "pool"
+        deadline = time.monotonic() + 30
+        while not claim_leases(pool, ["cpu"]) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        [lease] = claim_leases(pool, ["cpu"])
+        first = newest_beat(lease)
+        time.sleep(2)
+        later = newest_beat(lease)
+        assert claim_leases(pool, ["cpu:other"]) == []
+        assert run.wait(timeout=60).done
+    assert first is not None and later is not None and later > first
