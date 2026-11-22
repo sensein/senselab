@@ -698,9 +698,9 @@ above stays as the record of what was built and measured; the code they name is 
 | `InProcess.call` | a one-node plan run on a session | `calls.call` |
 | `senselab coordinate` and `execute` | `senselab run`; workers are `python -m pydra.workers.pool.worker`, started by the substrate | `cli.run_run` |
 
-**A pool job** is one senselab job: `HostCall` or `WorkerCall`, its provided field the model worker (the spec names the
-backend, env, model, device, profile digest and expected attestation; the provider object carries the `Loader` of each
-spec and travels with the payload) and its input the `JobDoc` (the job with its upstream inputs read from the store, its
+**A pool job** is one senselab job: `HostCall` or `WorkerCall`, its provided field the model worker (the spec is the job's
+own `Loader` as JSON: backend, env, model, device, profile and expected attestation, the backend's params class by
+name; fix round 1: the providers hold no loader, so a payload carries its own and no other, rebuilt by `Loader.of`) and its input the `JobDoc` (the job with its upstream inputs read from the store, its
 keyed placement, env, attestation, profile, code license, key, lookup context, run config and the inputs it uses). Its
 checksum is supplied: the key's digest. It sends one item; an item's error becomes `ItemFailed`, whose record the
 classifier and the driver read back.

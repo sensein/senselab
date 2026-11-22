@@ -3,11 +3,13 @@
 `senselab-worker@3` owns a process: a `WorkerClient` speaking wire protocol v3 to a worker in the backend's locked
 env, or, for a server backend, a server private to the pydra worker (a live registered service attesting the same
 is consumed instead). `senselab-host@3` loads a host backend in the pydra worker's own process, its state in the
-process model cache. A provided field's spec (`Loader.spec`) names the backend, env, model, device and profile; the
-provider object carries the `Loader` of each spec it is handed (`add`), and travels with every job's payload.
+process model cache. A provided field's spec (`Loader.spec`) is the job's own loader as JSON: its backend, env, model,
+device, profile and attestation. A provider holds no loader; it rebuilds the one a spec carries (`Loader.of`), so a
+job's payload carries its own loader and no other.
 """
 
 import functools
+import importlib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -69,16 +71,50 @@ class Loader:
 
     @property
     def spec(self) -> dict[str, Any]:
-        """The provided field's JSON spec: what distinguishes one resident worker from another, and its `id`."""
-        named = {
-            "backend": [self.backend.task, self.backend.name, self.backend.version, self.backend.worker],
-            "env": [self.env.python, self.env.lock_sha],
-            "model": None if self.model is None else self.model.identity,
+        """The provided field's JSON spec: the loader as JSON (`of` rebuilds it), and its digest as `id`."""
+        env = self.env
+        loader = {
+            "backend": {
+                **self.backend.model_dump(mode="json", exclude={"params"}),
+                "params": f"{self.backend.params.__module__}:{self.backend.params.__qualname__}",
+            },
+            "env": {
+                "python": env.python,
+                "python_version": env.python_version,
+                "lock_sha": env.lock_sha,
+                "wheel_set": env.wheel_set,
+                "torch_index": env.torch_index,
+                "lock": None if env.lock is None else str(env.lock),
+            },
+            "model": None if self.model is None else self.model.model_dump(mode="json"),
             "device": self.device,
-            "profile": self.profile.canonical_digest(),
+            "profile": self.profile.model_dump(mode="json"),
             "expected": None if self.expected is None else self.expected.model_dump(mode="json"),
         }
-        return {**named, "id": value_digest("loader", named)}
+        return {"loader": loader, "id": value_digest("loader", loader)}
+
+    @classmethod
+    def of(cls, spec: Mapping[str, Any]) -> "Loader":
+        """Return the loader a provided field's spec carries; the backend's params class is imported by name.
+
+        Raises:
+            ValueError: the spec carries no loader, or one that does not validate.
+        """
+        try:
+            given = spec["loader"]
+            env = dict(given["env"])
+            module, _, qualname = given["backend"]["params"].partition(":")
+            params = functools.reduce(getattr, qualname.split("."), importlib.import_module(module))
+            return cls(
+                backend=BackendSpec.model_validate({**given["backend"], "params": params}),
+                env=EnvHandle(**{**env, "lock": None if env["lock"] is None else Path(env["lock"])}),
+                model=None if given["model"] is None else ResolvedModel.model_validate(given["model"]),
+                device=given["device"],
+                profile=ExecutionProfile.model_validate(given["profile"]),
+                expected=None if given["expected"] is None else Attestation.model_validate(given["expected"]),
+            )
+        except (KeyError, TypeError, ImportError, AttributeError) as err:
+            raise ValueError(f"a provided field's spec carries no loader: {err}") from None
 
 
 @functools.cache
@@ -110,32 +146,16 @@ class Model:
 
 
 class _Provider:
-    """The provider protocol over the `Loader`s it was handed, by spec id."""
+    """The provider protocol over the `Loader` each spec carries."""
 
     name: ClassVar[str]
-
-    def __init__(self) -> None:
-        """Hold no loader yet."""
-        self.loaders: dict[str, Loader] = {}
-
-    def add(self, loader: Loader) -> dict[str, Any]:
-        """Hold `loader` and return its spec."""
-        spec = loader.spec
-        self.loaders[spec["id"]] = loader
-        return spec
-
-    def _loader(self, spec: Mapping[str, Any]) -> Loader:
-        try:
-            return self.loaders[spec["id"]]
-        except KeyError:
-            raise LookupError(f"provider {self.name} was handed no loader for spec {spec.get('id')}") from None
 
     def load(self, spec: Mapping[str, Any], device: object) -> Model:  # noqa: ARG002 - the spec names the device
         """Load the worker `spec` names and return it.
 
         Raises:
             WorkerLoadFailed: the worker or server failed to start or load, as its cause.
-            LookupError: no loader for `spec` was added.
+            ValueError: the spec carries no loader.
         """
         raise NotImplementedError
 
@@ -167,7 +187,6 @@ class SenselabWorker(_Provider):
 
     def __init__(self, start: ServerStart = start_vllm) -> None:
         """Start servers with `start`."""
-        super().__init__()
         self.start = start
 
     def load(self, spec: Mapping[str, Any], device: object) -> Model:  # noqa: ARG002 - the spec names the device
@@ -175,9 +194,9 @@ class SenselabWorker(_Provider):
 
         Raises:
             WorkerLoadFailed: the worker or server failed to start or load, as its cause.
-            LookupError: no loader for `spec` was added.
+            ValueError: the spec carries no loader.
         """
-        found = self._loader(spec)
+        found = Loader.of(spec)
         init = worker_init(found.device, found.model)
         if found.backend.env.kind == "server":
             server, stops = server_of(found, self.start)
@@ -249,9 +268,9 @@ class SenselabHost(_Provider):
 
         Raises:
             WorkerLoadFailed: the backend failed to load, as its cause.
-            LookupError: no loader for `spec` was added.
+            ValueError: the spec carries no loader.
         """
-        found = self._loader(spec)
+        found = Loader.of(spec)
         init = worker_init(found.device, found.model)
         profile = found.profile
         return Model(

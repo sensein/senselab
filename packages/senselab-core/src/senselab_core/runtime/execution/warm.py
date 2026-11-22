@@ -326,9 +326,7 @@ class PoolSession:
 
     def job(self, doc: JobDoc, loader: Loader, name: str) -> PydraJob:
         """Return the pool job of `doc`, its model worker loaded by `loader`, asking for its plan class's resources."""
-        provider = self.providers[0] if loader.provider == WORKER else self.providers[1]
-        spec = provider.add(loader)
-        task = (WorkerCall if loader.provider == WORKER else HostCall)(worker=spec, job=doc)
+        task = (WorkerCall if loader.provider == WORKER else HostCall)(worker=loader.spec, job=doc)
         resources = request(self.profile, doc.placement.resource_class)
         return PydraJob(task, submitter=self.submitter, name=name, resources=resources)
 

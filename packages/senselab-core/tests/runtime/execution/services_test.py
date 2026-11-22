@@ -19,7 +19,7 @@ from senselab_core.kernel.declare import BackendSpec, Env, ServerConfig
 from senselab_core.kernel.identity import Attestation, ModelRef, ResolvedModel
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.executor import FaultRecord
-from senselab_core.runtime.execution.providers import Loader, Model, SenselabWorker
+from senselab_core.runtime.execution.providers import Loader, Model, SenselabHost, SenselabWorker
 from senselab_core.runtime.execution.services import ServiceEntry, ServiceRegistry, service_registry
 from senselab_core.runtime.hardware import host_token
 from senselab_core.runtime.locks import LeaseTimeout
@@ -433,7 +433,7 @@ def hosted(tmp_path: Path) -> Iterator[tuple[ExecutionProfile, ServiceRegistry]]
 def _loaded(profile: ExecutionProfile) -> Model:
     provider = SenselabWorker(_start)
     backend = BACKEND.model_copy(update={"worker": "backends.served_backend_fixture"})
-    return provider.load(provider.add(Loader(backend, ENV, MODEL, "cpu", profile, IDENTITY)), None)
+    return provider.load(Loader(backend, ENV, MODEL, "cpu", profile, IDENTITY).spec, None)
 
 
 def test_pool_workers_of_one_identity_share_one_registered_server(
@@ -463,3 +463,14 @@ def test_a_service_record_holds_no_host_name(tmp_path: Path, hosted: tuple[Execu
     finally:
         for model in reversed(models):
             model.close()
+
+
+@pytest.mark.logic
+def test_a_spec_carries_its_own_loader_and_a_provider_holds_none() -> None:
+    """A provided field's spec rebuilds its loader exactly; the providers keep no loader, so a payload has one alone."""
+    other = BACKEND.model_copy(update={"name": "other"})
+    loaders = [Loader(BACKEND, ENV, MODEL, "cpu", PROFILE, IDENTITY), Loader(other, ENV, None, "cpu", PROFILE)]
+    specs = [loader.spec for loader in loaders]
+    assert [Loader.of(json.loads(json.dumps(spec))) for spec in specs] == loaders
+    assert specs[0]["id"] != specs[1]["id"]
+    assert vars(SenselabWorker(_start)) == {"start": _start} and vars(SenselabHost()) == {}

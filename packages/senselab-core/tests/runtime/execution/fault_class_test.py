@@ -38,7 +38,7 @@ def host_load_failure(raised: Exception) -> WorkerLoadFailed:
     fixture.RAISE[:] = [raised]
     backend, profile = _backend(), ExecutionProfile.load()
     provider = SenselabHost()
-    spec = provider.add(Loader(backend, host_env(backend, profile), None, "cpu", profile))
+    spec = Loader(backend, host_env(backend, profile), None, "cpu", profile).spec
     with pytest.raises(WorkerLoadFailed) as caught:
         provider.load(spec, None)
     return caught.value
