@@ -40,7 +40,8 @@ def call(
     """Run `task`: plan it as one node under `profile` and `config`, run it on a warm pool and return its result.
 
     Each input is bound once (`bind_input`) and its constraints checked. `session` is a `PoolSession` its caller owns,
-    whose workers and models stay resident; with none, the run makes and closes its own. The result's outputs are
+    whose workers and models stay resident; with none, the process's default session (`default_session`), so one call
+    after another loads its model once. The result's outputs are
     decoded and re-bound to the inputs' clocks.
 
     Raises:

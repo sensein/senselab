@@ -30,7 +30,8 @@ class Session:
     """The defaults of `plan` and `run`: the execution profile, the run config, the pool session and the result store.
 
     `pool` is a `PoolSession` its caller owns and closes, whose workers and models stay resident from one run to the
-    next; with none, each run makes its own. `store` is the root of the result store runs write and read.
+    next; with none, runs and calls use the process's default session, opened on first use and closed at exit.
+    `store` is the root of the result store runs write and read.
     """
 
     execution: ExecutionProfile | None = None

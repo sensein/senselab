@@ -53,7 +53,7 @@ pool:
   presence_refresh_s: 1
   segment_items: 512
   admit_threads: 8
-  idle_polls: 3
+  idle_polls: 300
   cancel_check_s: 0.05
   event_poll_s: 0.5
 # The fractions and targets each unit's batch, quantum and worker count are derived from: the load's largest share of a

@@ -1,6 +1,7 @@
 """Shared fixtures of the senselab tests."""
 
 import os
+import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
@@ -22,3 +23,12 @@ def importable_by_pool_workers(request: pytest.FixtureRequest, monkeypatch: pyte
     """Let pool worker processes import the test's own module and its fixtures, which a job's payload may name."""
     here = str(Path(str(request.node.fspath)).parent)
     monkeypatch.setenv("PYTHONPATH", os.pathsep.join([here, *filter(None, [os.environ.get("PYTHONPATH")])]))
+
+
+@pytest.fixture(autouse=True)
+def default_sessions_closed() -> Iterator[None]:
+    """Close the process's default pool sessions a test opened, stopping their workers."""
+    yield
+    warm = sys.modules.get("senselab_core.runtime.execution.warm")
+    if warm is not None:
+        warm.close_default_sessions()

@@ -423,8 +423,9 @@ class Plan:
     def run(self, session: Any = None, *, store: Path | None = None) -> "Run":  # noqa: ANN401 - a PoolSession
         """Start this plan on a warm pool and return its `Run`, which runs in the background (`run.start`).
 
-        `session` is a `PoolSession` its caller owns; with none, the run makes and closes its own under the plan's
-        profile. `store` is the root of the result store the run's results go to and are read from.
+        `session` is a `PoolSession` its caller owns; with none, the run uses the process's default session for the
+        plan's profile and store (`default_session`). `store` is the root of the result store the run's results go to
+        and are read from.
 
         Raises:
             ValueError: as `run.start`.

@@ -6,9 +6,14 @@ the `JobDoc` as its input, its checksum the job's key digest. Its one output is 
 so its workers and their models stay resident from one run to the next, and several runs may use it at once.
 """
 
+import atexit
 import contextlib
 import json
+import logging
+import os
 import re
+import secrets
+import threading
 from collections.abc import Iterator, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
@@ -38,11 +43,16 @@ from senselab_core.runtime.execution.workers import WorkerLoadFailed
 from senselab_core.runtime.execution_settings import ResourceClass
 from senselab_core.runtime.licenses import LicenseRefused
 from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.revision import cache_root
 from senselab_core.runtime.store import output_identity
 from senselab_core.runtime.worker_client import WorkerFatal, WorkerLost
 
 FAULT_MARK = "senselab-fault@1 "
 """The prefix of an `ItemFailed` message: the item's fault record follows as JSON."""
+logger = logging.getLogger("senselab")
+
+POOLS_DIR = "2x/pools"
+"""Under the cache root, the directory each process's default sessions are opened in (`default_session`)."""
 _GRES = re.compile(r"^gpu:(?:(?P<type>[\w.-]+):)?(?P<count>[0-9]+)$")
 
 
@@ -298,6 +308,40 @@ class PoolSession:
     def __exit__(self, *_: object) -> None:
         """Close the session."""
         self.close()
+
+
+_DEFAULTS: dict[tuple[str, str], PoolSession] = {}
+_DEFAULTS_LOCK = threading.Lock()
+
+
+def default_session(profile: ExecutionProfile, store: Path) -> PoolSession:
+    """Return this process's session for `profile` over the store at `store`, opened on first use, closed at exit.
+
+    Its root is a directory of its own under `<cache root>/2x/pools`. Every run started without a session, and every
+    call, uses it, so a model stays resident from one to the next for the profile's idle window.
+    """
+    key = (profile.canonical_digest(), str(Path(store).absolute()))
+    with _DEFAULTS_LOCK:
+        found = _DEFAULTS.get(key)
+        if found is None:
+            if not _DEFAULTS:
+                atexit.unregister(close_default_sessions)
+                atexit.register(close_default_sessions)
+            root = cache_root() / POOLS_DIR / f"{os.getpid()}-{secrets.token_hex(4)}"
+            found = _DEFAULTS[key] = PoolSession(profile, root, Path(store))
+    return found
+
+
+def close_default_sessions() -> None:
+    """Close every default session this process opened (`default_session`), stopping their workers."""
+    with _DEFAULTS_LOCK:
+        opened = list(_DEFAULTS.values())
+        _DEFAULTS.clear()
+    for found in opened:
+        try:
+            found.close()
+        except Exception as err:  # noqa: BLE001 - one failed close must not keep the others open
+            logger.warning("closing the default pool session at %s failed: %s", found.root, err)
 
 
 @contextlib.contextmanager

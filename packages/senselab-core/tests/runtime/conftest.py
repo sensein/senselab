@@ -4,6 +4,7 @@ import gc
 import importlib
 import os
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -129,3 +130,12 @@ def no_leaked_senselab_threads(slack_tests: dict[str, Any]) -> Iterator[None]:
         gc.collect()
         leaked[0].join(slack_tests["fake_worker"]["poll_s"])
     assert [t.name for t in leaked] == []
+
+
+@pytest.fixture(autouse=True)
+def default_sessions_closed() -> Iterator[None]:
+    """Close the process's default pool sessions a test opened, before the thread check reads what is left."""
+    yield
+    warm = sys.modules.get("senselab_core.runtime.execution.warm")
+    if warm is not None:
+        warm.close_default_sessions()

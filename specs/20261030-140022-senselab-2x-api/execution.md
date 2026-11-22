@@ -714,8 +714,11 @@ identity, the evidence it verified) and pydra adds `pool`; neither splits a slot
 **Provenance.** The store's `on_commit` writes the executed activity to the run's `prov/` before the entry is renamed
 into place; the reuse rule's `served` writes a `senselab:Reuse` when an entry is served. Both run in the pool worker.
 
-**Lifetime and runs.** `run.start(placed, session)` runs on a caller's session; with none, the run makes one over its run
-directory (`<run>/pool`, `<run>/private/work`) and closes it at the end. The manifest names the store and the pool. A
+**Lifetime and runs.** `run.start(placed, session)` runs on a caller's session; with none, on the process's default session
+for the plan's profile and store (`warm.default_session`, fix round 1 owner ruling): opened lazily under
+`<cache root>/2x/pools/<pid>-<token>`, closed at exit by the process that opened it. Every call (`calls.call`, the facade)
+takes the same path, so successive calls in one process load a model once; a worker stays for the profile's idle window
+(`idle_polls × poll_s`, 300 s on `laptop`). The manifest names the store and the pool. A
 run's attempts are ordered by their ordinal; the pool's coordinator epoch is the one exclusion (one live coordinator per
 pool root; a second waits), and a fenced coordinator's jobs are `NotRun(held=True)`. A held job leaves the run
 interrupted (`QueueHeld` raised after the loop). `Run.wait` stops waiting once the run's pool has no live coordinator.

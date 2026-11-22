@@ -274,7 +274,8 @@ def run_plan(run_dir: Path, profile: ExecutionProfile) -> Plan:
 def run_run(args: argparse.Namespace) -> int:
     """Run a parsed ``run``: run the plan of a run directory again, as a new attempt on a warm pool, and wait.
 
-    The run makes its pool under the profile, whose substrate starts its workers, and closes it when it ends.
+    The run uses the process's default session for the profile (`default_session`), whose substrate starts its
+    workers; it is closed when the command exits.
     """
     try:
         profile = _profile(args.profile)

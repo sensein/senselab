@@ -131,9 +131,11 @@ def executors_page() -> str:
 A plan runs on pydra's warm worker pool (`pydra.workers.pool.WarmPool`): long-running workers, started by a
 substrate, load a backend's model once and run job after job. `Plan.run` takes a `PoolSession` its caller owns and
 closes, whose workers and models stay resident from one run to the next; the session default is set with
-`senselab.use(pool=..., store=...)`. With none, a run makes its own session over its run directory and closes it
-when it ends. A profile's `local` substrate starts workers as processes on this host; a `slurm` one submits one
-`sbatch` per worker, with typed GPUs and never a QOS.
+`senselab.use(pool=..., store=...)`. With none, runs and calls use the process's default session for their profile
+and store, opened on first use and closed when the process exits, so a model loaded by one call stays resident for the
+next one through the profile's idle window (`pool.idle_polls` polls of `pool.poll_s`; five minutes on `laptop`).
+A profile's `local` substrate starts workers as processes on this host; a `slurm` one submits one `sbatch` per
+worker, with typed GPUs and never a QOS.
 
 {_api.entry("PoolSession", PoolSession, level=2)}
 {_api.entry("worker_classes", worker_classes, level=3)}

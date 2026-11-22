@@ -8,7 +8,9 @@ from pathlib import Path
 
 import pytest
 from pool_stack_fixture import packaged, planned, registry, scoring
-from senselab_core.runtime.call import RunConfig
+from senselab_core.runtime.call import RunConfig, TaskCall
+from senselab_core.runtime.execution import warm
+from senselab_core.runtime.execution.calls import call
 from senselab_core.runtime.execution.events import read_events
 from senselab_core.runtime.execution.executor import QueueHeld
 from senselab_core.runtime.execution.run import start
@@ -37,6 +39,16 @@ TWO_CLASSES = ExecutionProfile.load(
     },
 )
 """A small and a big CPU class, the small one first in the ladder."""
+
+RESIDENT = ExecutionProfile.load(
+    "laptop",
+    {
+        "devices": ["cpu"],
+        "resource_classes": {"cpu": {"device": "cpu", "mem_bytes": 2**30, "max_workers": 1}},
+        "lease": {"stale_after_s": 4.0, "renew_fraction": 0.2, "attribute_delay_s": 0, "wait_s": 10.0},
+    },
+)
+"""One CPU class, the packaged laptop profile's pool settings: its polls and its idle window."""
 
 
 @pytest.fixture
@@ -73,19 +85,28 @@ def test_a_run_on_a_session_gives_each_records_result(tmp_path: Path, planted: P
 
 def test_two_runs_on_a_caller_owned_session_load_the_model_once(tmp_path: Path, planted: Path) -> None:
     """Two runs of two plans on one session's worker process load the backend once; a repeated key is a reuse."""
-    profile = PROFILE.model_copy(update={"pool": PROFILE.pool.model_copy(update={"idle_polls": 2000})})
     with packaged(registry(TASK, worker=BACKEND), tmp_path / "cache"):
-        session = PoolSession(profile, tmp_path / "session", tmp_path / "store")
+        session = PoolSession(RESIDENT, tmp_path / "session", tmp_path / "store")
         try:
-            first, values = planned(TASK, profile, ["a"])
+            first, values = planned(TASK, RESIDENT, ["a"])
             assert start(first, session, values=values).wait(timeout=180).done
-            second, values = planned(TASK, profile, ["a", "b", "c"])
+            second, values = planned(TASK, RESIDENT, ["a", "b", "c"])
             run = start(second, session, values=values)
             assert run.wait(timeout=180).done
         finally:
             session.close()
     assert _loads(tmp_path) == 1
     assert _kinds(run.run_dir) == ["cache_hit", "finished", "finished"]
+
+
+def test_two_calls_without_a_session_load_the_model_once(tmp_path: Path, planted: Path) -> None:
+    """Two calls given no session run on the process's default session: one worker process, one load."""
+    with packaged(registry(TASK, worker=BACKEND), tmp_path / "cache"):
+        first = call(TaskCall.model_validate({"task": TASK.name, "inputs": {"text": "a"}}), profile=RESIDENT)
+        second = call(TaskCall.model_validate({"task": TASK.name, "inputs": {"text": "b"}}), profile=RESIDENT)
+        assert len(warm._DEFAULTS) == 1
+    assert (first.outputs["value"], second.outputs["value"]) == ("a", "b")
+    assert _loads(tmp_path) == 1
 
 
 def test_a_load_out_of_memory_moves_the_job_to_the_larger_class(tmp_path: Path, planted: Path) -> None:

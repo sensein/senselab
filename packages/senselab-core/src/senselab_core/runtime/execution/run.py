@@ -4,8 +4,8 @@ A run lives in `<cache root>/2x/runs/<plan hash>/`: `plan.json` (the logical pla
 once), `inputs.json` (what each record's inputs are read from, merged across attempts), `manifest.json` (the plan hash,
 the result store and the pool the latest attempt used), `placements/<attempt>.json` (one per attempt, never
 overwritten), `attempts/<n>` (the attempt id claimed `n`-th), `events/<writer>.jsonl` (`EventLog`) and `prov/` (the
-provenance documents). A run that makes its own pool keeps it in `pool/`, and its jobs' work directories in
-`private/work/`. A `Run` over a directory derives its status and its results from the events and the result store,
+provenance documents). A run given no session runs on the process's default one, under `<cache root>/2x/pools/`.
+A `Run` over a directory derives its status and its results from the events and the result store,
 and binds its input values from `inputs.json`, so it works from a run another process started, unless an input was
 held in memory by the process that planned it.
 """
@@ -901,21 +901,6 @@ def _plan_document(placed: Plan) -> dict[str, object]:
     }
 
 
-def _close_owned(session: Any, owned: bool, run: "Run", failed: bool) -> None:  # noqa: ANN401 - a PoolSession
-    """Close a pool session the run made, so provenance and `Run.fail` still run if the close fails.
-
-    A close error is logged; it is handed to `run.fail` only when the run had not failed (`failed`) already.
-    """
-    if not owned or session is None:
-        return
-    try:
-        session.close()
-    except Exception as err:  # noqa: BLE001 - cleanup must not skip the run's bookkeeping
-        logger.error("closing the pool session of run %s failed: %s", run.run_dir.name, err)
-        if not failed:
-            run.fail(err)
-
-
 def start(
     placed: Plan,
     session: Any = None,  # noqa: ANN401 - a PoolSession; pydra is imported only once a run starts
@@ -926,13 +911,13 @@ def start(
     """Start `placed` on a warm pool in a background thread, as a new attempt, and return its `Run`.
 
     `session` is a `PoolSession` its caller owns, whose workers and models stay resident after the run; with none,
-    the run makes its own over the run directory (its pool in `pool/`, its jobs' work directories in
-    `private/work/`), under the plan's profile, and closes it when the run ends. `store` is the root of the result
-    store the run's results go to and are read from: the session's, else the cache's (`results_root`). The input values
+    the run uses this process's default session for the plan's profile and store (`default_session`), opened on first
+    use and closed at exit. `store` is the root of the result store the run's results go to and are read from: the
+    session's, else the cache's (`results_root`). The input values
     are bound (`bind_sources`) before anything is written: from their paths or JSON values, or from the values the
     plan holds in memory; `values` gives them already bound. The sources are merged into `inputs.json` under its
     lease (`record_sources`), also before anything else is written. The run claims its attempt (`prepare`); its
-    thread then opens the pool, which waits while another coordinator holds it, and runs the plan.
+    thread then runs the plan.
 
     Raises:
         ValueError: the plan was placed under another profile than the session's or the packaged default's; or
@@ -947,13 +932,12 @@ def start(
     if importlib.util.find_spec("pydra") is None:
         raise MissingExtra("pydra")
     from senselab_core.runtime.execution.runner import PydraRunner  # noqa: PLC0415 - needs pydra
-    from senselab_core.runtime.execution.warm import PoolSession  # noqa: PLC0415 - needs pydra
+    from senselab_core.runtime.execution.warm import default_session  # noqa: PLC0415 - needs pydra
 
     default = session.profile if session is not None else ExecutionProfile.load()
     profile = placed.execution if placed.execution is not None else default
     if profile.canonical_digest() != placed.placement.profile_digest:
         raise ValueError(f"plan {placed.hash} was placed under another execution profile; give the session to run on")
-    owned = session is None
     run_dir = run_dir_of(placed.hash)
     if session is not None:
         if store is not None and Path(store).absolute() != Path(session.store.path):
@@ -963,8 +947,8 @@ def start(
     store.mkdir(parents=True, exist_ok=True)
     delay = check_storage(profile, store)
     values = bind_sources(placed) if values is None else values
-    pool_root = run_dir / "pool" if session is None else session.pool.root
-    attempt, ordinal = prepare(placed, run_dir, store, pool_root)
+    opened = session if session is not None else default_session(profile, store)
+    attempt, ordinal = prepare(placed, run_dir, store, opened.pool.root)
     checked_lease(profile.lease, delay)
     runner = PydraRunner(profile=profile, work_dir=run_dir / PYDRA_DIR)
     run = Run(run_dir, store=store, profile=profile)
@@ -973,22 +957,16 @@ def start(
     log = EventLog(run_dir, attempt, ordinal)
 
     def body() -> None:
-        failed = False
-        opened = session
-        close_placements: Callable[[], None] = lambda: None  # noqa: E731 - replaced once the pool is open
+        close_placements: Callable[[], None] = lambda: None  # noqa: E731 - replaced once the placements are recorded
         try:
-            if opened is None:
-                opened = PoolSession(profile, run_dir, store)
             run.epoch = opened.epoch
             close_placements = _record_placements(placed, values, log, opened.epoch)
             runner.run_plan(placed, opened, values=values, events=log, cancel=run.cancelled)
         except BaseException as err:  # noqa: BLE001 - held for `wait`
             if not isinstance(err, RunCancelled):
-                failed = True
                 run.fail(err)
         finally:
             close_placements()
-            _close_owned(opened, owned, run, failed)
         try:
             provenance.write(run_dir)
         except Exception as err:  # noqa: BLE001 - held for `wait`
