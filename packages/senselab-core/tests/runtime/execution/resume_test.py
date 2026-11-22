@@ -210,7 +210,7 @@ def test_resume_never_reresolves_ref(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert resumed.wait(60).done and all(isinstance(o, Output) for _, o in resumed.results())
     model = resumed.plan.logical.models["a"]
     assert model is not None and model.identity == PIN and model.ref.ref == PIN and resumed.plan.hash == placed.hash
-    assert _placement(resumed)["profile_digest"] == OFFLINE.canonical_digest()
+    assert _placement(resumed)["profile_digest"] == OFFLINE.identity_digest()
 
 
 def test_resume_and_place_name_no_resolver() -> None:
@@ -240,7 +240,7 @@ def test_resume_with_other_profile_same_backend_reuses(tmp_path: Path) -> None:
     assert resumed.wait(60).done and resumed.run_dir.name == placed.hash
     assert _kinds(_latest(resumed)) == ["cache_hit"] * 3
     fresh = _placement(resumed)
-    assert fresh["profile_digest"] == SAME_BACKEND.canonical_digest() != PROFILE.canonical_digest()
+    assert fresh["profile_digest"] == SAME_BACKEND.identity_digest() != PROFILE.identity_digest()
     assert fresh["nodes"]["a"]["backend"] == "dsp"
 
 

@@ -2,16 +2,18 @@
 # Shared prologue of the step-<n>.sh scripts; sourced from $SCRIPTS_DIR, never run on its own.
 #
 # Every script needs, in its --export: SHA (40-hex commit, pushed), WORK_ROOT (this account's scratch), SCRIPTS_DIR (a
-# scratch copy of this directory), PROFILE_SRC (the group's site profile file, copied to scratch; never committed),
-# CPU_PARTITION and GPU_PARTITION (the partitions to run on, from the site's own planning).
+# scratch copy of this directory) and PROFILE_SRC (the group's site profile file, copied to scratch; never committed).
+# The site profile names its partitions itself; a variable left unset in it refuses the setup, naming the key.
 # Optional: CHECKOUT_SRC (the campaign checkout, itself cloned from GitHub and pinned at SHA; default GitHub), FFMPEG_LIB,
 # HF_TOKEN, WORKER_TIME_S (see below), SYNC_ARGS, STALL_S (the no-progress bound of orcd_watched, default 1800),
-# NO_PROGRESS_S (the copy's pool.no_progress_s, for a tier whose tests must fail inside their own budget).
+# NO_PROGRESS_S (the copy's pool.no_progress_s, for a tier whose tests must fail inside their own budget),
+# GROUP_UV_CACHE (a group's warm uv cache on scratch; default $WORK_ROOT/uv-cache, which step-prepare.sh fills once
+# before the jobs that share it are submitted).
 #
-# orcd_setup NAME CHECKED_CLASSES [local]: strict mode, a fresh clone pinned to SHA, `uv sync`, the site profile copied
-# to $WORK/profile.yaml after a time fit against each checked class's partition (`sinfo`), its substrate made local
-# when the third argument is `local` (the pool's workers are then processes of this job), and an EXIT trap that always
-# prints one JSON verdict line and copies $OUT to $RESULTS. A script puts its files in $OUT and writes
+# orcd_setup NAME CHECKED_CLASSES [local]: strict mode, a fresh clone pinned to SHA, `uv sync` from the shared uv cache,
+# the site profile copied to $WORK/profile.yaml with its variables expanded, after a time fit against each checked
+# class's partition (`sinfo`), its substrate made local when the third argument is `local` (the pool's workers are
+# then processes of this job), and an EXIT trap that always prints one JSON verdict line and copies $OUT to $RESULTS. A script puts its files in $OUT and writes
 # $WORK/verdict.json through the driver (benchmarks/exit/orcd_driver.py, from the checkout at SHA); if it dies before
 # that, the trap writes a failing verdict.
 set -eo pipefail
@@ -42,7 +44,7 @@ orcd_exit() {
 # orcd_setup NAME CHECKED_CLASSES [local] (classes: comma-separated names whose time_s is fitted; empty: all).
 orcd_setup() {
   local name="$1" classes="${2:-}" substrate="${3:-}"
-  orcd_need SHA WORK_ROOT SCRIPTS_DIR PROFILE_SRC CPU_PARTITION GPU_PARTITION
+  orcd_need SHA WORK_ROOT SCRIPTS_DIR PROFILE_SRC
   [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "SHA is not a 40-hex commit" >&2; exit 2; }
   [ -f "$PROFILE_SRC" ] || { echo "PROFILE_SRC is not a file" >&2; exit 2; }
   JOB="${SLURM_JOB_ID:-local}"
@@ -52,7 +54,7 @@ orcd_setup() {
   rm -rf "$WORK" "$RESULTS"
   mkdir -p "$OUT"
   trap orcd_exit EXIT
-  export UV_CACHE_DIR="$WORK_ROOT/uv-cache" HF_HOME="$WORK_ROOT/hf" SENSELAB_ENV_ROOT="$WORK_ROOT/envs-$SHA"
+  export UV_CACHE_DIR="${GROUP_UV_CACHE:-$WORK_ROOT/uv-cache}" HF_HOME="$WORK_ROOT/hf" SENSELAB_ENV_ROOT="$WORK_ROOT/envs-$SHA"
   export SENSELAB_VENV_CACHE="$WORK_ROOT/venvs"
   export LD_LIBRARY_PATH="${FFMPEG_LIB:-}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
   git clone -q "${CHECKOUT_SRC:-https://github.com/sensein/senselab}" "$WORK/checkout"

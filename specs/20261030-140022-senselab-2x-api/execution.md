@@ -769,3 +769,65 @@ process held is taken over only once it is 300 s stale (the `PortableStore` leas
 deleted pool's online probe and the job engine's batched requests, with the r253 step; the calibration probe writing
 `DirectoryCalibration` records; a provider `measure` by process (pydra attributes memory to the
 worker's own processes); `explain`'s fit lines, since the class is chosen at submit.
+
+## Amendment 2026-11-22 (route-B S1c): the repin to pydra `b98cb8a0`
+
+senselab is pinned to pydra `integration/senselab` @`b98cb8a0` (#988, the pool fails fast). What changed for senselab:
+
+- **A class whose workers cannot start is held, with the start error.** pydra breaks the class once its starts have
+  failed `start_deadline_failures` times (3) and `start_deadline_s` (120 s) has passed since the first, with no worker
+  of it live, and reports its jobs `NotRun(held=True)` whose reason names the latest start error. The driver records each
+  held job's resource class with that reason and raises `QueueHeld(resource_class, jobs, reason)` after the loop, so an
+  invalid partition surfaces in about two minutes as a hold naming the refusal. senselab keeps pydra's defaults for both
+  settings. `QueueHeld` no longer names an env and a failure count (the pool reports neither) and `WorkersBroken`,
+  which nothing raised, is deleted.
+- **The no-progress bound reads only public state** (R-308). `pool.no_progress_s` stays: it catches what no start
+  error shows, a pool that starts nothing (an `ExternalSubstrate` with no worker attached) and a job the pool dropped.
+  When the bound is reached the driver asks `PoolSession.working(classes)`: true when the substrate's `live()` lists a
+  worker of a waiting class, or when a claim lease on one of their queues beat since the last look. The claim leases
+  are found by pydra's documented pool layout (`queues/<label>/name`, `queues/<label>/claims/<digest>.lease/`) and a
+  lease's newest heartbeat is the newest mtime of the lease directory, its token directories and their entries, as the
+  protocol's `DirectoryLease` defines. A claim on the class's queue counts whichever run's ticket it holds, since the
+  run's jobs wait behind it. `NoProgress` names the bound and the waiting classes; it carries no start errors, since
+  a refused start is now held before the bound (`_cause`, R-307, is not read).
+- **The node-local check is pydra's.** `PoolSession` calls the substrate's `check_root` (pydra's `SlurmSubstrate`
+  refuses a root, or its `private/logs`, under `/tmp`, `/var/tmp`, `/dev/shm`, `$TMPDIR` or the temp directory, or on
+  a memory filesystem, and accepts a temp directory on a network filesystem, R-311) before it writes anything, so a
+  refused root is left unmade and the error is pydra's `NodeLocalStorage`. senselab's `node_local` and
+  `NodeLocalRoot` are deleted.
+- **Profile variables expand at load.** `ExecutionProfile.load` expands `${VAR}`, `$VAR` and `${VAR:-fallback}` in every
+  string value (`expand_profile`) and refuses a variable that is unset or empty with `UnsetProfileVariable` naming the
+  key path and the variable. A list item that holds a variable and expands empty is left out, so `${VAR:-}` is an
+  optional measures root; `${cache_root}` is senselab's token and stays for `resolve_roots`. Before, env roots and
+  measures roots were expanded where used and a partition not at all, so a site profile's `${GPU_PARTITION}` reached
+  `sbatch` verbatim and failed 19 minutes into a pool step. `orcd_driver profile` applies the same expansion, so the
+  job's copy of a site profile is literal and an unset variable refuses the job before anything is submitted.
+
+**Fix round 1 (2026-11-22).**
+- *A run is a fresh attempt.* Before its first submit the driver calls `WarmPool.release_hold` for each resource class
+  of its plan, so a class an earlier run saw break (a scheduler that refused submissions for minutes, a disk that
+  filled while an env built) is started again rather than holding every later run of a long-lived default session
+  with a stale error. The run that saw the break still raises its `QueueHeld`.
+- *An unknown state is not a stall.* A substrate listing that raises at the no-progress check (an `squeue` that times
+  out) is logged and counts as working; the next look is one bound later. pydra's own listings absorb the same error.
+- *The plan's profile identity is the profile as written.* `ExecutionProfile.identity_digest` takes each value `load`
+  expanded in its written form (`written`, recorded at load as `(written, expanded)` per key path), so a plan placed in
+  one shell is run or resumed in another whose `SENSELAB_ENV_ROOT` or measures root differs. It is the plan's
+  `profile_digest`, the check `run.start`, the runner and `senselab run` make, and the digest an entry and the harness
+  record. `canonical_digest`, which covers the expanded values and `written`, stays the in-process value identity
+  (the default-session key).
+- *Start deadline as profile keys.* `pool.start_deadline_s` (120) and `pool.start_deadline_failures` (3), pydra's
+  defaults, are passed to its `PoolSettings` (`execution-profile@6.2`; config-derivations.md, `pool`).
+- `coordinator_live` opens the pool with the public `PoolRoot.open` and `LeaseSettings.from_json` (R-318 closed).
+
+**Fix round 2 (2026-11-22).**
+- `identity_digest` is the `value@2` digest of the dumped profile with each written form in place, not validated
+  again, so a pattern-checked or numeric value written as a variable (`placement_hook: ${HOOK}`, a count from
+  `${N}`) has one identity on every host; `written` records each expansion as validated, so a number compares equal.
+- `written` is the loader's: a profile file or override that holds it is refused (`WrittenFormsGiven`); a loaded
+  profile is written back for `load` with `model_dump_json(exclude={"written"})`, and then names its values as
+  expanded on that host.
+- Releasing holds at run start costs each new run at most one more start deadline per broken class: pydra releases
+  only broken classes, and a run that already received its held outcomes still raises `QueueHeld`.
+- `orcd_driver profile` writes the job's copy of a site profile already expanded, so an ORCD run's profile identity
+  names the job's literal values.

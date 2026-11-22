@@ -7,8 +7,12 @@
 # process of this allocation) and build their envs under $WORK_ROOT/envs-<sha>. pytest's temporary tree, and with it
 # every pool root a test opens, is under $WORK (`--basetemp`), the cache is the job's own, and WARNING records stream to
 # the job log, so a test that a timeout kills still shows the pool's warnings. Never `-n`: every xdist worker would load
-# the ML stack again. NO_PROGRESS_S (default 600) is the copy's pool.no_progress_s, inside the 700 s `limits` budget;
-# it holds because the envs are built before the tiers (with SKIP_ENVS=1 they must already be built at this SHA).
+# the ML stack again. Each test of the logic and contract tiers has at most 120 s; on MODE=gpu each test of the model
+# tiers has at most 300 s, and on MODE=cpu the model tiers keep their tier budgets (tier_budgets.json), because each of
+# their tests loads a model on the CPU inside it. A test with its own bound keeps it (the `vllm_server` tests,
+# which start a cold server). NO_PROGRESS_S (default 240 on gpu, 600 on cpu) is the copy's pool.no_progress_s, inside
+# each model test's bound; it holds because the envs are built before the tiers (with SKIP_ENVS=1 they must already be
+# built at this SHA). Submit after step-prepare.sh, with --dependency=afterok:<prepare job>.
 # Submit (placeholders, P-28; one job per MODE):
 #   sbatch --partition="$CPU_PARTITION" --cpus-per-task=8 --mem=48G --time=04:00:00 --job-name=orcd-step5-cpu \
 #          --output="$WORK_ROOT/orcd-step5-cpu-%j.out" \
@@ -31,7 +35,7 @@ source "$SCRIPTS_DIR/lib.sh"
 MODE="${MODE:?MODE is cpu or gpu}"
 case "$MODE" in cpu | gpu) ;; *) echo "MODE is cpu or gpu" >&2; exit 2 ;; esac
 if [ "$MODE" = gpu ]; then nvidia-smi -L | grep -q H100 || { echo "this allocation has no H100" >&2; exit 2; }; fi
-export NO_PROGRESS_S="${NO_PROGRESS_S:-600}"
+if [ "$MODE" = gpu ]; then export NO_PROGRESS_S="${NO_PROGRESS_S:-240}"; else export NO_PROGRESS_S="${NO_PROGRESS_S:-600}"; fi
 orcd_setup "5-$MODE" "-" local
 export SENSELAB_CACHE="$WORK/cache"
 TIERS="${TIERS:-logic contract limits usecase env}"
@@ -47,8 +51,10 @@ for tier in $TIERS; do
   uv run --no-sync pytest packages -m "$tier" -p no:cacheprovider -q --collect-only >/dev/null 2>&1
   if [ $? -eq 5 ]; then echo "tier $tier: no test carries the marker, skipped"; continue; fi
   [ "$MODE" = gpu ] && nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader | sed "s/^/tier $tier: gpu holder before start: /"
+  TIMEOUT=
+  case "$tier" in logic | contract) TIMEOUT=120 ;; *) [ "$MODE" = gpu ] && TIMEOUT=300 ;; esac
   echo "tier $tier: start $(date +%T)"
-  uv run --no-sync pytest packages -m "$tier" -p no:cacheprovider -q -rs --durations=15 \
+  uv run --no-sync pytest packages -m "$tier" -p no:cacheprovider -q -rs --durations=15 ${TIMEOUT:+--timeout="$TIMEOUT"} \
     --basetemp="$WORK/pytest-$tier" -o log_cli=true --log-cli-level=WARNING \
     --junitxml="$OUT/junit-$tier.xml" 2>&1 | tee "$OUT/pytest-$tier.log"
   STATUS=${PIPESTATUS[0]}

@@ -59,6 +59,6 @@ type) as a resource fault with no reason. pydra then moves the job up its ladder
 `Unplaceable` with the cause, and records no out-of-memory unfit load (that happens only for reason `oom`). Before, the
 same failure was an unclassified infrastructure fault charged once per load until the residency was held.
 
-A final kind at load does not exist in pydra at `3046e31e`: `_load_fault` treats every non-resource kind, `policy`
+A final kind at load does not exist in pydra at `b98cb8a0`: `_load_fault` treats every non-resource kind, `policy`
 included, as an infrastructure fault of the residency (R-317). Resource is also the honest class: the granted device is
 the resource the env cannot use.

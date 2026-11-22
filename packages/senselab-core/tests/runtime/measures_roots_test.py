@@ -557,12 +557,13 @@ def test_the_roots_are_one_source_of_the_measure_source(tmp_path: Path) -> None:
 def test_an_unset_group_root_variable_is_no_root_and_blank_or_repeated_roots_are_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An unset variable is left out; the cache-root token is `cache_root()`; blank and repeated roots are refused."""
+    """An unset optional root is left out; the cache-root token is `cache_root()`; blank and repeated roots refuse."""
     monkeypatch.delenv("SENSELAB_MEASURES_ROOT", raising=False)
     monkeypatch.setenv("SENSELAB_CACHE", str(tmp_path / "cache"))
     profile = ExecutionProfile.load(CLUSTER)
     assert resolve_roots(profile.calibration.measures_roots, cache_root()) == (tmp_path / "cache" / "2x" / "measures",)
     monkeypatch.setenv("SENSELAB_MEASURES_ROOT", str(tmp_path / "group"))
+    profile = ExecutionProfile.load(CLUSTER)
     roots = MeasureRoots.from_profile(
         profile.calibration, POLICY, stale_after_s=profile.lease.stale_after_s, cache=cache_root()
     )

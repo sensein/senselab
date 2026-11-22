@@ -714,7 +714,7 @@ def run_suite(  # noqa: PLR0913 - the suite and where everything it reads and wr
         run_id=run_id,
         started=started,
         execution=execution.name,
-        execution_digest=execution.canonical_digest(),
+        execution_digest=execution.identity_digest(),
         entries=tuple(entries),
         contexts=tuple(contexts[k] for k in sorted(contexts)),
     )

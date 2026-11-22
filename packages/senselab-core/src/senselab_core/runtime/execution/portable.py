@@ -196,7 +196,7 @@ class SenselabIdentity:
         section = doc.section()
         if phase == "lookup":
             return {**doc.context.model_dump(mode="json"), JOB: section}
-        section.update(_ran(job.checksum), profile=doc.profile.canonical_digest())
+        section.update(_ran(job.checksum), profile=doc.profile.identity_digest())
         return {**doc.execute_context().model_dump(mode="json"), JOB: section}
 
     def fingerprint(self, context: Mapping[str, Any]) -> str:

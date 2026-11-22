@@ -101,3 +101,36 @@ def test_each_test_gets_its_tiers_budget_unless_it_sets_its_own(
         f"BUDGET = {tier_budget_s['logic']}\n" + (pytester.path / "test_sample.py").read_text()
     )
     pytester.runpytest().assert_outcomes(passed=2)
+
+
+@pytest.mark.logic
+def test_a_command_line_timeout_replaces_every_tier_budget_but_not_a_tests_own_mark(
+    pytester: pytest.Pytester, project: Callable[[str], None]
+) -> None:
+    """`--timeout=N` marks each test without its own `timeout` mark `timeout(N)`, whatever its tier's budget."""
+    project(
+        "import pytest\n\n@pytest.mark.contract\ndef test_a(request):\n"
+        "    assert request.node.get_closest_marker('timeout').args == (120.0,)\n\n"
+        "@pytest.mark.logic\n@pytest.mark.timeout(5)\ndef test_b(request):\n"
+        "    assert request.node.get_closest_marker('timeout').args == (5,)\n",
+    )
+    pytester.runpytest("--timeout=120", "-m", "logic or contract").assert_outcomes(passed=2)
+
+
+@pytest.mark.logic
+def test_a_vllm_server_test_is_bounded_by_its_starts_under_the_test_profile(
+    pytester: pytest.Pytester, project: Callable[[str], None], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`vllm_server(starts=n)` marks `timeout(n * (vllm.startup_s + envs.server_start_margin_s))`, over `--timeout`."""
+    from senselab_core.runtime.profiles import ExecutionProfile  # noqa: PLC0415 - the hook's own lazy import
+
+    profile_file = HOOK.parent / "senselab-core/tests/data/profiles/cluster.yaml"
+    monkeypatch.setenv("SENSELAB_TEST_PROFILE", str(profile_file))
+    profile = ExecutionProfile.load(profile_file)
+    bound = 2 * (profile.vllm.startup_s + profile.envs.server_start_margin_s)
+    project(
+        f"import pytest\n\n@pytest.mark.logic\n@pytest.mark.vllm_server(starts=2)\ndef test_a(request):\n"
+        f"    assert request.node.get_closest_marker('timeout').args == ({float(bound)!r},)\n"
+    )
+    (pytester.path / "pytest.ini").write_text(MARKERS + "    vllm_server\n")
+    pytester.runpytest("--timeout=120").assert_outcomes(passed=1)

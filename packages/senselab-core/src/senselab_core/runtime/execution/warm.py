@@ -13,7 +13,6 @@ import logging
 import os
 import re
 import secrets
-import tempfile
 import threading
 from collections.abc import Iterable, Iterator, Mapping
 from datetime import datetime, timezone
@@ -31,7 +30,7 @@ from pydra.workers.pool.classes import WorkerClass
 from pydra.workers.pool.faults import FaultBudgets
 from pydra.workers.pool.faults import FaultRecord as PoolFault
 from pydra.workers.pool.fit import MeasuredFit
-from pydra.workers.pool.pool import WarmPool, _newest_mtime
+from pydra.workers.pool.pool import WarmPool
 from pydra.workers.pool.settings import PoolSettings
 from pydra.workers.pool.substrate import LocalSubstrate, SlurmSubstrate, Substrate
 from senselab_worker.device_check import DeviceUnusable
@@ -59,10 +58,6 @@ CALIBRATION_DIR = "pydra-directory-calibration@1"
 """Under a measures root, the directory the pool's `DirectoryCalibration` keeps its samples and unfit records in."""
 POOLS_DIR = "2x/pools"
 """Under the cache root, the directory each process's default sessions are opened in (`default_session`)."""
-TEMPORARY_ROOTS = ("/tmp", "/var/tmp")  # noqa: S108 - named to be refused, not written to
-"""The FHS temporary directories, beside the interpreter's own (`tempfile.gettempdir`); each is node-local."""
-MEMORY_FILESYSTEMS = frozenset({"tmpfs", "ramfs"})
-"""The filesystem types (`/proc/self/mounts`) that hold a node's memory, seen by no other node."""
 _GRES = re.compile(r"^gpu:(?:(?P<type>[\w.-]+):)?(?P<count>[0-9]+)$")
 
 
@@ -265,6 +260,8 @@ def settings(profile: ExecutionProfile) -> PoolSettings:
         target_wall_s=profile.sizing.target_wall_s,
         unmeasured_workers=profile.calibration.unmeasured_workers,
         recheck_fraction=0.0,
+        start_deadline_s=profile.pool.start_deadline_s,
+        start_deadline_failures=profile.pool.start_deadline_failures,
     )
 
 
@@ -300,41 +297,39 @@ def calibration_root(profile: ExecutionProfile) -> Path | None:
     return None
 
 
-class NodeLocalRoot(ValueError):
-    """A pool root on storage only this node sees, opened for a substrate that starts workers on other nodes."""
+def claim_leases(pool: Path, classes: Iterable[str]) -> list[Path]:
+    """Return the claim leases of the tickets on the queues of `classes` in the pool at `pool`.
+
+    The paths are pydra's documented pool layout (worker-protocol reference): `queues/<label>/name` holds the queue's
+    name, `<class>` or `<class>#<residency digest>`, and `queues/<label>/claims/<ticket digest>.lease/` each claim.
+    """
+    wanted = set(classes)
+    found: list[Path] = []
+    for queue in sorted((pool / "queues").glob("*/name")):
+        try:
+            name = queue.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if name.split("#", 1)[0] in wanted:
+            found += sorted((queue.parent / "claims").glob("*.lease"))
+    return found
 
 
-def _mount_type(path: Path) -> str | None:
-    """Return the filesystem type of the mount holding `path` from `/proc/self/mounts`; None where there is none."""
+def newest_beat(lease: Path) -> float | None:
+    """Return the newest mtime in the lease directory `lease`, its holders' token directories and their heartbeats.
+
+    A `DirectoryLease` holder beats by making and removing an entry in its token directory; None when it is gone.
+    """
     try:
-        lines = Path("/proc/self/mounts").read_text(encoding="utf-8").splitlines()
+        newest = lease.lstat().st_mtime
+        for entry in os.scandir(lease):
+            newest = max(newest, entry.stat(follow_symlinks=False).st_mtime)
+            if entry.is_dir(follow_symlinks=False):
+                for sub in os.scandir(entry.path):
+                    newest = max(newest, sub.stat(follow_symlinks=False).st_mtime)
     except OSError:
         return None
-    found: tuple[int, str] | None = None
-    for line in lines:
-        fields = line.split()
-        if len(fields) < 3:  # noqa: PLR2004 - device, mount point, type
-            continue
-        point = Path(re.sub(r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), fields[1]))
-        if (path == point or point in path.parents) and (found is None or len(point.parts) > found[0]):
-            found = (len(point.parts), fields[2])
-    return None if found is None else found[1]
-
-
-def node_local(path: Path) -> str | None:
-    """Return why `path` is on storage only this node sees, or None.
-
-    It is node-local under a temporary directory (`TEMPORARY_ROOTS`, `tempfile.gettempdir`) or on a memory
-    filesystem (`MEMORY_FILESYSTEMS`).
-    """
-    resolved = Path(path).absolute().resolve()
-    for temporary in sorted({Path(tempfile.gettempdir()).resolve(), *(Path(t).resolve() for t in TEMPORARY_ROOTS)}):
-        if resolved == temporary or temporary in resolved.parents:
-            return f"it is under the temporary directory {temporary}"
-    kind = _mount_type(resolved)
-    if kind in MEMORY_FILESYSTEMS:
-        return f"it is on a {kind} filesystem"
-    return None
+    return newest
 
 
 class PoolSession:
@@ -363,16 +358,13 @@ class PoolSession:
         `here` says the workers run on this host; when None, whether the substrate is a `LocalSubstrate`.
 
         Raises:
-            NodeLocalRoot: the substrate is a `SlurmSubstrate` and `root` is on node-local storage (`node_local`).
+            NodeLocalStorage: the substrate refuses `root` (pydra's `SlurmSubstrate.check_root`): it is on storage
+                only this node sees. Nothing is written.
         """
         chosen = substrate if substrate is not None else substrate_of(profile)
-        if isinstance(chosen, SlurmSubstrate):
-            local = node_local(Path(root))
-            if local is not None:
-                raise NodeLocalRoot(
-                    f"pool root {root} is on storage only this node sees ({local}), and a Slurm substrate starts its"
-                    " workers on other nodes: open the pool on storage every node reaches"
-                )
+        check_root = getattr(chosen, "check_root", None)
+        if check_root is not None:
+            check_root(Path(root))
         self.here = isinstance(chosen, LocalSubstrate) if here is None else here
         self.profile = profile
         self.classes = worker_classes(profile, placements)
@@ -396,7 +388,7 @@ class PoolSession:
             settings=pool_settings if pool_settings is not None else settings(profile),
         )
         self.submitter = Submitter(worker=self.pool, providers=list(self.providers), telemetry=False)
-        self._beats: dict[tuple[str, str], float] = {}
+        self._beats: dict[Path, float] = {}
 
     @property
     def epoch(self) -> int:
@@ -404,26 +396,27 @@ class PoolSession:
         assert self.pool.epoch is not None
         return int(self.pool.epoch)
 
-    def working(self, jobs: Iterable[object], classes: Iterable[str]) -> bool:
-        """Whether the pool is at work for `jobs` (pool jobs of this session) since this was last asked.
+    def working(self, classes: Iterable[str]) -> bool:
+        """Whether the pool is at work for `classes` since this was last asked.
 
-        It is when a worker of one of `classes`, or of the class a job's ticket is queued on, is ready or starting
-        (a submitted Slurm job still queued is starting), or when the claim lease of a ticket holding one of `jobs`
-        has beaten: its newest mtime differs from the one seen at the last call, or it is seen for the first time.
-        These are read from the pool's own state, which pydra does not yet expose.
+        It is when the substrate lists a worker of one of `classes` (ready or starting: a submitted Slurm job still
+        queued is starting), or when a claim lease on one of their queues (`claim_leases`) has beaten: its newest
+        mtime (`newest_beat`) differs from the one seen at the last call, or it is seen for the first time.
+        A listing that raises (an `squeue` that times out) counts as working, logged.
         """
-        pool: Any = self.pool
-        with pool._lock:  # noqa: SLF001 - pydra exposes no reader of its open jobs and started workers yet
-            held = [pool._open.get(job) for job in jobs]  # noqa: SLF001
-            tickets = {(j.ticket.queue, j.ticket.digest) for j in held if j is not None and j.ticket is not None}
-            started = {h.worker_class for h in pool._started.values()}  # noqa: SLF001
-        if started & ({*classes} | {queue.split("#", 1)[0] for queue, _ in tickets}):
+        wanted = set(classes)
+        try:
+            listed = self.pool.substrate.live()
+        except Exception as err:  # noqa: BLE001 - an unknown state is not a stall; the next look is a bound later
+            logger.warning("listing the substrate's workers failed; the pool counts as working: %s", err)
+            return True
+        if any(h.worker_class in wanted for h in listed):
             return True
         beat = False
-        for queue, digest in tickets:
-            newest = _newest_mtime(pool.pool.queue(queue).path / "claims" / f"{digest}.lease")
-            if newest is not None and self._beats.get((queue, digest)) != newest:
-                self._beats[(queue, digest)] = newest
+        for lease in claim_leases(self.pool.root, wanted):
+            newest = newest_beat(lease)
+            if newest is not None and self._beats.get(lease) != newest:
+                self._beats[lease] = newest
                 beat = True
         return beat
 
@@ -567,11 +560,13 @@ def item_failure(text: str) -> FaultRecord | None:
 def coordinator_live(root: Path) -> bool:
     """Whether the newest coordinator of the pool at `root` is live: not ended, its lease held and not stale."""
     from pydra.engine.lease import LeaseTimeout  # noqa: PLC0415 - read only here
-    from pydra.workers.pool.pool import _open_existing  # noqa: PLC0415 - the pool's own reader of its header
+    from pydra.workers.pool.storage import PoolRoot  # noqa: PLC0415 - read only here
 
-    if not (Path(root) / "pool.json").is_file():
+    header = Path(root) / "pool.json"
+    if not header.is_file():
         return False
-    with _open_existing(root) as pool:
+    settings = LeaseSettings.from_json(json.loads(header.read_bytes())["lease"])
+    with PoolRoot.open(root, settings, create=False, probe=False) as pool:
         epochs = pool.epochs()
         if not epochs or (Path(root) / "coordinator" / str(epochs[-1]) / "ended").exists():
             return False

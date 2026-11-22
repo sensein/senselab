@@ -265,7 +265,7 @@ def run_plan(run_dir: Path, profile: ExecutionProfile) -> Plan:
         FileNotFoundError: the run has no plan, or no claimed attempt.
     """
     stored = load_plan(run_dir)
-    if stored.placement.profile_digest != profile.canonical_digest():
+    if stored.placement.profile_digest != profile.identity_digest():
         raise ValueError(f"plan {stored.hash} was placed under another execution profile; name the one it was")
     config = RunConfig(reuse=ReusePolicy(stored.logical.reuse), licenses=stored_policy(run_dir))
     return replace(stored, execution=profile, config=config)

@@ -19,7 +19,7 @@ from senselab_core.runtime.execution.calls import call
 from senselab_core.runtime.execution.events import read_events
 from senselab_core.runtime.execution.executor import NoProgress, QueueHeld
 from senselab_core.runtime.execution.run import start
-from senselab_core.runtime.execution.warm import NodeLocalRoot, PoolSession, node_local
+from senselab_core.runtime.execution.warm import PoolSession, claim_leases, newest_beat
 from senselab_core.runtime.licenses import LicensePolicy
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.site_placement import PlacementAnswer, PlacementRequest, PlacementValues, load_overrides
@@ -69,6 +69,25 @@ BOUNDED = ExecutionProfile.load(
 )
 """One CPU class whose runs fail after `BOUND_S` without progress; a refused start never breaks the class first."""
 
+DEADLINE = ExecutionProfile.load(
+    "laptop",
+    {
+        "devices": ["cpu"],
+        "resource_classes": {"cpu": {"device": "cpu", "mem_bytes": 2**30, "max_workers": 1}},
+        "pool": {
+            "poll_s": 0.05,
+            "quantum_items": 8,
+            "quantum_s": 60,
+            "idle_polls": 40,
+            "start_deadline_s": 0.2,
+            "start_deadline_failures": 2,
+        },
+        "lease": {"stale_after_s": 4.0, "renew_fraction": 0.2, "attribute_delay_s": 0, "wait_s": 10.0},
+        "faults": {"infrastructure_replacements": 1000},
+    },
+)
+"""One CPU class whose refused starts break it after two failures over 0.2 s, well inside its no-progress bound."""
+
 CLUSTER = (
     next(p for p in Path(__file__).resolve().parents if p.name == "packages")
     / "senselab-core/tests/data/profiles/cluster.yaml"
@@ -109,6 +128,32 @@ class _Queued:
         return True
 
 
+class _Outage:
+    """A substrate whose starts are refused while `down` is set, as a restarting scheduler refuses; else local."""
+
+    def __init__(self) -> None:
+        """Down, over a local substrate for when it is back."""
+        self.down = True
+        self.local = warm.substrate_of(RESIDENT)
+
+    def attach(self, attachment: object) -> None:
+        self.local.attach(attachment)
+
+    def start(self, cls: Any, n: int) -> list[Any]:  # noqa: ANN401 - a pydra worker class
+        if self.down:
+            raise RuntimeError("sbatch: error: Slurm controller not responding")
+        return list(self.local.start(cls, n))
+
+    def live(self) -> list[Any]:
+        return list(self.local.live())
+
+    def stop(self, workers: Any) -> None:  # noqa: ANN401 - pydra worker handles
+        self.local.stop(workers)
+
+    def can_start(self, cls: Any) -> Any:  # noqa: ANN401 - a pydra worker class
+        return self.local.can_start(cls)
+
+
 class _Refusing:
     """A substrate whose every start is refused, as a rejected `sbatch` is; it lists no worker."""
 
@@ -126,6 +171,13 @@ class _Refusing:
 
     def can_start(self, cls: object) -> bool:
         return True
+
+
+class _Unlisted(_Refusing):
+    """A substrate whose listing fails, as an `squeue` that times out does."""
+
+    def live(self) -> list[object]:
+        raise RuntimeError("could not run squeue: timed out after 60 s")
 
 
 @pytest.fixture
@@ -252,13 +304,14 @@ def test_a_failed_open_of_a_new_default_session_closes_the_one_it_replaced(
             call(TaskCall.model_validate({"task": TASK.name, "inputs": {"text": "a"}}), profile=RESIDENT)
             [first] = warm._DEFAULTS.values()
             monkeypatch.setenv("SENSELAB_CACHE", str(local))
-            with pytest.raises(NodeLocalRoot):
+            with pytest.raises(ValueError, match="every node") as refused:
                 call(
                     TaskCall.model_validate({"task": TASK.name, "inputs": {"text": "b"}}),
                     profile=ExecutionProfile.load(CLUSTER),
                 )
     finally:
         shutil.rmtree(local, ignore_errors=True)
+    assert type(refused.value).__name__ == "NodeLocalStorage"
     assert first.pool._closed and not warm._DEFAULTS and not warm._RETIRED
 
 
@@ -523,30 +576,130 @@ def test_a_class_whose_worker_is_still_starting_is_not_stalled(tmp_path: Path, p
     assert status.cancelled
 
 
-def test_the_no_progress_error_names_the_pools_latest_start_error(tmp_path: Path, planted: Path) -> None:
-    """Every start is refused: the run's `NoProgress` carries the refusal the pool recorded for the class."""
+def test_a_class_whose_starts_are_refused_holds_its_jobs_with_the_start_error(tmp_path: Path, planted: Path) -> None:
+    """Every start is refused: past its start deadline, and inside the no-progress bound, the pool breaks the class.
+
+    The run raises the hold, naming the class and the refusal; the job has no terminal event.
+    """
     with (
         packaged(registry(TASK, worker=BACKEND), tmp_path / "cache"),
-        PoolSession(BOUNDED, tmp_path / "session", tmp_path / "store", substrate=_Refusing(), here=True) as session,
+        PoolSession(DEADLINE, tmp_path / "session", tmp_path / "store", substrate=_Refusing(), here=True) as session,
     ):
-        placed, values = planned(TASK, BOUNDED, ["a"])
+        placed, values = planned(TASK, DEADLINE, ["a"])
         run = start(placed, session, values=values)
-        with pytest.raises(NoProgress, match="invalid partition") as caught:
+        with pytest.raises(QueueHeld, match="invalid partition") as caught:
             run.wait(timeout=60)
-    assert "invalid partition" in caught.value.start_errors["cpu"]
+    assert caught.value.resource_class == "cpu" and caught.value.jobs == 1
+    assert _kinds(run.run_dir) == []
 
 
 def test_a_slurm_session_refuses_a_pool_root_on_node_local_storage(tmp_path: Path) -> None:
-    """A Slurm substrate's workers run on other nodes: a root under the temporary directory is refused at open."""
+    """A Slurm substrate's workers run on other nodes: pydra refuses a root under the temporary directory, unwritten."""
     profile = ExecutionProfile.load(CLUSTER)
     root = Path(tempfile.gettempdir()) / f"senselab-node-local-{os.getpid()}" / "session"
-    with pytest.raises(NodeLocalRoot, match="every node"):
+    with pytest.raises(ValueError, match="every node") as refused:
         PoolSession(profile, root, tmp_path / "store")
-    assert not root.exists()
+    assert type(refused.value).__name__ == "NodeLocalStorage" and not root.exists()
 
 
-def test_node_local_names_temporary_directories_and_not_the_checkout() -> None:
-    """A temporary directory is node-local; the source checkout, on the storage the suite runs from, is not."""
-    assert node_local(Path(tempfile.gettempdir()) / "x") is not None
-    assert node_local(Path("/tmp/x")) is not None
-    assert node_local(Path(__file__).parent) is None
+def test_a_running_jobs_claim_lease_is_where_the_pool_layout_puts_it_and_beats(
+    tmp_path: Path, planted: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """While a job runs, `claim_leases` finds its ticket's claim in pydra's pool layout and `newest_beat` moves."""
+    monkeypatch.setenv("SENSELAB_TEST_SLEEP_S", "4")
+    with packaged(registry(TASK, worker=BACKEND), tmp_path / "cache"), served(tmp_path) as (session, _):
+        placed, values = planned(TASK, PROFILE, ["a"])
+        run = start(placed, session, values=values)
+        pool = session.root / "pool"
+        deadline = time.monotonic() + 30
+        while not claim_leases(pool, ["cpu"]) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        [lease] = claim_leases(pool, ["cpu"])
+        first = newest_beat(lease)
+        time.sleep(2)
+        later = newest_beat(lease)
+        assert claim_leases(pool, ["cpu:other"]) == []
+        assert run.wait(timeout=60).done
+    assert first is not None and later is not None and later > first
+
+
+def test_a_class_broken_in_one_run_is_attempted_afresh_by_the_next_run_on_the_session(
+    tmp_path: Path, planted: Path
+) -> None:
+    """Run 1 is held while the substrate refuses; once it starts workers again, run 2 on the same session completes."""
+    outage = _Outage()
+    with (
+        packaged(registry(TASK, worker=BACKEND), tmp_path / "cache"),
+        PoolSession(DEADLINE, tmp_path / "session", tmp_path / "store", substrate=outage, here=True) as session,
+    ):
+        placed, values = planned(TASK, DEADLINE, ["a"])
+        with pytest.raises(QueueHeld, match="controller not responding"):
+            start(placed, session, values=values).wait(timeout=60)
+        outage.down = False
+        again, values = planned(TASK, DEADLINE, ["b"])
+        run = start(again, session, values=values)
+        status = run.wait(timeout=100)
+    assert status.done and _kinds(run.run_dir) == ["finished"]
+
+
+def test_a_failed_listing_at_the_no_progress_check_counts_as_working(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """An unknown state is not a stall: a substrate whose listing raises leaves the session working, logged."""
+    with PoolSession(DEADLINE, tmp_path / "session", tmp_path / "store", substrate=_Unlisted(), here=True) as session:
+        assert session.working(["cpu"]) is True
+    assert "could not run squeue" in caplog.text
+
+
+def test_a_plan_placed_in_one_shell_runs_in_another_whose_env_root_differs(
+    tmp_path: Path, planted: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A profile's identity is its values as written: another `SENSELAB_ENV_ROOT` changes no plan's profile."""
+    override = {
+        "devices": ["cpu"],
+        "resource_classes": {"cpu": {"device": "cpu", "mem_bytes": 2**30, "max_workers": 1}},
+        "pool": {"poll_s": 0.05, "quantum_items": 8, "quantum_s": 60, "idle_polls": 40},
+        "lease": {"stale_after_s": 4.0, "renew_fraction": 0.2, "attribute_delay_s": 0, "wait_s": 10.0},
+        "env_roots": {"isolated": "${SENSELAB_TEST_ENV_ROOT}/v", "server": "${SENSELAB_TEST_ENV_ROOT}/s"},
+    }
+    monkeypatch.setenv("SENSELAB_TEST_ENV_ROOT", str(tmp_path / "first"))
+    first = ExecutionProfile.load("laptop", override)
+    monkeypatch.setenv("SENSELAB_TEST_ENV_ROOT", str(tmp_path / "second"))
+    second = ExecutionProfile.load("laptop", override)
+    assert first.env_root("isolated") != second.env_root("isolated")
+    assert first.canonical_digest() != second.canonical_digest()
+    with packaged(registry(TASK, worker=BACKEND), tmp_path / "cache"), served(tmp_path, second) as (session, _):
+        placed, values = planned(TASK, first, ["a"])
+        assert start(placed, session, values=values).wait(timeout=100).done
+
+
+def site_hook_one(request: PlacementRequest) -> PlacementAnswer:  # noqa: ARG001 - answers every request alike
+    """A site hook that keeps the profile's values: named by one host's `SENSELAB_TEST_HOOK`."""
+    return PlacementAnswer(classes={}, why="the profile's values")
+
+
+def site_hook_two(request: PlacementRequest) -> PlacementAnswer:  # noqa: ARG001 - answers every request alike
+    """The same hook under another name: named by another host's `SENSELAB_TEST_HOOK`."""
+    return PlacementAnswer(classes={}, why="the profile's values")
+
+
+def test_a_plan_whose_placement_hook_is_a_variable_runs_where_the_variable_names_another_hook(
+    tmp_path: Path, planted: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pattern-checked value written as a variable loads, plans and runs, under one identity on both hosts."""
+    override = {
+        "devices": ["cpu"],
+        "resource_classes": {"cpu": {"device": "cpu", "mem_bytes": 2**30, "max_workers": 1}},
+        "pool": {"poll_s": 0.05, "quantum_items": 8, "quantum_s": 60, "idle_polls": 40},
+        "lease": {"stale_after_s": 4.0, "renew_fraction": 0.2, "attribute_delay_s": 0, "wait_s": 10.0},
+        "substrate": {"placement_hook": "${SENSELAB_TEST_HOOK}"},
+    }
+    monkeypatch.setenv("SENSELAB_TEST_HOOK", f"{__name__}:site_hook_one")
+    first = ExecutionProfile.load("laptop", override)
+    monkeypatch.setenv("SENSELAB_TEST_HOOK", f"{__name__}:site_hook_two")
+    second = ExecutionProfile.load("laptop", override)
+    assert first.substrate.placement_hook != second.substrate.placement_hook
+    assert first.identity_digest() == second.identity_digest()
+    with packaged(registry(TASK, worker=BACKEND), tmp_path / "cache"), served(tmp_path, second) as (session, _):
+        placed, values = planned(TASK, first, ["a"])
+        assert start(placed, session, values=values).wait(timeout=100).done

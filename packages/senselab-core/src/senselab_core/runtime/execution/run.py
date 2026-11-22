@@ -1012,7 +1012,7 @@ def start(
 
     default = session.profile if session is not None else ExecutionProfile.load()
     profile = placed.execution if placed.execution is not None else default
-    if profile.canonical_digest() != placed.placement.profile_digest:
+    if profile.identity_digest() != placed.placement.profile_digest:
         raise ValueError(f"plan {placed.hash} was placed under another execution profile; give the session to run on")
     run_dir = run_dir_of(placed.hash)
     if session is not None:

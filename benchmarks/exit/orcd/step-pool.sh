@@ -6,7 +6,7 @@
 # with LOCAL=1, run in a one-H100 allocation, the worker is a process of that allocation: the one-GPU scale case.
 # This is the one step that keeps the site profile's Slurm substrate for a pool; the pool root is under the job's
 # cache on scratch ($WORK/cache), which every node reaches.
-# Submit (placeholders, P-28):
+# Submit after step-prepare.sh, with --dependency=afterok:<prepare job> (placeholders, P-28):
 #   sbatch --partition="$CPU_PARTITION" --cpus-per-task=4 --mem=16G --time=02:00:00 \
 #          --job-name=orcd-pool --output="$WORK_ROOT/orcd-pool-%j.out" \
 #          --export=ALL,SHA=<40-hex>,WORK_ROOT="$WORK_ROOT",SCRIPTS_DIR="$SCRIPTS_DIR",PROFILE_SRC="$PROFILE_SRC",CPU_PARTITION="$CPU_PARTITION",GPU_PARTITION="$GPU_PARTITION"[,HF_TOKEN=...,WORKER_TIME_S=<s>,ITEMS=<n>] \

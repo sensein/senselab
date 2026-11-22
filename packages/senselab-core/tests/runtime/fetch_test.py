@@ -15,11 +15,22 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
-from typing import IO, Any, BinaryIO
+from typing import IO, Any, BinaryIO, Literal
 
 import pytest
 import yaml
 from bounded_probe_fixture import MIB, FiniteSource, run_bounded
+from fetch_cache_fixture import (
+    PAYLOAD,
+    SHA,
+    change_blob,
+    dataset_dir,
+    demo_manifest,
+    file_entry,
+    opener_of,
+    rehashed,
+    unseal,
+)
 from hypothesis import event, given, settings
 from hypothesis import strategies as st
 from lease_clock_fixture import ManualClock
@@ -54,65 +65,6 @@ def _backoffs() -> list[float]:
     return [RETRY.first_backoff_s * 2**n for n in range(RETRY.attempts - 1)]
 
 
-PAYLOAD = b"hello senselab data" * 1000
-SHA = hashlib.sha256(PAYLOAD).hexdigest()
-LICENSE = {
-    "expression": "CC-BY-4.0",
-    "commercial_use": "yes",
-    "copyleft": "none",
-    "attribution": True,
-    "gated": False,
-    "source": "https://example.org/license",
-    "verified": {"date": "2026-10-01", "how": "manual"},
-}
-
-
-def _file(path: str, url: str, data: bytes = PAYLOAD, **extra: object) -> dict[str, Any]:
-    return {"path": path, "url": url, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data), **extra}
-
-
-def _manifest(files: list[dict[str, Any]] | None = None, version: str = "1", name: str = "demo") -> DataManifest:
-    return DataManifest.model_validate(
-        {
-            "format": "data-manifest@2.0",
-            "name": name,
-            "version": version,
-            "license": LICENSE,
-            "terms": "Cite the source.",
-            "files": files or [_file("a/voice.wav", "https://x/a.wav")],
-        }
-    )
-
-
-def _dataset(root: Path, name: str = "demo", version: str = "1") -> Path:
-    return root / "datasets" / f"{name}@{version}"
-
-
-def _unseal(path: Path) -> Path:
-    path.chmod(0o660)
-    return path
-
-
-def _rehashed(caplog: pytest.LogCaptureFixture) -> list[str]:
-    """The messages in which fetch re-hashed a cached blob."""
-    return [
-        r.getMessage()
-        for r in caplog.records
-        if r.name == "senselab" and r.levelname == "DEBUG" and r.getMessage().startswith("verifying cached blob")
-    ]
-
-
-def _opener(routes: dict[str, bytes], calls: list[str] | None = None) -> Callable[[str], BinaryIO]:
-    def opener(url: str) -> BinaryIO:
-        if calls is not None:
-            calls.append(url)
-        if url not in routes:
-            raise OSError(f"no route to {url}")
-        return io.BytesIO(routes[url])
-
-    return opener
-
-
 class _Truncated(io.BytesIO):
     def read(self, size: int | None = -1) -> bytes:
         data = super().read(16)
@@ -124,10 +76,10 @@ class _Truncated(io.BytesIO):
 @pytest.mark.logic
 def test_fetch_verifies_and_caches(tmp_path: Path) -> None:
     """Fetch verifies and caches."""
-    paths = fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
+    paths = fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({"https://x/a.wav": PAYLOAD}))
     link = paths["a/voice.wav"]
     assert link.read_bytes() == PAYLOAD
-    assert link.parent == _dataset(tmp_path) / "files" / "a"
+    assert link.parent == dataset_dir(tmp_path) / "files" / "a"
     assert (tmp_path / "blobs" / SHA).read_bytes() == PAYLOAD
     assert list((tmp_path / "tmp").iterdir()) == []
 
@@ -141,7 +93,7 @@ def test_partial_download_not_cached(tmp_path: Path, lease_clock: Callable[..., 
         return _Truncated(PAYLOAD)
 
     with pytest.raises(FetchError) as err:
-        fetch(_manifest(), cache_root=tmp_path, opener=opener, clock=clock)
+        fetch(demo_manifest(), cache_root=tmp_path, opener=opener, clock=clock)
     assert clock.slept == _backoffs()
     assert "a/voice.wav" in str(err.value) and "https://x/a.wav" in str(err.value)
     assert not (tmp_path / "blobs").exists() or list((tmp_path / "blobs").iterdir()) == []
@@ -151,10 +103,10 @@ def test_partial_download_not_cached(tmp_path: Path, lease_clock: Callable[..., 
 @pytest.mark.logic
 def test_mirror_hash_mismatch_refused(tmp_path: Path) -> None:
     """Mirror hash mismatch refused."""
-    manifest = _manifest([_file("v.wav", "https://x/a", mirrors=["https://m/a"])])
+    manifest = demo_manifest([file_entry("v.wav", "https://x/a", mirrors=["https://m/a"])])
     routes = {"https://x/a": b"tampered", "https://m/a": b"also wrong"}
     with pytest.raises(FetchError) as err:
-        fetch(manifest, cache_root=tmp_path, opener=_opener(routes))
+        fetch(manifest, cache_root=tmp_path, opener=opener_of(routes))
     message = str(err.value)
     assert "v.wav" in message and "https://x/a" in message and "https://m/a" in message
     assert not (tmp_path / "blobs" / SHA).exists()
@@ -163,29 +115,29 @@ def test_mirror_hash_mismatch_refused(tmp_path: Path) -> None:
 @pytest.mark.logic
 def test_mirror_with_matching_hash_accepted(tmp_path: Path) -> None:
     """Mirror with matching hash accepted."""
-    manifest = _manifest([_file("v.wav", "https://x/a", mirrors=["https://m/a"])])
+    manifest = demo_manifest([file_entry("v.wav", "https://x/a", mirrors=["https://m/a"])])
     routes = {"https://x/a": b"x" * len(PAYLOAD), "https://m/a": PAYLOAD}
-    paths = fetch(manifest, cache_root=tmp_path, opener=_opener(routes))
+    paths = fetch(manifest, cache_root=tmp_path, opener=opener_of(routes))
     assert paths["v.wav"].read_bytes() == PAYLOAD
 
 
 @pytest.mark.logic
 def test_second_fetch_is_offline(tmp_path: Path) -> None:
     """Second fetch is offline."""
-    first = fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
+    first = fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({"https://x/a.wav": PAYLOAD}))
 
     def never(url: str) -> BinaryIO:
         raise AssertionError(f"network call to {url}")
 
-    assert fetch(_manifest(), cache_root=tmp_path, opener=never) == first
+    assert fetch(demo_manifest(), cache_root=tmp_path, opener=never) == first
 
 
 @pytest.mark.logic
 def test_corrupt_blob_is_refetched(tmp_path: Path) -> None:
     """Corrupt blob is refetched."""
-    fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
-    _unseal(tmp_path / "blobs" / SHA).write_bytes(b"bit rot")
-    paths = fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
+    fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({"https://x/a.wav": PAYLOAD}))
+    unseal(tmp_path / "blobs" / SHA).write_bytes(b"bit rot")
+    paths = fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({"https://x/a.wav": PAYLOAD}))
     assert paths["a/voice.wav"].read_bytes() == PAYLOAD
 
 
@@ -196,10 +148,10 @@ def test_transient_read_error_does_not_discard_blob(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, err: int, at: Step
 ) -> None:
     """Transient read error does not discard blob."""
-    fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
+    fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({"https://x/a.wav": PAYLOAD}))
     failed = fail_at(monkeypatch, SHA, at, OSError(err, os.strerror(err)))
     with pytest.raises(StoreUnavailable):
-        fetch(_manifest(), cache_root=tmp_path, opener=_opener({}), verify="full")
+        fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({}), verify="full")
     assert failed == [SHA]
     assert (tmp_path / "blobs" / SHA).read_bytes() == PAYLOAD
 
@@ -210,14 +162,14 @@ def test_permissions_independent_of_umask(tmp_path: Path, umask: int) -> None:
     """Directories are 0o2770 and blobs and the marker 0o440 whatever the umask; nothing grants others access."""
     old = os.umask(umask)
     try:
-        paths = fetch(_manifest(), cache_root=tmp_path / "c", opener=_opener({"https://x/a.wav": PAYLOAD}))
+        paths = fetch(demo_manifest(), cache_root=tmp_path / "c", opener=opener_of({"https://x/a.wav": PAYLOAD}))
     finally:
         os.umask(old)
     root = tmp_path / "c"
     for directory in (root, root / "blobs", root / "tmp", root / "datasets", paths["a/voice.wav"].parent):
         assert stat.S_IMODE(directory.stat().st_mode) & ~stat.S_ISGID == 0o770, directory
     assert stat.S_IMODE((root / "blobs" / SHA).stat().st_mode) == 0o440
-    assert stat.S_IMODE((_dataset(root) / ".complete").stat().st_mode) == 0o440
+    assert stat.S_IMODE((dataset_dir(root) / ".complete").stat().st_mode) == 0o440
     assert all(p.lstat().st_mode & 0o007 == 0 for p in root.rglob("*") if not p.is_symlink())
 
 
@@ -233,7 +185,7 @@ def test_stale_download_removed_but_live_one_kept(tmp_path: Path, lease_clock: C
     clock.advance(STALE_SECONDS + 1)
     live.write_bytes(b"y")
     clock.plant(live)
-    fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}), clock=clock)
+    fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({"https://x/a.wav": PAYLOAD}), clock=clock)
     assert not stale.exists()
     assert live.exists()
 
@@ -243,7 +195,7 @@ def _concurrent_fetch(root: str, barrier: "mp.synchronize.Barrier", queue: "mp.Q
         barrier.wait(60)  # both processes are mid-download before either finishes
         return io.BytesIO(PAYLOAD)
 
-    paths = fetch(_manifest(), cache_root=Path(root), opener=opener)
+    paths = fetch(demo_manifest(), cache_root=Path(root), opener=opener)
     queue.put(str(paths["a/voice.wav"]))
 
 
@@ -321,9 +273,9 @@ def test_malformed_manifest_is_typed_error(tmp_path: Path, text: str) -> None:
 @pytest.mark.logic
 def test_duplicate_paths_refused() -> None:
     """Duplicate paths refused."""
-    entry = _file("a.wav", "https://x/a")
+    entry = file_entry("a.wav", "https://x/a")
     with pytest.raises(ValueError):
-        _manifest([entry, entry])
+        demo_manifest([entry, entry])
 
 
 @pytest.mark.logic
@@ -340,10 +292,12 @@ def test_cli_prints_paths(tmp_path: Path, capsys: pytest.CaptureFixture[str]) ->
     """Cli prints paths."""
     manifest_path = tmp_path / "m.yaml"
     manifest_path.write_text(MANIFEST_YAML % SHA)
-    fetch(DataManifest.load(manifest_path), cache_root=tmp_path / "cache", opener=_opener({"https://x/a.wav": PAYLOAD}))
+    fetch(
+        DataManifest.load(manifest_path), cache_root=tmp_path / "cache", opener=opener_of({"https://x/a.wav": PAYLOAD})
+    )
     code = cli_main(["data", "fetch", str(manifest_path), "--cache", str(tmp_path / "cache")])
     assert code == 0
-    assert str(_dataset(tmp_path / "cache") / "files" / "a.wav") in capsys.readouterr().out
+    assert str(dataset_dir(tmp_path / "cache") / "files" / "a.wav") in capsys.readouterr().out
 
 
 @pytest.mark.logic
@@ -371,10 +325,10 @@ def test_cli_transport_failure_is_one_line_nonzero(tmp_path: Path, capsys: pytes
 @pytest.mark.logic
 def test_nested_dirs_are_group_writable_under_restrictive_umask(tmp_path: Path) -> None:
     """Every directory created under the cache, at every level, is 0o2770."""
-    manifest = _manifest([_file("sub-01/ses-01/a.wav", "https://x/a.wav")])
+    manifest = demo_manifest([file_entry("sub-01/ses-01/a.wav", "https://x/a.wav")])
     old = os.umask(0o077)
     try:
-        paths = fetch(manifest, cache_root=tmp_path / "deep" / "cache", opener=_opener({"https://x/a.wav": PAYLOAD}))
+        paths = fetch(manifest, cache_root=tmp_path / "deep" / "cache", opener=opener_of({"https://x/a.wav": PAYLOAD}))
     finally:
         os.umask(old)
     leaf = paths["sub-01/ses-01/a.wav"].parent
@@ -382,7 +336,7 @@ def test_nested_dirs_are_group_writable_under_restrictive_umask(tmp_path: Path) 
     while directory != tmp_path / "deep":
         assert stat.S_IMODE(directory.stat().st_mode) & ~stat.S_ISGID == 0o770, directory
         directory = directory.parent
-    marker = _dataset(tmp_path / "deep" / "cache") / ".complete"
+    marker = dataset_dir(tmp_path / "deep" / "cache") / ".complete"
     assert stat.S_IMODE(marker.stat().st_mode) == 0o440
 
 
@@ -391,15 +345,17 @@ def test_size_mode_skips_rehash_and_full_mode_catches_same_size_corruption(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """A cache hit checks size only by default; verify='full' re-hashes."""
-    fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
+    fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({"https://x/a.wav": PAYLOAD}))
     with caplog.at_level("DEBUG", logger="senselab"):
-        fetch(_manifest(), cache_root=tmp_path, opener=_opener({}))
-    assert _rehashed(caplog) == []
-    _unseal(tmp_path / "blobs" / SHA).write_bytes(b"x" * len(PAYLOAD))
+        fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({}))
+    assert rehashed(caplog) == []
+    unseal(tmp_path / "blobs" / SHA).write_bytes(b"x" * len(PAYLOAD))
     with caplog.at_level("DEBUG", logger="senselab"):
-        paths = fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}), verify="full")
+        paths = fetch(
+            demo_manifest(), cache_root=tmp_path, opener=opener_of({"https://x/a.wav": PAYLOAD}), verify="full"
+        )
     assert paths["a/voice.wav"].read_bytes() == PAYLOAD
-    assert _rehashed(caplog)
+    assert rehashed(caplog)
 
 
 class _MovedAtClose:
@@ -432,11 +388,40 @@ def test_a_blob_is_stamped_after_its_file_is_closed(
         return _MovedAtClose(handle) if mode == "w+b" else handle
 
     monkeypatch.setattr(os, "fdopen", fdopen)
-    fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
+    fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({"https://x/a.wav": PAYLOAD}))
     monkeypatch.undo()
     with caplog.at_level("DEBUG", logger="senselab"):
-        fetch(_manifest(), cache_root=tmp_path, opener=_opener({}))
-    assert _rehashed(caplog) == []
+        fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({}))
+    assert rehashed(caplog) == []
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    ("change", "size_rehashes", "size_refetches"),
+    [("times", False, False), ("size", True, True), ("inode", True, False), ("bytes", False, False)],
+)
+@pytest.mark.parametrize("verify", ["size", "full"])
+def test_size_mode_compares_size_and_inode_and_full_mode_always_rehashes(  # noqa: PLR0913 - the parameter grid
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    change: str,
+    size_rehashes: bool,
+    size_refetches: bool,
+    verify: Literal["size", "full"],
+) -> None:
+    """`verify="size"` re-hashes a blob only when its size or inode moved; `"full"` re-hashes and repairs every one."""
+    fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({"https://x/a.wav": PAYLOAD}))
+    change_blob(tmp_path, change)
+    calls: list[str] = []
+    with caplog.at_level("DEBUG", logger="senselab"):
+        paths = fetch(
+            demo_manifest(), cache_root=tmp_path, opener=opener_of({"https://x/a.wav": PAYLOAD}, calls), verify=verify
+        )
+    full = verify == "full"
+    assert bool(rehashed(caplog)) is (full or size_rehashes)
+    assert bool(calls) is (size_refetches or (full and change in ("size", "bytes")))
+    if full or change != "bytes":
+        assert paths["a/voice.wav"].read_bytes() == PAYLOAD
 
 
 @pytest.mark.contract
@@ -473,32 +458,32 @@ def test_link_race_keeps_an_existing_blob_only_if_it_verifies(tmp_path: Path, ex
 @pytest.mark.logic
 def test_completion_marker_records_manifest_hash(tmp_path: Path) -> None:
     """The dataset directory carries a .complete marker naming the manifest hash."""
-    manifest = _manifest()
-    fetch(manifest, cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
-    marker = json.loads((_dataset(tmp_path) / ".complete").read_text())
+    manifest = demo_manifest()
+    fetch(manifest, cache_root=tmp_path, opener=opener_of({"https://x/a.wav": PAYLOAD}))
+    marker = json.loads((dataset_dir(tmp_path) / ".complete").read_text())
     assert marker["manifest_sha256"] == manifest.digest()
-    assert (marker["format"], marker["name"], marker["version"]) == ("dataset-marker@2.1", "demo", "1")
+    assert (marker["format"], marker["name"], marker["version"]) == ("dataset-marker@3.0", "demo", "1")
 
 
 @pytest.mark.logic
 def test_dataset_without_marker_is_incomplete_and_completed_by_fetch(tmp_path: Path) -> None:
     """A dataset whose fetch died before the marker is refetched and then marked complete."""
     calls: list[str] = []
-    fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
-    (_dataset(tmp_path) / ".complete").unlink()
-    fetch(_manifest(), cache_root=tmp_path, opener=_opener({}, calls))
+    fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({"https://x/a.wav": PAYLOAD}))
+    (dataset_dir(tmp_path) / ".complete").unlink()
+    fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({}, calls))
     assert calls == []  # blob already verified by hash, so no network
-    assert (_dataset(tmp_path) / ".complete").exists()
+    assert (dataset_dir(tmp_path) / ".complete").exists()
 
 
 @pytest.mark.logic
 def test_same_name_version_different_manifest_raises(tmp_path: Path) -> None:
     """A different manifest under a completed name@version is refused, links untouched."""
-    first = fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
+    first = fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({"https://x/a.wav": PAYLOAD}))
     other = b"other bytes"
-    changed = _manifest([_file("a/voice.wav", "https://x/b", other)])
+    changed = demo_manifest([file_entry("a/voice.wav", "https://x/b", other)])
     with pytest.raises(ManifestConflictError):
-        fetch(changed, cache_root=tmp_path, opener=_opener({"https://x/b": other}))
+        fetch(changed, cache_root=tmp_path, opener=opener_of({"https://x/b": other}))
     assert first["a/voice.wav"].read_bytes() == PAYLOAD
 
 
@@ -518,7 +503,7 @@ def test_stale_cleanup_tolerates_unremovable_entries(
     clock.advance(STALE_SECONDS + 1)
     try:
         with caplog.at_level("WARNING", logger="senselab"):
-            fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}), clock=clock)
+            fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({"https://x/a.wav": PAYLOAD}), clock=clock)
     finally:
         (odd / "inner").chmod(0o700)
     assert "cannot collect" in caplog.text
@@ -542,13 +527,13 @@ def test_cli_verify_maps_to_full(tmp_path: Path, caplog: pytest.LogCaptureFixtur
     manifest_path = tmp_path / "m.yaml"
     manifest_path.write_text(MANIFEST_YAML % SHA)
     cache = tmp_path / "cache"
-    fetch(DataManifest.load(manifest_path), cache_root=cache, opener=_opener({"https://x/a.wav": PAYLOAD}))
+    fetch(DataManifest.load(manifest_path), cache_root=cache, opener=opener_of({"https://x/a.wav": PAYLOAD}))
     seen: list[bool] = []
     for extra in ([], ["--verify"]):
         caplog.clear()
         with caplog.at_level("DEBUG", logger="senselab"):
             assert cli_main(["data", "fetch", str(manifest_path), "--cache", str(cache), *extra]) == 0
-        seen.append(bool(_rehashed(caplog)))
+        seen.append(bool(rehashed(caplog)))
     assert seen == [False, True]
 
 
@@ -558,15 +543,15 @@ def _repair_fetch(root: str, started: "mp.synchronize.Event", release: "mp.synch
         release.wait(60)
         return io.BytesIO(PAYLOAD)
 
-    fetch(_manifest(), cache_root=Path(root), opener=opener, verify="full")
+    fetch(demo_manifest(), cache_root=Path(root), opener=opener, verify="full")
 
 
 @pytest.mark.logic
 def test_blob_path_exists_throughout_repair(tmp_path: Path) -> None:
     """While a corrupt blob is re-downloaded, a concurrent reader's path always exists."""
-    fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
+    fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({"https://x/a.wav": PAYLOAD}))
     blob = tmp_path / "blobs" / SHA
-    _unseal(blob).write_bytes(b"bit rot")
+    unseal(blob).write_bytes(b"bit rot")
     ctx = mp.get_context("spawn")
     started, release = ctx.Event(), ctx.Event()
     proc = ctx.Process(target=_repair_fetch, args=(str(tmp_path), started, release))
@@ -584,25 +569,25 @@ def test_blob_path_exists_throughout_repair(tmp_path: Path) -> None:
 @pytest.mark.logic
 def test_failed_repair_leaves_corrupt_blob_untouched(tmp_path: Path) -> None:
     """If every mirror fails, the corrupt blob stays and FetchError is raised."""
-    fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
+    fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({"https://x/a.wav": PAYLOAD}))
     blob = tmp_path / "blobs" / SHA
-    _unseal(blob).write_bytes(b"bit rot")
+    unseal(blob).write_bytes(b"bit rot")
     with pytest.raises(FetchError):
-        fetch(_manifest(), cache_root=tmp_path, opener=_opener({}))
+        fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({}))
     assert blob.read_bytes() == b"bit rot"
 
 
 @pytest.mark.logic
 def test_corrupt_marker_is_replaced_once_dataset_verifies(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """A corrupt marker is rewritten, so later fetches stop warning."""
-    fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
-    marker = _unseal(_dataset(tmp_path) / ".complete")
+    fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({"https://x/a.wav": PAYLOAD}))
+    marker = unseal(dataset_dir(tmp_path) / ".complete")
     marker.write_text("{not json")
-    fetch(_manifest(), cache_root=tmp_path, opener=_opener({}))
-    assert json.loads(marker.read_text())["manifest_sha256"] == _manifest().digest()
+    fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({}))
+    assert json.loads(marker.read_text())["manifest_sha256"] == demo_manifest().digest()
     caplog.clear()
     with caplog.at_level("WARNING", logger="senselab"):
-        fetch(_manifest(), cache_root=tmp_path, opener=_opener({}))
+        fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({}))
     assert caplog.text == ""
 
 
@@ -615,24 +600,25 @@ def test_corrupt_marker_is_replaced_once_dataset_verifies(tmp_path: Path, caplog
         "{}",
         '{"manifest_sha256": 1, "stamps": {}}',
         '{MARKER, "stamps": []}',
-        '{MARKER, "stamps": {"a": {"size": "big", "mtime_ns": "1", "inode": "1", "ctime_ns": "1"}}}',
-        '{MARKER, "stamps": {"a": {"size": true, "mtime_ns": "1", "inode": "1", "ctime_ns": "1"}}}',
-        '{MARKER, "stamps": {"a": {"size": -1, "mtime_ns": "1", "inode": "1", "ctime_ns": "1"}}}',
-        '{MARKER, "stamps": {"a": {"size": 1, "mtime_ns": 1, "inode": "1", "ctime_ns": "1"}}}',
-        '{MARKER, "stamps": {"a": {"size": 1, "mtime_ns": "1", "inode": "1"}}}',
-        '{MARKER, "format": "dataset-marker@1.0", "stamps": {}}',
+        '{MARKER, "stamps": {"a": {"size": "big", "inode": "1"}}}',
+        '{MARKER, "stamps": {"a": {"size": true, "inode": "1"}}}',
+        '{MARKER, "stamps": {"a": {"size": -1, "inode": "1"}}}',
+        '{MARKER, "stamps": {"a": {"size": 1, "inode": 1}}}',
+        '{MARKER, "stamps": {"a": {"size": 1}}}',
+        '{MARKER, "stamps": {"a": {"size": 1, "mtime_ns": "1", "inode": "1", "ctime_ns": "1"}}}',
+        '{MARKER, "format": "dataset-marker@2.1", "stamps": {}}',
         "\xff",
     ],
 )
 def test_malformed_marker_is_treated_as_absent(tmp_path: Path, text: str) -> None:
     """Any malformed marker naming this manifest, or none, is logged and rewritten, never raised."""
-    fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
-    marker = _unseal(_dataset(tmp_path) / ".complete")
-    fields = f'"manifest_sha256": "{_manifest().digest()}", "name": "demo", "version": "1"'
+    fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({"https://x/a.wav": PAYLOAD}))
+    marker = unseal(dataset_dir(tmp_path) / ".complete")
+    fields = f'"manifest_sha256": "{demo_manifest().digest()}", "name": "demo", "version": "1"'
     marker.write_bytes(text.replace("{MARKER", "{" + fields).encode("latin-1"))
-    paths = fetch(_manifest(), cache_root=tmp_path, opener=_opener({}))
+    paths = fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({}))
     assert paths["a/voice.wav"].read_bytes() == PAYLOAD
-    assert json.loads(marker.read_text())["manifest_sha256"] == _manifest().digest()
+    assert json.loads(marker.read_text())["manifest_sha256"] == demo_manifest().digest()
 
 
 @pytest.mark.logic
@@ -644,7 +630,7 @@ def test_no_hardlink_support_is_storage_error(tmp_path: Path, monkeypatch: pytes
 
     monkeypatch.setattr(os, "link", refuse)
     with pytest.raises(StoreUnavailable) as err:
-        fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
+        fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({"https://x/a.wav": PAYLOAD}))
     assert "hard links" in str(err.value)
 
 
@@ -657,7 +643,7 @@ LIVE_SIZE = 16423
 @pytest.mark.network
 def test_live_fetch(tmp_path: Path) -> None:
     """A real download of an immutable public file lands in blobs/ and verifies."""
-    manifest = _manifest([{"path": "LICENSE.md", "url": LIVE_URL, "sha256": LIVE_SHA, "size": LIVE_SIZE}])
+    manifest = demo_manifest([{"path": "LICENSE.md", "url": LIVE_URL, "sha256": LIVE_SHA, "size": LIVE_SIZE}])
     paths = fetch(manifest, cache_root=tmp_path)
     blob = tmp_path / "blobs" / LIVE_SHA
     assert blob.is_file()
@@ -668,7 +654,7 @@ def test_live_fetch(tmp_path: Path) -> None:
 @pytest.mark.logic
 def test_manifest_digest_is_tagged() -> None:
     """The manifest digest is the registered `data-manifest@3` tagged digest of its JSON form."""
-    manifest = _manifest()
+    manifest = demo_manifest()
     assert manifest.digest() == identity_digest("data-manifest@3", manifest.model_dump(mode="json"))
     assert manifest.digest() != hashlib.sha256(jcs_dumps(manifest.model_dump(mode="json"))).hexdigest()
 
@@ -677,12 +663,12 @@ def test_manifest_digest_is_tagged() -> None:
 def test_manifest_file_named_like_the_marker_stays_payload(tmp_path: Path) -> None:
     """A manifest file named `.complete` is payload under files/, not overwritten by the completion marker."""
     other = PAYLOAD + b"2"
-    manifest = _manifest([_file(".complete", "https://x/c"), _file("x.wav", "https://x/x", other)])
+    manifest = demo_manifest([file_entry(".complete", "https://x/c"), file_entry("x.wav", "https://x/x", other)])
     routes = {"https://x/c": PAYLOAD, "https://x/x": other}
     for _ in range(2):
-        paths = fetch(manifest, cache_root=tmp_path, opener=_opener(routes))
+        paths = fetch(manifest, cache_root=tmp_path, opener=opener_of(routes))
         assert paths[".complete"].read_bytes() == PAYLOAD and paths["x.wav"].read_bytes() == other
-    assert json.loads((_dataset(tmp_path) / ".complete").read_bytes())["manifest_sha256"] == manifest.digest()
+    assert json.loads((dataset_dir(tmp_path) / ".complete").read_bytes())["manifest_sha256"] == manifest.digest()
 
 
 @pytest.mark.logic
@@ -707,7 +693,7 @@ def test_manifest_file_named_like_the_marker_stays_payload(tmp_path: Path) -> No
 def test_paths_that_are_not_prefix_free_are_refused(paths: list[str]) -> None:
     """`.` and `a/b` beside `a` are refused; every non-normal or nested path set is."""
     with pytest.raises(ValueError):
-        _manifest([_file(p, f"https://x/{i}") for i, p in enumerate(paths)])
+        demo_manifest([file_entry(p, f"https://x/{i}") for i, p in enumerate(paths)])
 
 
 _PLAIN_PARTS = ["a", "A", "b", "c", "\u00e9", "e\u0301", ".complete", "files", "tmp", "blobs"]
@@ -789,9 +775,9 @@ def test_path_key_joins_every_spelling_of_one_caseless_name(picks: list[tuple[in
 @given(paths=manifest_path_sets())
 def test_no_manifest_path_addresses_store_owned_name(paths: list[str]) -> None:
     """Accepted path sets are exactly the plain prefix-free ones; each fetched path lands in files/ with its bytes."""
-    files = [_file(p, f"https://x/{i}", f"{i}:{p}".encode()) for i, p in enumerate(paths)]
+    files = [file_entry(p, f"https://x/{i}", f"{i}:{p}".encode()) for i, p in enumerate(paths)]
     try:
-        manifest = _manifest(files)
+        manifest = demo_manifest(files)
     except ValueError:
         event("refused")
         assert not _acceptable(paths)
@@ -801,15 +787,15 @@ def test_no_manifest_path_addresses_store_owned_name(paths: list[str]) -> None:
     routes = {f["url"]: f"{i}:{f['path']}".encode() for i, f in enumerate(files)}
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        result = fetch(manifest, cache_root=root, opener=_opener(routes))
-        files_dir = _dataset(root) / "files"
+        result = fetch(manifest, cache_root=root, opener=opener_of(routes))
+        files_dir = dataset_dir(root) / "files"
         for i, f in enumerate(files):
             link = result[f["path"]]
             assert os.path.commonpath([os.path.normpath(link), files_dir]) == str(files_dir)
             assert link.read_bytes() == routes[f["url"]], f["path"]
-        marker = json.loads((_dataset(root) / ".complete").read_bytes())
+        marker = json.loads((dataset_dir(root) / ".complete").read_bytes())
         assert marker["manifest_sha256"] == manifest.digest()
-        assert sorted(p.name for p in _dataset(root).iterdir()) == [".complete", "files"]
+        assert sorted(p.name for p in dataset_dir(root).iterdir()) == [".complete", "files"]
 
 
 @pytest.mark.logic
@@ -828,7 +814,7 @@ def test_symlinked_or_dangling_blob_is_absent(tmp_path: Path, kind: str) -> None
     with StorageDir.open_root(blob.parent) as blobs:
         assert fetch_module._verified_stamp(blobs, SHA, {}, "full") is None
     calls: list[str] = []
-    paths = fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}, calls))
+    paths = fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({"https://x/a.wav": PAYLOAD}, calls))
     assert calls == ["https://x/a.wav"]
     assert stat.S_ISREG(blob.lstat().st_mode) and stat.S_IMODE(blob.lstat().st_mode) == 0o440
     assert paths["a/voice.wav"].read_bytes() == PAYLOAD
@@ -838,28 +824,9 @@ def test_symlinked_or_dangling_blob_is_absent(tmp_path: Path, kind: str) -> None
 @pytest.mark.skipif(os.geteuid() == 0, reason="root writes a file whatever its mode")
 def test_blob_cannot_be_written_through_the_returned_path(tmp_path: Path) -> None:
     """A same-size write through the dataset path is refused: the shared blob is read-only."""
-    paths = fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
+    paths = fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({"https://x/a.wav": PAYLOAD}))
     with pytest.raises(PermissionError):
         open(paths["a/voice.wav"], "r+b")
-
-
-@pytest.mark.logic
-@pytest.mark.parametrize("change", ["rewrite", "replace"])
-def test_same_size_rewrite_is_not_trusted(tmp_path: Path, change: str) -> None:
-    """Under verify='size' a blob whose mtime or inode moved since completion is re-hashed and refetched."""
-    fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
-    blob = tmp_path / "blobs" / SHA
-    poison = b"POISONED!!!!" + PAYLOAD[12:]
-    if change == "rewrite":
-        _unseal(blob).write_bytes(poison)
-    else:
-        (tmp_path / "p").write_bytes(poison)
-        os.replace(tmp_path / "p", blob)
-        os.utime(blob, ns=(0, 0))
-    calls: list[str] = []
-    paths = fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}, calls))
-    assert calls == ["https://x/a.wav"]
-    assert paths["a/voice.wav"].read_bytes() == PAYLOAD
 
 
 def probe_download_from_an_endless_source(directory: str, size: str) -> dict[str, Any]:
@@ -888,7 +855,7 @@ def probe_fetch_from_an_endless_source(cache_root: str) -> dict[str, Any]:
     source = FiniteSource(len(PAYLOAD))
     error = ""
     try:
-        fetch(_manifest(), cache_root=Path(cache_root), opener=lambda url: source)  # type: ignore[arg-type,return-value]
+        fetch(demo_manifest(), cache_root=Path(cache_root), opener=lambda url: source)  # type: ignore[arg-type,return-value]
     except Exception as err:  # noqa: BLE001 - the report names whatever was raised
         error = f"{type(err).__name__}: {err}"
     return {"error": error, "served": source.served, "tmp": sorted(os.listdir(Path(cache_root) / "tmp"))}
@@ -909,16 +876,16 @@ def test_download_aborts_past_declared_size(tmp_path: Path, size: int) -> None:
 @pytest.mark.logic
 def test_download_short_of_declared_size_is_refused(tmp_path: Path, lease_clock: Callable[..., ManualClock]) -> None:
     """A source that ends before the declared size fails that source; the next mirror is tried."""
-    manifest = _manifest([_file("v.wav", "https://x/a", mirrors=["https://m/a"])])
+    manifest = demo_manifest([file_entry("v.wav", "https://x/a", mirrors=["https://m/a"])])
     routes = {"https://x/a": PAYLOAD[:-1], "https://m/a": PAYLOAD}
     assert (
-        fetch(manifest, cache_root=tmp_path, opener=_opener(routes), clock=lease_clock())["v.wav"].read_bytes()
+        fetch(manifest, cache_root=tmp_path, opener=opener_of(routes), clock=lease_clock())["v.wav"].read_bytes()
         == PAYLOAD
     )
     staged = tmp_path / ("6" * 32)
     with pytest.raises(FetchError, match="ended after"), open(staged, "xb") as out:
         fetch_module._download(
-            "https://x/a", _opener(routes), out, staged, size=len(PAYLOAD), retry=NO_WAIT, clock=SystemClock()
+            "https://x/a", opener_of(routes), out, staged, size=len(PAYLOAD), retry=NO_WAIT, clock=SystemClock()
         )
 
 
@@ -930,7 +897,7 @@ def test_non_https_refused(tmp_path: Path, url: str) -> None:
         fetch_module._urlopen(url, 60)
     calls: list[str] = []
     with pytest.raises(FetchError) as err:
-        fetch(_manifest([_file("a", url)]), cache_root=tmp_path, opener=_opener({url: PAYLOAD}, calls))
+        fetch(demo_manifest([file_entry("a", url)]), cache_root=tmp_path, opener=opener_of({url: PAYLOAD}, calls))
     assert calls == [] and "https" in str(err.value)
 
 
@@ -939,7 +906,7 @@ def test_file_url_is_not_read(tmp_path: Path) -> None:
     """A `file://` manifest URL is refused by the default opener; nothing is opened."""
     secret = tmp_path / "secret.txt"
     secret.write_text("participant notes")
-    manifest = _manifest([_file("a", f"file://{secret}")])
+    manifest = demo_manifest([file_entry("a", f"file://{secret}")])
     with pytest.raises(FetchError, match="refusing file URL"):
         fetch(manifest, cache_root=tmp_path / "c")
     assert not (tmp_path / "c" / "blobs").exists() or not any((tmp_path / "c" / "blobs").iterdir())
@@ -976,7 +943,7 @@ def test_enospc_is_storage_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     """Out of space while writing a download is StorageFull, not a network error, with no staged file left behind."""
     failed = fail_at(monkeypatch, "blob", at, OSError(err, os.strerror(err)), creating=True)
     with pytest.raises(StorageFull) as caught:
-        fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
+        fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({"https://x/a.wav": PAYLOAD}))
     assert failed
     assert caught.value.errno == err
     assert "network" not in str(caught.value) and "space" in str(caught.value)
@@ -986,47 +953,47 @@ def test_enospc_is_storage_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 @pytest.mark.logic
 def test_marker_that_is_a_directory_is_set_aside_and_rewritten(tmp_path: Path) -> None:
     """A `.complete` that is a directory is moved into `tmp/` and the marker written again, never a raw OSError."""
-    fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
-    marker = _dataset(tmp_path) / ".complete"
+    fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({"https://x/a.wav": PAYLOAD}))
+    marker = dataset_dir(tmp_path) / ".complete"
     marker.unlink()
     marker.mkdir()
-    fetch(_manifest(), cache_root=tmp_path, opener=_opener({}))
+    fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({}))
     assert stat.S_ISREG(marker.lstat().st_mode)
-    assert json.loads(marker.read_bytes())["manifest_sha256"] == _manifest().digest()
+    assert json.loads(marker.read_bytes())["manifest_sha256"] == demo_manifest().digest()
 
 
 @pytest.mark.logic
 def test_misfiled_marker_is_a_conflict(tmp_path: Path) -> None:
     """Another dataset's marker copied into this dataset is refused, not rewritten."""
     routes = {"https://x/a.wav": PAYLOAD}
-    fetch(_manifest(), cache_root=tmp_path, opener=_opener(routes))
-    fetch(_manifest(name="other"), cache_root=tmp_path, opener=_opener(routes))
-    target = _unseal(_dataset(tmp_path) / ".complete")
-    target.write_bytes((_dataset(tmp_path, "other") / ".complete").read_bytes())
+    fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of(routes))
+    fetch(demo_manifest(name="other"), cache_root=tmp_path, opener=opener_of(routes))
+    target = unseal(dataset_dir(tmp_path) / ".complete")
+    target.write_bytes((dataset_dir(tmp_path, "other") / ".complete").read_bytes())
     with pytest.raises(ManifestConflictError):
-        fetch(_manifest(), cache_root=tmp_path, opener=_opener(routes))
+        fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of(routes))
 
 
 @pytest.mark.logic
 def test_malformed_marker_naming_another_manifest_is_a_conflict(tmp_path: Path) -> None:
     """A malformed marker is rewritten only if the manifest digest it still names is this manifest's."""
-    fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
-    marker = _unseal(_dataset(tmp_path) / ".complete")
+    fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({"https://x/a.wav": PAYLOAD}))
+    marker = unseal(dataset_dir(tmp_path) / ".complete")
     marker.write_text(json.dumps({"manifest_sha256": "f" * 64, "stamps": "garbled"}))
     with pytest.raises(ManifestConflictError):
-        fetch(_manifest(), cache_root=tmp_path, opener=_opener({}))
+        fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({}))
     assert json.loads(marker.read_text())["manifest_sha256"] == "f" * 64
 
 
 @pytest.mark.logic
 def test_unmarked_dataset_with_foreign_files_is_a_conflict(tmp_path: Path) -> None:
     """Without a valid marker, a dataset holding files outside the manifest is refused rather than marked complete."""
-    fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
-    (_dataset(tmp_path) / ".complete").unlink()
-    (_dataset(tmp_path) / "files" / "stale.wav").write_bytes(b"x")
+    fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({"https://x/a.wav": PAYLOAD}))
+    (dataset_dir(tmp_path) / ".complete").unlink()
+    (dataset_dir(tmp_path) / "files" / "stale.wav").write_bytes(b"x")
     with pytest.raises(ManifestConflictError, match="stale.wav"):
-        fetch(_manifest(), cache_root=tmp_path, opener=_opener({}))
-    assert not (_dataset(tmp_path) / ".complete").exists()
+        fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({}))
+    assert not (dataset_dir(tmp_path) / ".complete").exists()
 
 
 @pytest.mark.logic
@@ -1037,7 +1004,7 @@ def test_stale_download_age_uses_the_storage_clock(tmp_path: Path, monkeypatch: 
     live.write_bytes(b"in flight")
     real = time.time
     monkeypatch.setattr(time, "time", lambda: real() + 2 * STALE_SECONDS)
-    fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
+    fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({"https://x/a.wav": PAYLOAD}))
     assert live.exists()
 
 
@@ -1047,21 +1014,9 @@ def test_dangling_blob_symlink_is_not_trusted(tmp_path: Path) -> None:
     (tmp_path / "blobs").mkdir()
     os.symlink("/nonexistent/elsewhere", tmp_path / "blobs" / SHA)
     for _ in range(2):
-        paths = fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
+        paths = fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({"https://x/a.wav": PAYLOAD}))
         assert paths["a/voice.wav"].read_bytes() == PAYLOAD
     assert not (tmp_path / "blobs" / SHA).is_symlink()
-
-
-@pytest.mark.logic
-def test_poisoned_blob_is_not_served_under_size_verification(tmp_path: Path) -> None:
-    """A same-size overwrite through the returned path is refetched under `verify="size"`."""
-    paths = fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
-    _unseal(tmp_path / "blobs" / SHA)
-    with open(paths["a/voice.wav"], "r+b") as f:
-        f.write(b"POISONED!!!!!!!!!!")
-    calls: list[str] = []
-    paths = fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}, calls))
-    assert paths["a/voice.wav"].read_bytes() == PAYLOAD and calls == ["https://x/a.wav"]
 
 
 @pytest.mark.limits
@@ -1076,27 +1031,27 @@ def test_endless_source_is_cut_at_declared_size(tmp_path: Path) -> None:
 @pytest.mark.logic
 def test_repaired_blob_is_trusted_again_by_size(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """After a blob is repaired its new stamp is recorded, so the next size-verified fetch reads nothing."""
-    fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
-    _unseal(tmp_path / "blobs" / SHA).write_bytes(b"x" * len(PAYLOAD))
-    fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
+    fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({"https://x/a.wav": PAYLOAD}))
+    change_blob(tmp_path, "size")
+    fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({"https://x/a.wav": PAYLOAD}))
     with caplog.at_level("DEBUG", logger="senselab"):
-        fetch(_manifest(), cache_root=tmp_path, opener=_opener({}))
-    assert _rehashed(caplog) == []
+        fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({}))
+    assert rehashed(caplog) == []
     with caplog.at_level("DEBUG", logger="senselab"):
-        fetch(_manifest(), cache_root=tmp_path, opener=_opener({}), verify="full")
-    assert _rehashed(caplog) == [f"verifying cached blob {tmp_path / 'blobs' / SHA} by its sha256"]
+        fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({}), verify="full")
+    assert rehashed(caplog) == [f"verifying cached blob {tmp_path / 'blobs' / SHA} by its sha256"]
 
 
 @pytest.mark.logic
 @pytest.mark.skipif(os.geteuid() == 0, reason="root writes whatever the mode")
 def test_complete_read_only_cache_still_serves(tmp_path: Path) -> None:
     """A completed cache whose directories are no longer writable still serves its dataset offline."""
-    paths = fetch(_manifest(), cache_root=tmp_path / "c", opener=_opener({"https://x/a.wav": PAYLOAD}))
+    paths = fetch(demo_manifest(), cache_root=tmp_path / "c", opener=opener_of({"https://x/a.wav": PAYLOAD}))
     dirs = [p for p in [tmp_path / "c", *(tmp_path / "c").rglob("*")] if p.is_dir() and not p.is_symlink()]
     for d in dirs:
         d.chmod(0o555)
     try:
-        again = fetch(_manifest(), cache_root=tmp_path / "c", opener=_opener({}))
+        again = fetch(demo_manifest(), cache_root=tmp_path / "c", opener=opener_of({}))
     finally:
         for d in dirs:
             d.chmod(0o770)
@@ -1107,15 +1062,13 @@ def test_complete_read_only_cache_still_serves(tmp_path: Path) -> None:
 @pytest.mark.skipif(os.geteuid() == 0, reason="root writes whatever the mode")
 def test_read_only_cache_whose_blob_stamp_moved_still_serves(tmp_path: Path) -> None:
     """A read-only completed cache whose blob stamp no longer matches its marker re-hashes the blob and serves it."""
-    paths = fetch(_manifest(), cache_root=tmp_path / "c", opener=_opener({"https://x/a.wav": PAYLOAD}))
-    blob = tmp_path / "c" / "blobs" / SHA
-    st = blob.stat()
-    os.utime(blob, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+    paths = fetch(demo_manifest(), cache_root=tmp_path / "c", opener=opener_of({"https://x/a.wav": PAYLOAD}))
+    change_blob(tmp_path / "c", "inode")
     dirs = [p for p in [tmp_path / "c", *(tmp_path / "c").rglob("*")] if p.is_dir() and not p.is_symlink()]
     for d in dirs:
         d.chmod(0o555)
     try:
-        again = fetch(_manifest(), cache_root=tmp_path / "c", opener=_opener({}))
+        again = fetch(demo_manifest(), cache_root=tmp_path / "c", opener=opener_of({}))
     finally:
         for d in dirs:
             d.chmod(0o770)
@@ -1123,29 +1076,49 @@ def test_read_only_cache_whose_blob_stamp_moved_still_serves(tmp_path: Path) -> 
 
 
 @pytest.mark.logic
-def test_mtime_restored_rewrite_is_caught_by_ctime(tmp_path: Path) -> None:
-    """A same-size rewrite whose mtime is put back with utime still changes ctime, so it is re-hashed and refetched."""
-    fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
-    blob = tmp_path / "blobs" / SHA
-    before = blob.stat()
-    _unseal(blob).write_bytes(b"POISONED!!!!" + PAYLOAD[12:])
-    blob.chmod(0o440)
-    os.utime(blob, ns=(before.st_atime_ns, before.st_mtime_ns))
-    assert blob.stat().st_mtime_ns == before.st_mtime_ns and blob.stat().st_ino == before.st_ino
-    calls: list[str] = []
-    paths = fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}, calls))
-    assert calls == ["https://x/a.wav"] and paths["a/voice.wav"].read_bytes() == PAYLOAD
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes whatever the mode")
+@pytest.mark.parametrize("read_only", [True, False])
+def test_a_marker_of_an_older_format_is_rehashed_once_and_a_read_only_cache_still_serves(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, read_only: bool
+) -> None:
+    """A `dataset-marker@2.1` marker re-hashes every blob; a writable cache rewrites it, a read-only one serves."""
+    root = tmp_path / "c"
+    paths = fetch(demo_manifest(), cache_root=root, opener=opener_of({"https://x/a.wav": PAYLOAD}))
+    marker = unseal(dataset_dir(root) / ".complete")
+    record = json.loads(marker.read_text())
+    record["format"] = "dataset-marker@2.1"
+    record["stamps"] = {sha: {**s, "mtime_ns": "1", "ctime_ns": "1"} for sha, s in record["stamps"].items()}
+    marker.write_text(json.dumps(record))
+    marker.chmod(0o440)
+    dirs = [p for p in [root, *root.rglob("*")] if p.is_dir() and not p.is_symlink()]
+    for d in dirs if read_only else ():
+        d.chmod(0o555)
+    try:
+        with caplog.at_level("DEBUG", logger="senselab"):
+            again = fetch(demo_manifest(), cache_root=root, opener=opener_of({}))
+    finally:
+        for d in dirs:
+            d.chmod(0o770)
+    assert again == paths and again["a/voice.wav"].read_bytes() == PAYLOAD
+    assert len(rehashed(caplog)) == 1
+    written = json.loads(marker.read_text())["format"]
+    assert written == ("dataset-marker@2.1" if read_only else "dataset-marker@3.0")
+    assert ("cannot refresh the marker" in caplog.text) is read_only
+    caplog.clear()
+    with caplog.at_level("DEBUG", logger="senselab"):
+        fetch(demo_manifest(), cache_root=root, opener=opener_of({}))
+    assert len(rehashed(caplog)) == (1 if read_only else 0)
 
 
 @pytest.mark.logic
 def test_directory_at_a_link_path_is_a_conflict(tmp_path: Path) -> None:
     """A directory where a manifest file's link belongs is a typed conflict, not a retryable storage fault."""
-    fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
-    link = _dataset(tmp_path) / "files" / "a" / "voice.wav"
+    fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({"https://x/a.wav": PAYLOAD}))
+    link = dataset_dir(tmp_path) / "files" / "a" / "voice.wav"
     link.unlink()
     link.mkdir()
     with pytest.raises(ManifestConflictError, match="is a directory"):
-        fetch(_manifest(), cache_root=tmp_path, opener=_opener({}))
+        fetch(demo_manifest(), cache_root=tmp_path, opener=opener_of({}))
 
 
 @pytest.mark.logic
@@ -1192,11 +1165,11 @@ def test_a_blob_swapped_after_its_link_is_never_trusted_by_size(tmp_path: Path) 
 @pytest.mark.logic
 def test_superseded_version_links_removed(tmp_path: Path) -> None:
     """Fetching a new version removes the other versions of that dataset, and nothing of any other dataset."""
-    fetch(_manifest(version="1"), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
-    fetch(_manifest(name="demo@1x"), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
-    unfinished = _dataset(tmp_path, version="0")
+    fetch(demo_manifest(version="1"), cache_root=tmp_path, opener=opener_of({"https://x/a.wav": PAYLOAD}))
+    fetch(demo_manifest(name="demo@1x"), cache_root=tmp_path, opener=opener_of({"https://x/a.wav": PAYLOAD}))
+    unfinished = dataset_dir(tmp_path, version="0")
     (unfinished / "files").mkdir(parents=True)
-    paths = fetch(_manifest(version="2"), cache_root=tmp_path, opener=_opener({}))
+    paths = fetch(demo_manifest(version="2"), cache_root=tmp_path, opener=opener_of({}))
     assert paths["a/voice.wav"].read_bytes() == PAYLOAD
     assert sorted(p.name for p in (tmp_path / "datasets").iterdir()) == ["demo@0", "demo@1x@1", "demo@2"]
     assert list((tmp_path / "tmp").iterdir()) == []
@@ -1205,15 +1178,15 @@ def test_superseded_version_links_removed(tmp_path: Path) -> None:
 @pytest.mark.logic
 def test_an_older_version_fetched_again_keeps_the_current_one(tmp_path: Path) -> None:
     """Fetching v1 after v2 superseded it keeps v2; fetching v2 again then removes v1."""
-    opener = _opener({"https://x/a.wav": PAYLOAD})
+    opener = opener_of({"https://x/a.wav": PAYLOAD})
 
     def versions() -> list[str]:
         return sorted(p.name for p in (tmp_path / "datasets").iterdir())
 
     for version, expected in (("1", ["demo@1"]), ("2", ["demo@2"]), ("1", ["demo@1", "demo@2"]), ("2", ["demo@2"])):
-        fetch(_manifest(version=version), cache_root=tmp_path, opener=opener)
+        fetch(demo_manifest(version=version), cache_root=tmp_path, opener=opener)
         assert versions() == expected, version
-    assert json.loads((_dataset(tmp_path, version="2") / ".complete").read_bytes())["superseded"] == ["1"]
+    assert json.loads((dataset_dir(tmp_path, version="2") / ".complete").read_bytes())["superseded"] == ["1"]
 
 
 @pytest.mark.logic
@@ -1221,7 +1194,7 @@ def test_fetch_retries_transient_by_packaged_policy(tmp_path: Path, lease_clock:
     """A transient transfer failure is retried under the packaged policy; a permanent one goes to the next mirror."""
     clock = lease_clock()
     calls: list[str] = []
-    served = _opener({"https://x/a.wav": PAYLOAD, "https://m/b.wav": PAYLOAD[::-1]}, calls)
+    served = opener_of({"https://x/a.wav": PAYLOAD, "https://m/b.wav": PAYLOAD[::-1]}, calls)
 
     def opener(url: str) -> BinaryIO:
         if url == "https://x/a.wav" and not calls:
@@ -1232,10 +1205,10 @@ def test_fetch_retries_transient_by_packaged_policy(tmp_path: Path, lease_clock:
             raise urllib.error.HTTPError(url, 404, "Not Found", http.client.HTTPMessage(), None)
         return served(url)
 
-    manifest = _manifest(
+    manifest = demo_manifest(
         [
-            _file("a.wav", "https://x/a.wav"),
-            _file("b.wav", "https://x/b.wav", PAYLOAD[::-1], mirrors=["https://m/b.wav"]),
+            file_entry("a.wav", "https://x/a.wav"),
+            file_entry("b.wav", "https://x/b.wav", PAYLOAD[::-1], mirrors=["https://m/b.wav"]),
         ]
     )
     paths = fetch(manifest, cache_root=tmp_path, opener=opener, clock=clock)
@@ -1250,7 +1223,7 @@ def test_fetch_retries_transient_by_packaged_policy(tmp_path: Path, lease_clock:
         raise ConnectionRefusedError(errno.ECONNREFUSED, "refused")
 
     with pytest.raises(FetchError):
-        fetch(_manifest(version="2"), cache_root=tmp_path / "other", opener=refused, clock=clock)
+        fetch(demo_manifest(version="2"), cache_root=tmp_path / "other", opener=refused, clock=clock)
     assert len(calls) == RETRY.attempts and clock.slept == _backoffs()
 
 
@@ -1268,20 +1241,20 @@ def test_a_fetch_request_waits_timeout_s(monkeypatch: pytest.MonkeyPatch, tmp_pa
     once = packaged.retry.model_copy(update={"attempts": 1})
     for timeout in (None, 7.0):
         with pytest.raises(FetchError):
-            fetch(_manifest(), cache_root=tmp_path, timeout_s=timeout, retry=once)
+            fetch(demo_manifest(), cache_root=tmp_path, timeout_s=timeout, retry=once)
     assert seen == [packaged.timeouts.fetch_s, 7.0]
 
 
 @pytest.mark.logic
 def test_data_fetch_waits_the_profiles_fetch_s(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`senselab data fetch --profile FILE` opens each URL within that profile's `timeouts.fetch_s`."""
-    document = ExecutionProfile.packaged().model_dump(mode="json")
+    document = ExecutionProfile.packaged().model_dump(mode="json", exclude={"written"})
     document["timeouts"]["fetch_s"] = 7.0
     document["retry"]["attempts"] = 1
     profile = tmp_path / "site.yaml"
     profile.write_text(yaml.safe_dump(document))
     manifest = tmp_path / "m.yaml"
-    manifest.write_text(yaml.safe_dump(_manifest().model_dump(mode="json")))
+    manifest.write_text(yaml.safe_dump(demo_manifest().model_dump(mode="json")))
     seen: list[float] = []
 
     def refuse(self: urllib.request.OpenerDirector, url: str, data: object = None, timeout: float = 0.0) -> object:

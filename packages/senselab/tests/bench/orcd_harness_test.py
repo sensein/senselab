@@ -563,6 +563,8 @@ def test_suite_combine_and_crossnode_verdicts(tmp_path: Path) -> None:
     out = tmp_path / "logic-verdict.json"
     base = ["suite", "--out", str(out), "--tier", "logic", "--junit", str(junit), "--status"]
     assert _drive(*base, "0") == 0 and _drive(*base, "1") == 1
+    missing = ["suite", "--out", str(out), "--tier", "logic", "--junit", str(tmp_path / "none.xml"), "--status", "1"]
+    assert _drive(*missing) == 1 and "logic: pytest wrote its junit file" in json.loads(out.read_text())["failed"]
     junit.write_text('<testsuites><testsuite tests="4" failures="1" errors="0" skipped="0"/></testsuites>')
     assert _drive(*base, "0") == 1
     junit.write_text('<testsuites><testsuite tests="4" failures="0" errors="0" skipped="0"/></testsuites>')
@@ -571,6 +573,13 @@ def test_suite_combine_and_crossnode_verdicts(tmp_path: Path) -> None:
     assert _drive("combine", "--out", str(combined), "--dir", str(tmp_path)) == 0
     (tmp_path / "queue-verdict.json").write_text(json.dumps({"pass": False}))
     assert _drive("combine", "--out", str(combined), "--dir", str(tmp_path)) == 1
+    envs = tmp_path / "envs.json"
+    with_envs = ["suite", "--out", str(tmp_path / "gpu.json"), "--tier", "gpu", "--junit", str(junit), "--status", "0"]
+    assert _drive(*with_envs, "--envs", str(envs)) == 1
+    envs.write_text(json.dumps({"pass": False, "failed": ["env vllm-server (cuda) builds"]}))
+    assert _drive(*with_envs, "--envs", str(envs)) == 1
+    envs.write_text(json.dumps({"pass": True}))
+    assert _drive(*with_envs, "--envs", str(envs)) == 0
     probes = tmp_path / "probes"
     probes.mkdir()
     (probes / "lease-verdict.json").write_text(json.dumps({"pass": True, "hosts": ["a", "b", "c"]}))
@@ -596,6 +605,22 @@ def test_profile_refuses_a_class_whose_time_passes_its_partition(
     base = ["profile", "--src", str(src), "--out", str(out)]
     assert _drive(*base) == 2 and not out.exists()
     assert _drive(*base, "--worker-time-s", "3600") == 0 and out.is_file()
+
+
+@pytest.mark.logic
+def test_profile_refuses_an_unset_variable_naming_its_key_and_writes_the_copy_expanded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A partition naming an unset variable refuses the setup at once, naming key and variable; a set one is written."""
+    monkeypatch.delenv("TEST_UNSET_PARTITION", raising=False)
+    src = tmp_path / "site.yaml"
+    src.write_text("resource_classes:\n  gpu:h100:\n    partition: ${TEST_UNSET_PARTITION}\n    time_s: 60\n")
+    out = tmp_path / "profile.yaml"
+    assert _drive("profile", "--src", str(src), "--out", str(out), "--classes", "-") == 2 and not out.exists()
+    assert "resource_classes.gpu:h100.partition" in capsys.readouterr().err
+    monkeypatch.setenv("TEST_UNSET_PARTITION", "p")
+    assert _drive("profile", "--src", str(src), "--out", str(out), "--classes", "-") == 0
+    assert orcd_driver.load_yaml(out, "profile")["resource_classes"]["gpu:h100"]["partition"] == "p"
 
 
 @pytest.mark.logic
@@ -639,7 +664,9 @@ def test_the_test_tiers_run_on_a_local_substrate_and_only_the_pool_step_on_slurm
     setup = re.compile(r"^orcd_setup (\S+) (\S+)(?: (\S+))?")
     tiers = [c for c in _commands(STEPS / "step-5.sh") if c.startswith("orcd_setup ")]
     assert [m.group(3) for c in tiers if (m := setup.match(c))] == ["local"]
-    assert 'export NO_PROGRESS_S="${NO_PROGRESS_S:-600}"' in _commands(STEPS / "step-5.sh")
+    assert any('NO_PROGRESS_S="${NO_PROGRESS_S:-240}"' in c for c in _commands(STEPS / "step-5.sh"))
+    tier = [c for c in _commands(STEPS / "step-tier.sh") if c.startswith("orcd_setup ")]
+    assert [m.group(3) for c in tier if (m := setup.match(c))] == ["local", "local"]
     pool = [c for c in _commands(STEPS / "step-pool.sh") if c.startswith("orcd_setup ")]
     assert [m.group(3) for c in pool if (m := setup.match(c))] == [None]
 
@@ -730,3 +757,96 @@ def test_the_step_scripts_carry_no_site_values() -> None:
     """P-28: partitions, accounts and paths come from the environment, never from a tracked script."""
     text = "\n".join(p.read_text(encoding="utf-8") for p in STEPS.glob("*.sh"))
     assert not re.search(r"/(?:home|Users|orcd)/|ou_\w+|--partition=[a-z]", text)
+
+
+@pytest.mark.logic
+def test_every_tier_pytest_bounds_each_test_and_the_gpu_tier_folds_in_its_env_builds() -> None:
+    """Each tier pytest passes a per-test `--timeout`: 120 s on CPU, 300 s on GPU; the GPU suite verdict reads envs."""
+    tier = "\n".join(_commands(STEPS / "step-tier.sh"))
+    assert re.search(r"cpu\).*?TIMEOUT=120.*?gpu\).*?TIMEOUT=300", tier, re.S)
+    assert '--timeout="$TIMEOUT"' in tier
+    assert re.search(r"orcd_driver envs .*?ENVS=\(--envs .*?orcd_driver suite .*\$\{ENVS\[@\]\}", tier, re.S)
+    five = "\n".join(_commands(STEPS / "step-5.sh"))
+    assert "logic | contract) TIMEOUT=120" in five and '[ "$MODE" = gpu ] && TIMEOUT=300' in five
+    for script in sorted(STEPS.glob("step-*.sh")):
+        for command in _commands(script):
+            if "uv run --no-sync pytest " in command and "--collect-only" not in command:
+                assert "--timeout" in command, f"{script.name}: {command[:80]}"
+
+
+_COLLECT = """
+import json, sys
+import pytest
+
+class Bounds:
+    def pytest_collection_finish(self, session):
+        found = {}
+        for item in session.items:
+            marker = item.get_closest_marker("timeout")
+            names = vars(getattr(item, "module", None) or object())
+            starts = any(n in names for n in ("start_vllm", "VllmServer", "vllm_backend"))
+            marked = item.get_closest_marker("vllm_server") is not None
+            found[item.nodeid] = [marker.args[0] if marker else None, starts or marked, marked]
+        with open(sys.argv[1], "w") as out:
+            json.dump(found, out)
+
+sys.exit(pytest.main(sys.argv[2:], plugins=[Bounds()]))
+"""
+
+GPU_TIER_TESTS = {
+    "packages/senselab-core/tests/runtime/execution/services_gpu_test.py::"
+    "test_two_plans_share_one_pii_server_and_a_new_config_is_another_service",
+    "packages/senselab/tests/text/tasks/pii_spans/pii_spans_transformers_test.py::"
+    "test_pii_spans_transformers_finds_the_identifying_span_with_real_weights",
+    "packages/senselab/tests/text/tasks/pii_spans/pii_spans_transformers_test.py::"
+    "test_pii_spans_transformers_edge_inputs_with_real_weights",
+    "packages/senselab/tests/text/tasks/pii_spans/pii_spans_vllm_test.py::"
+    "test_pii_spans_vllm_on_the_h100_finds_spans_and_bounds_edge_inputs",
+}
+"""The GPU tests the GPU tier ran at S1b (ORCD, H100); the tier's selection must keep collecting them."""
+
+
+@pytest.mark.logic
+def test_the_gpu_tier_selection_collects_the_gpu_tests_and_bounds_each_server_start(tmp_path: Path) -> None:
+    """The GPU tier's selection, collected only, holds the known GPU tests and bounds every vLLM server start.
+
+    step-tier.sh's GPU suites, marks and `--timeout` are read from the script. Each test of a module that starts a
+    vLLM server carries `vllm_server`, and the bound conftest derives from it is at least the profile's
+    `vllm.startup_s`.
+    """
+    tier = "\n".join(_commands(STEPS / "step-tier.sh"))
+    block = re.search(r"\bgpu\)(.*?);;", tier, re.S)
+    assert block is not None
+    suites = re.search(r"SUITES=\((.*?)\)", block.group(1), re.S)
+    marks = re.search(r'MARKS="(.*?)"', block.group(1))
+    timeout = re.search(r"TIMEOUT=(\d+)", block.group(1))
+    assert suites and marks and timeout
+    report = tmp_path / "collected.json"
+    argv = [*suites.group(1).split(), "-m", marks.group(1), f"--timeout={timeout.group(1)}", "--collect-only", "-q"]
+    argv += ["-p", "no:cacheprovider"]
+    env = {**os.environ, "SENSELAB_TEST_PROFILE": str(CLUSTER)}
+    done = subprocess.run(
+        [sys.executable, "-c", _COLLECT, str(report), *argv],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        timeout=300,
+        check=False,
+    )
+    assert done.returncode == 0, done.stdout.decode()[-2000:] + done.stderr.decode()[-2000:]
+    collected: dict[str, list[Any]] = json.loads(report.read_text())
+    assert GPU_TIER_TESTS <= set(collected), GPU_TIER_TESTS - set(collected)
+    startup_s = ExecutionProfile.load(CLUSTER).vllm.startup_s
+    servers = {n: (bound, marked) for n, (bound, starts, marked) in collected.items() if starts}
+    assert GPU_TIER_TESTS - set(servers) == {n for n in GPU_TIER_TESTS if "transformers" in n}, servers
+    unbounded = {n: b for n, (b, marked) in servers.items() if not marked or b is None or b < startup_s}
+    assert unbounded == {}, f"a vLLM server test needs `vllm_server`, a bound of at least {startup_s} s"
+
+
+@pytest.mark.logic
+def test_jobs_share_one_warm_uv_cache_that_the_prepare_step_fills() -> None:
+    """Every job syncs from the group's cache or the account's one under WORK_ROOT; step-prepare syncs it first."""
+    assert 'export UV_CACHE_DIR="${GROUP_UV_CACHE:-$WORK_ROOT/uv-cache}"' in (STEPS / "lib.sh").read_text()
+    assert [c for c in _commands(STEPS / "step-prepare.sh") if c.startswith("orcd_setup ")] == ['orcd_setup prepare ""']
+    for script in ("step-tier.sh", "step-5.sh", "step-pool.sh"):
+        assert "--dependency=afterok:<prepare job>" in (STEPS / script).read_text(), script

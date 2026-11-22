@@ -7,9 +7,8 @@ from typing import Any
 import pytest
 from senselab_core.kernel import formats
 from senselab_core.runtime.calibration import RunCalibration
-from senselab_core.runtime.config import expand
 from senselab_core.runtime.execution_settings import CalibrationSettings
-from senselab_core.runtime.profiles import ExecutionProfile, UnknownProfileKey
+from senselab_core.runtime.profiles import ExecutionProfile, UnknownProfileKey, UnsetProfileVariable
 
 CLUSTER = (
     next(p for p in Path(__file__).resolve().parents if p.name == "packages")
@@ -28,8 +27,9 @@ def _calibration(overrides: dict[str, Any]) -> dict[str, Any]:
 
 @pytest.mark.logic
 @pytest.mark.parametrize("name", SOURCES)
-def test_profiles_carry_their_trust_and_roots(name: str) -> None:
+def test_profiles_carry_their_trust_and_roots(name: str, monkeypatch: pytest.MonkeyPatch) -> None:
     """The laptop profile trusts its own measures; the cluster fixture pools the group root before its own."""
+    monkeypatch.setenv("SENSELAB_MEASURES_ROOT", "/group/measures")
     c = ExecutionProfile.load(SOURCES[name]).calibration
     assert c.trust == TRUST[name]
     assert len(c.measures_roots) == (2 if name == "cluster" else 1)
@@ -63,14 +63,13 @@ def test_probe_items_is_not_a_profile_key() -> None:
 
 @pytest.mark.logic
 def test_the_group_measures_root_is_the_variable_alone(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The first cluster root has no fallback: an unset variable is no root, never a root of each member's own."""
-    first = ExecutionProfile.load(CLUSTER).calibration.measures_roots[0]
-    assert first == "${SENSELAB_MEASURES_ROOT}"
+    """The cluster's group root falls back to nothing, never to a root of each member's own; `${VAR}` alone refuses."""
     monkeypatch.delenv("SENSELAB_MEASURES_ROOT", raising=False)
-    with pytest.raises(ValueError, match="not set"):
-        expand(first)
+    assert ExecutionProfile.load(CLUSTER).calibration.measures_roots == ("${cache_root}/2x/measures",)
+    with pytest.raises(UnsetProfileVariable, match="calibration.measures_roots"):
+        ExecutionProfile.load(CLUSTER, {"calibration": {"measures_roots": ["${SENSELAB_MEASURES_ROOT}"]}})
     monkeypatch.setenv("SENSELAB_MEASURES_ROOT", "/group/measures")
-    assert expand(first) == "/group/measures"
+    assert ExecutionProfile.load(CLUSTER).calibration.measures_roots[0] == "/group/measures"
 
 
 @pytest.mark.logic

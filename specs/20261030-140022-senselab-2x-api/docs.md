@@ -75,8 +75,9 @@ three audience paths that share the same pages:
   - It downloads into a content-addressed cache outside the repo and verifies every hash.
   - It refuses a mismatch and accepts a mirror only on a matching hash.
   - A cache hit trusts a blob without reading it only if it is a regular file whose recorded stamp
-    (size, mtime, inode, ctime) still matches; any other blob is re-hashed. A full re-hash is opt-in
-    (`--verify`), so a cached fetch of a large dataset does not re-read it.
+    (size, inode) still matches; any other blob is re-hashed. A full re-hash is opt-in (`--verify`), so a
+    cached fetch of a large dataset does not re-read it. Only `--verify` catches a same-size rewrite in place
+    (R-321).
   - Manifest paths compare by Unicode canonical caseless match, so two paths a case-insensitive
     filesystem may store as one file are refused.
   - A dataset adapter (P-11) reads the result.
@@ -104,3 +105,5 @@ three audience paths that share the same pages:
   (R-77).
 - 2026-11-01: the benchmark harness and smoke suite move to Phase 2 (H-R49, owner decisions of
   2026-11-01); the 2.x preview path is `2x/pr-<N>/`.
+- 2026-11-22: the size-mode stamp is size and inode only; mtime and ctime are not compared, because NFS
+  serves cached attributes after close (R-321, owner ruling).

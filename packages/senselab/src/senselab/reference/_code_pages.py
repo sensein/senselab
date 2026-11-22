@@ -278,6 +278,11 @@ a site profile: every `<fill: ...>` in it is yours to set, and it refuses to loa
   pool's calibration (memory samples and the classes a backend ran out of memory on) is kept under the first writable
   root, so a run on any member's session places a backend from what earlier runs measured.
 - There is no packaged resource table: figures for a resource come from measures made on it.
+- `${{VAR}}`, `$VAR` and `${{VAR:-fallback}}` in any value are expanded from the environment when the profile loads; a
+  variable that is unset or empty with no fallback refuses the profile, naming the key and the variable, and a list
+  item `${{VAR:-}}` that expands empty is left out. The loaded profile records each expanded value's written form under
+  `written`: a plan carries the profile's identity as written, so a run placed in one shell resumes in another whose
+  variables differ.
 
 ## Keys
 
