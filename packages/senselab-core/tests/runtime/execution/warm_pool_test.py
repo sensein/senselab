@@ -10,10 +10,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-import attrs
 import pytest
 from pool_stack_fixture import packaged, planned, registry, scoring
-from pydra.workers.pool import NodeLocalStorage
 from senselab_core.kernel.identity import ReusePolicy
 from senselab_core.runtime.call import RunConfig, TaskCall
 from senselab_core.runtime.execution import warm
@@ -254,13 +252,14 @@ def test_a_failed_open_of_a_new_default_session_closes_the_one_it_replaced(
             call(TaskCall.model_validate({"task": TASK.name, "inputs": {"text": "a"}}), profile=RESIDENT)
             [first] = warm._DEFAULTS.values()
             monkeypatch.setenv("SENSELAB_CACHE", str(local))
-            with pytest.raises(NodeLocalStorage):
+            with pytest.raises(ValueError, match="every node") as refused:
                 call(
                     TaskCall.model_validate({"task": TASK.name, "inputs": {"text": "b"}}),
                     profile=ExecutionProfile.load(CLUSTER),
                 )
     finally:
         shutil.rmtree(local, ignore_errors=True)
+    assert type(refused.value).__name__ == "NodeLocalStorage"
     assert first.pool._closed and not warm._DEFAULTS and not warm._RETIRED
 
 
@@ -530,7 +529,10 @@ def test_a_class_whose_starts_are_refused_holds_its_jobs_with_the_start_error(tm
 
     The run raises the hold, naming the class and the refusal; the job has no terminal event.
     """
-    deadline = attrs.evolve(warm.settings(BOUNDED), start_deadline_s=0.2, start_deadline_failures=2)
+    packaged_settings = warm.settings(BOUNDED)
+    deadline = type(packaged_settings).from_json(
+        {**packaged_settings.to_json(), "start_deadline_s": 0.2, "start_deadline_failures": 2}
+    )
     with (
         packaged(registry(TASK, worker=BACKEND), tmp_path / "cache"),
         PoolSession(
@@ -549,9 +551,9 @@ def test_a_slurm_session_refuses_a_pool_root_on_node_local_storage(tmp_path: Pat
     """A Slurm substrate's workers run on other nodes: pydra refuses a root under the temporary directory, unwritten."""
     profile = ExecutionProfile.load(CLUSTER)
     root = Path(tempfile.gettempdir()) / f"senselab-node-local-{os.getpid()}" / "session"
-    with pytest.raises(NodeLocalStorage, match="every node"):
+    with pytest.raises(ValueError, match="every node") as refused:
         PoolSession(profile, root, tmp_path / "store")
-    assert not root.exists()
+    assert type(refused.value).__name__ == "NodeLocalStorage" and not root.exists()
 
 
 def test_a_running_jobs_claim_lease_is_where_the_pool_layout_puts_it_and_beats(
