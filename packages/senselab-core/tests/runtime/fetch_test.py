@@ -1067,6 +1067,25 @@ def test_complete_read_only_cache_still_serves(tmp_path: Path) -> None:
 
 
 @pytest.mark.logic
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes whatever the mode")
+def test_read_only_cache_whose_blob_stamp_moved_still_serves(tmp_path: Path) -> None:
+    """A read-only completed cache whose blob stamp no longer matches its marker re-hashes the blob and serves it."""
+    paths = fetch(_manifest(), cache_root=tmp_path / "c", opener=_opener({"https://x/a.wav": PAYLOAD}))
+    blob = tmp_path / "c" / "blobs" / SHA
+    st = blob.stat()
+    os.utime(blob, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+    dirs = [p for p in [tmp_path / "c", *(tmp_path / "c").rglob("*")] if p.is_dir() and not p.is_symlink()]
+    for d in dirs:
+        d.chmod(0o555)
+    try:
+        again = fetch(_manifest(), cache_root=tmp_path / "c", opener=_opener({}))
+    finally:
+        for d in dirs:
+            d.chmod(0o770)
+    assert again == paths and again["a/voice.wav"].read_bytes() == PAYLOAD
+
+
+@pytest.mark.logic
 def test_mtime_restored_rewrite_is_caught_by_ctime(tmp_path: Path) -> None:
     """A same-size rewrite whose mtime is put back with utime still changes ctime, so it is re-hashed and refetched."""
     fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))

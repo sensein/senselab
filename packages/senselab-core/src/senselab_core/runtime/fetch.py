@@ -736,6 +736,10 @@ def fetch(  # noqa: PLR0913 - the manifest, then keyword-only cache, source, ver
         raise storage_fault(err, root) from err
 
 
+_READ_ONLY_ERRNOS = frozenset({errno.EACCES, errno.EPERM, errno.EROFS})
+"""The errors of a cache that can be read but not written; a valid dataset in one is served with its marker kept."""
+
+
 def _fetch_into(  # noqa: PLR0913 - fetch's arguments plus the two directories it opened
     manifest: DataManifest,
     top: StorageDir,
@@ -791,16 +795,21 @@ def _fetch_into(  # noqa: PLR0913 - fetch's arguments plus the two directories i
                     for sha, st in stamps.items()
                 },
             }
-            with Staging(tmp, mode=PRIVATE_DIR_MODE) as private:
-                private.write_new(STAGED_MARKER, jcs_dumps(record), file_mode, grammar=STAGED_NAME)
-                _commit(
-                    private,
-                    STAGED_MARKER,
-                    ds,
-                    COMPLETE_MARKER,
-                    replace=marker_state != "absent",
-                    keeps=lambda: _read_marker(ds, manifest, tmp)[1] == "valid",
-                )
+            try:
+                with Staging(tmp, mode=PRIVATE_DIR_MODE) as private:
+                    private.write_new(STAGED_MARKER, jcs_dumps(record), file_mode, grammar=STAGED_NAME)
+                    _commit(
+                        private,
+                        STAGED_MARKER,
+                        ds,
+                        COMPLETE_MARKER,
+                        replace=marker_state != "absent",
+                        keeps=lambda: _read_marker(ds, manifest, tmp)[1] == "valid",
+                    )
+            except OSError as err:
+                if marker_state != "valid" or err.errno not in _READ_ONLY_ERRNOS:
+                    raise
+                logger.warning("cannot refresh the marker of the read-only dataset %s: %s", ds.path, err)
         for name in replaced:
             try:
                 moved = datasets.set_aside(name, tmp)
