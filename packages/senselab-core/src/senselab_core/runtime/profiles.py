@@ -89,7 +89,7 @@ _DROPPED_KEYS: Final = {
 
 
 class ProfileFormatRetired(ValueError):
-    """A profile in a retired format; it is rewritten as `execution-profile@6.0`."""
+    """A profile in a retired format; it is rewritten as `execution-profile@6.1`."""
 
     def __init__(self, found: str) -> None:
         """Name the declared format, and the keys a newer major dropped from it."""

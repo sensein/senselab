@@ -9,12 +9,14 @@ from pathlib import Path
 
 import pytest
 from pool_stack_fixture import packaged, planned, registry, scoring
+from pydra.workers.pool.classes import WorkerClass
+from pydra.workers.pool.substrate import SubstrateError, WorkerHandle
 from senselab_core.kernel.identity import ReusePolicy
 from senselab_core.runtime.call import RunConfig, TaskCall
 from senselab_core.runtime.execution import warm
 from senselab_core.runtime.execution.calls import call
 from senselab_core.runtime.execution.events import read_events
-from senselab_core.runtime.execution.executor import QueueHeld
+from senselab_core.runtime.execution.executor import NoProgress, QueueHeld
 from senselab_core.runtime.execution.run import start
 from senselab_core.runtime.execution.warm import PoolSession
 from senselab_core.runtime.licenses import LicensePolicy
@@ -52,6 +54,38 @@ RESIDENT = ExecutionProfile.load(
     },
 )
 """One CPU class, the packaged laptop profile's pool settings: its polls and its idle window."""
+
+BOUND_S = 2.0
+BOUNDED = ExecutionProfile.load(
+    "laptop",
+    {
+        "devices": ["cpu"],
+        "resource_classes": {"cpu": {"device": "cpu", "mem_bytes": 2**30, "max_workers": 1}},
+        "pool": {"poll_s": 0.05, "quantum_items": 8, "quantum_s": 60, "idle_polls": 40, "no_progress_s": BOUND_S},
+        "lease": {"stale_after_s": 4.0, "renew_fraction": 0.2, "attribute_delay_s": 0, "wait_s": 10.0},
+        "faults": {"infrastructure_replacements": 1000},
+    },
+)
+"""One CPU class whose runs fail after `BOUND_S` without progress; a refused start never breaks the class first."""
+
+
+class _Refusing:
+    """A substrate whose every start is refused, as a rejected `sbatch` is; it lists no worker."""
+
+    def attach(self, attachment: object) -> None:
+        """Nothing to keep."""
+
+    def start(self, cls: WorkerClass, n: int) -> list[WorkerHandle]:
+        raise SubstrateError("sbatch: error: invalid partition specified")
+
+    def live(self) -> list[WorkerHandle]:
+        return []
+
+    def stop(self, workers: object) -> None:
+        """Nothing was started."""
+
+    def can_start(self, cls: WorkerClass) -> bool:
+        return True
 
 
 @pytest.fixture
@@ -376,3 +410,33 @@ def test_the_store_entry_records_the_pool_facts_beside_a_context_it_never_splits
     assert context["pool"]["class"] == "cpu" and context["senselab"]["node"] == "a"
     assert entry.fingerprint == fingerprint
     assert json.loads(json.dumps(context["senselab"]))["plan"] == placed.hash
+
+
+def test_a_run_whose_pool_starts_no_worker_fails_within_its_no_progress_bound(tmp_path: Path, planted: Path) -> None:
+    """No worker ever attaches: the run raises `NoProgress` naming the waiting class, within the profile's bound."""
+    with (
+        packaged(registry(TASK, worker=BACKEND), tmp_path / "cache"),
+        served(tmp_path, BOUNDED, workers=0) as (session, _),
+    ):
+        placed, values = planned(TASK, BOUNDED, ["a"])
+        began = time.monotonic()
+        run = start(placed, session, values=values)
+        with pytest.raises(NoProgress, match="cpu") as caught:
+            run.wait(timeout=60)
+        took = time.monotonic() - began
+    assert caught.value.classes == ("cpu",)
+    assert caught.value.bound_s == BOUND_S
+    assert BOUND_S <= took < BOUND_S + 10
+
+
+def test_the_no_progress_error_names_the_pools_latest_start_error(tmp_path: Path, planted: Path) -> None:
+    """Every start is refused: the run's `NoProgress` carries the refusal the pool recorded for the class."""
+    with (
+        packaged(registry(TASK, worker=BACKEND), tmp_path / "cache"),
+        PoolSession(BOUNDED, tmp_path / "session", tmp_path / "store", substrate=_Refusing(), here=True) as session,
+    ):
+        placed, values = planned(TASK, BOUNDED, ["a"])
+        run = start(placed, session, values=values)
+        with pytest.raises(NoProgress, match="invalid partition") as caught:
+            run.wait(timeout=60)
+    assert "invalid partition" in caught.value.start_errors["cpu"]

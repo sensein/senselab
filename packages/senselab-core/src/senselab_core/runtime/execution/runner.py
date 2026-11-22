@@ -17,6 +17,7 @@ import contextlib
 import logging
 import queue
 import threading
+import time
 import typing
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -42,6 +43,7 @@ from senselab_core.runtime.execution.executor import (
     Admission,
     FaultRecord,
     JobRef,
+    NoProgress,
     PlanFragment,
     QueueHeld,
     ResultRef,
@@ -393,7 +395,8 @@ class _Driver:
     Every `GraphRunner` call is made here; the pool's follower only posts outcomes to `inbox`. A pool result is a pydra
     `Result` holding the job's `ResultRef`, or `Failed(ElementFailed)`. A node whose jobs cannot be formed is, for each
     of its jobs: `Failed` for a license refusal or any other exception (the latter raised after the run). A held job
-    is `NotRun(held=True)`, and the run raises the hold after the loop; a cancelled one is `NotRun`.
+    is `NotRun(held=True)`, and the run raises the hold after the loop; a cancelled one is `NotRun`. While jobs are in
+    the pool, `no_progress_s` with no outcome and no job sent raises `NoProgress`.
     """
 
     def __init__(  # noqa: PLR0913 - the run's parts
@@ -406,10 +409,13 @@ class _Driver:
         events: EventLog,
         cancel: threading.Event,
         cancel_check_s: float,
+        no_progress_s: float,
     ) -> None:
         """Run `placed` on `session`'s pool under `run`, its graph inputs `values`, logging to `events`."""
         self.placed, self.values, self.session, self.run = placed, values, session, run
         self.store, self.events, self.cancel, self.cancel_check_s = store, events, cancel, cancel_check_s
+        self.no_progress_s = no_progress_s
+        self.moved = time.monotonic()
         self.inbox: queue.Queue[Message] = queue.Queue()
         self.results: dict[str, dict[tuple[int, ...], ResultRef]] = {}
         self.ended: set[tuple[str, tuple[int, ...]]] = set()
@@ -430,6 +436,7 @@ class _Driver:
         Raises:
             Exception: the first error of the run that is no job's failure, or a cancellation.
             QueueHeld: the pool held jobs of the run; they have no terminal event.
+            NoProgress: jobs were in the pool, and none gave an outcome nor was one sent, for `no_progress_s`.
             WorkflowError: pydra errored a job no pool job failed.
             RuntimeError: nothing can progress, but the run is not done.
         """
@@ -470,6 +477,7 @@ class _Driver:
             progressed = self._settle_round(rnd)
             progressed = self._dispatch(graph, rnd.dispatch) or progressed
             if progressed:
+                self.moved = time.monotonic()
                 continue
             if not self.sent:
                 if graph.done:
@@ -477,7 +485,16 @@ class _Driver:
                 if rnd.retry_after is None:
                     raise RuntimeError(graph.stuck() or "nothing can progress, but the run is not done")
             wait = self.cancel_check_s if rnd.retry_after is None else min(rnd.retry_after, self.cancel_check_s)
-            self._receive(graph, wait)
+            if self._receive(graph, wait):
+                self.moved = time.monotonic()
+            elif self.sent and time.monotonic() - self.moved >= self.no_progress_s:
+                raise self._stalled()
+
+    def _stalled(self) -> NoProgress:
+        """Return the run's `NoProgress`: the classes its open pool jobs wait on, and the pool's latest start errors."""
+        classes = tuple(sorted({s.doc.placement.resource_class for s in self.sent.values()}))
+        causes = getattr(self.session.pool, "_cause", {})
+        return NoProgress(self.no_progress_s, classes, {c: str(causes[c]) for c in classes if c in causes})
 
     def _check_cancel(self) -> None:
         """Once `cancel` is set, record the run's cancellation and withdraw its jobs still open in the pool."""
@@ -532,6 +549,7 @@ class _Driver:
             pool_jobs += self._formed(graph, batch)
         if pool_jobs:
             self.handles.append(self.session.pool.submit(pool_jobs))
+            self.moved = time.monotonic()
         return settled or self.completed != before
 
     def _formed(self, graph: GraphRunner, batch: _Batch) -> list[object]:
@@ -651,18 +669,18 @@ class _Driver:
                         found.setdefault(source, {})[ref.job.element] = ref
         return {source: list(refs.values()) for source, refs in found.items()}
 
-    def _receive(self, graph: GraphRunner, timeout: float | None) -> None:
-        """Apply the next outcome, waiting up to `timeout`, then every outcome waiting."""
+    def _receive(self, graph: GraphRunner, timeout: float | None) -> bool:
+        """Apply the next outcome, waiting up to `timeout`, then every outcome waiting; return whether one came."""
         try:
             message = self.inbox.get(timeout=timeout)
         except queue.Empty:
-            return
+            return False
         while True:
             self._apply(graph, message)
             try:
                 message = self.inbox.get_nowait()
             except queue.Empty:
-                return
+                return True
 
     def _apply(self, graph: GraphRunner, message: Message) -> None:
         _, pool_job, outcome = message
@@ -894,7 +912,8 @@ def prepare(  # noqa: PLR0913 - the fragment and the run it is of
 class PydraRunner:
     """Runs placed plans on a pool session: pydra's `GraphRunner` expands the graph and releases its jobs.
 
-    `cancel_check_s` is how often the driver looks at a set cancel while it waits on the pool (the profile's).
+    `cancel_check_s` is how often the driver looks at a set cancel while it waits on the pool, and `no_progress_s` how
+    long it waits on pool jobs that give no outcome (the profile's).
     """
 
     def __init__(self, *, profile: ExecutionProfile | None = None, work_dir: Path | None = None) -> None:
@@ -926,6 +945,7 @@ class PydraRunner:
             ValueError: as `compile_plan`, or the plan was placed under another profile than the session's.
             RunCancelled: `cancel` was set before every job ran.
             QueueHeld: the pool held jobs of the run; they have no terminal event.
+            NoProgress: the pool gave no outcome for `pool.no_progress_s` while jobs were in it.
             WorkflowError: pydra errored a job no pool job failed.
             Exception: the first other error forming a node's jobs raised, after the run.
         """
@@ -950,7 +970,10 @@ class PydraRunner:
         store = store if store is not None else SenselabStore(root)
         config = placed.config if placed.config is not None else RunConfig(reuse=ReusePolicy(placed.logical.reuse))
         cancel = cancel if cancel is not None else threading.Event()
-        driver = _Driver(placed, values, session, config, store, events, cancel, self.profile.pool.cancel_check_s)
+        pool = self.profile.pool
+        driver = _Driver(
+            placed, values, session, config, store, events, cancel, pool.cancel_check_s, pool.no_progress_s
+        )
         keys = plan_keys(placed, values)
         for node, element in driver.expected():
             driver.log("queued", node, element, key=keys.get((node, element)))

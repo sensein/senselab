@@ -175,6 +175,7 @@ def _register_sections(register: Register) -> None:
                     idle_polls=3,
                     cancel_check_s=0.05,
                     event_poll_s=0.5,
+                    no_progress_s=7200,
                 ),
                 PoolSettings(
                     quantum_items=1,
@@ -184,9 +185,17 @@ def _register_sections(register: Register) -> None:
                     idle_polls=1,
                     cancel_check_s=0.5,
                     event_poll_s=0.5,
+                    no_progress_s=1,
                 ),
             ],
-            [{"poll_s": 0}, {"quantum_items": 0}, {"idle_polls": 0}, {"cancel_check_s": 0}, {"event_poll_s": 0}],
+            [
+                {"poll_s": 0},
+                {"quantum_items": 0},
+                {"idle_polls": 0},
+                {"cancel_check_s": 0},
+                {"event_poll_s": 0},
+                {"no_progress_s": 0},
+            ],
         ),
         JobLease: (
             [

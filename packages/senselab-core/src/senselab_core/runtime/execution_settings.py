@@ -107,7 +107,8 @@ class PoolSettings(Frozen):
     jobs or seconds. `poll_s` is a worker's empty-queue poll and the pool coordinator's poll. `admit_threads` bounds the
     threads that ask the result store which jobs it would serve, for a plan's counts. A worker exits once its queues
     stayed empty for `idle_polls` polls of `poll_s`; a following coordinator checks its cancel event every
-    `cancel_check_s`; `Run.wait` reads the event log of a run another process drives every `event_poll_s`.
+    `cancel_check_s`; `Run.wait` reads the event log of a run another process drives every `event_poll_s`. A run with
+    jobs in the pool fails with `NoProgress` once no outcome has come back and no job was sent for `no_progress_s`.
     """
 
     quantum_items: PositiveInt
@@ -117,6 +118,7 @@ class PoolSettings(Frozen):
     idle_polls: PositiveInt
     cancel_check_s: PositiveSeconds
     event_poll_s: PositiveSeconds
+    no_progress_s: PositiveSeconds
 
 
 class SizingSettings(Frozen):

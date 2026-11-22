@@ -350,5 +350,22 @@ class WorkersBroken(QueueHeld):
         self.reason = reason
 
 
+class NoProgress(RuntimeError):
+    """A run's pool jobs gave no outcome, and no job was sent, for `bound_s` (`pool.no_progress_s`).
+
+    `classes` are the resource classes of the jobs still waiting; `start_errors` the pool's latest start error of each
+    that has one.
+    """
+
+    def __init__(self, bound_s: float, classes: tuple[str, ...], start_errors: Mapping[str, str]) -> None:
+        """Name the bound, the waiting classes and each one's latest start error."""
+        errors = "; ".join(f"{c}: {e}" for c, e in start_errors.items()) or "the pool reported none"
+        super().__init__(
+            f"no outcome for {bound_s:g} s (pool.no_progress_s) while jobs wait on resource classes"
+            f" {', '.join(classes)}; latest start errors: {errors}"
+        )
+        self.bound_s, self.classes, self.start_errors = bound_s, classes, dict(start_errors)
+
+
 class RunCancelled(RuntimeError):
     """The run was cancelled: a job not yet sent to the executor was not sent."""

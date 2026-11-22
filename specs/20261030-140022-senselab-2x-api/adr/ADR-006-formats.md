@@ -733,3 +733,7 @@ Design: [`calibration-probe.md`](../calibration-probe.md) §3.2, §8.
 - 2026-11-21 (route-B S1b fix round 1): `execution-profile@6.0` replaces `@5.0`. It drops
   `substrate.{start_backoff_first_s,start_backoff_max_s,stop_grace_s}` and `pool.{first_poll_s,presence_refresh_s,
   segment_items}`, which only senselab's deleted pool read; `@5` is retired and refused naming the dropped keys.
+- 2026-11-21 (route-B S1b fix round 4): `execution-profile@6.1` replaces `@6.0`. It adds the required key
+  `pool.no_progress_s`, the bound past which a run whose pool jobs give no outcome fails with `NoProgress`
+  (config-derivations.md, `pool`). A `@6.0` file is still accepted by the format check and fails validation naming the
+  missing key.

@@ -33,7 +33,7 @@ PACKAGED = Path(senselab_core.__file__).parent / "runtime" / "data" / "profiles"
 PROFILE = ExecutionProfile.packaged()
 KEYS = {
     "lease": ["missed_beats", "wait_s", "poll_s", "remove_attempts", "record_attempts", "dir_mode"],
-    "pool": ["idle_polls", "cancel_check_s", "event_poll_s"],
+    "pool": ["idle_polls", "cancel_check_s", "event_poll_s", "no_progress_s"],
     "supervisor": ["reap_poll_s", "exit_bound_s"],
     "timeouts": ["fetch_s"],
     "store": ["commit_attempts", "probe_bound_s", "probe_poll_s", "clock_tolerance_s"],
