@@ -59,7 +59,7 @@ from senselab_core.runtime.storage import (
 )
 
 MANIFEST_FORMAT = "data-manifest@2.0"
-MARKER_FORMAT = "dataset-marker@2.1"
+MARKER_FORMAT = "dataset-marker@3.0"
 CACHE_ENV = "SENSELAB_DATA_CACHE"
 ALLOWED_SCHEMES = frozenset({"https"})
 FILES_DIR = "files"
@@ -381,19 +381,17 @@ def _link_first(source: StorageDir, name: str, target: StorageDir, final: str) -
 
 
 class BlobStamp(NamedTuple):
-    """What `verify="size"` trusts a blob by: its size, mtime, inode and ctime when its dataset was completed."""
+    """What `verify="size"` trusts a blob by: its size and inode when its dataset was completed."""
 
     size: int
-    mtime_ns: int
     inode: int
-    ctime_ns: int
 
 
 _STAMP_FIELDS = frozenset(BlobStamp._fields)
 
 
 def _stamp(st: os.stat_result) -> BlobStamp:
-    return BlobStamp(st.st_size, st.st_mtime_ns, st.st_ino, st.st_ctime_ns)
+    return BlobStamp(st.st_size, st.st_ino)
 
 
 class _BlobFormat:
@@ -553,10 +551,10 @@ def _stamps(value: object) -> dict[str, BlobStamp] | None:
     for key, raw in value.items():
         if not isinstance(raw, dict) or set(raw) != _STAMP_FIELDS:
             return None
-        size, counters = raw["size"], [raw[name] for name in ("mtime_ns", "inode", "ctime_ns")]
-        if type(size) is not int or size < 0 or not all(isinstance(v, str) and v.isdecimal() for v in counters):
+        size, inode = raw["size"], raw["inode"]
+        if type(size) is not int or size < 0 or not (isinstance(inode, str) and inode.isdecimal()):
             return None
-        stamps[key] = BlobStamp(size, *(int(v) for v in counters))
+        stamps[key] = BlobStamp(size, int(inode))
     return stamps
 
 
@@ -635,7 +633,7 @@ def _read_marker(
     """Return `(recorded blob stamps, state, superseded versions)`; state is `"valid"`, `"absent"` or `"corrupt"`.
 
     The marker is read through `ds` without following or blocking. Anything but a regular file there is
-    moved into `tmp` and the state is `"corrupt"`. A marker that is not a whole `dataset-marker@2.1`
+    moved into `tmp` and the state is `"corrupt"`. A marker that is not a whole `dataset-marker@3.0`
     record is `"corrupt"` and contributes no stamps or versions, but a dataset or manifest digest it still
     names must be this one.
 
@@ -697,11 +695,11 @@ def fetch(  # noqa: PLR0913 - the manifest, then keyword-only cache, source, ver
     """Download every file of `manifest` into the cache and return `{file path: path under datasets/.../files/}`.
 
     A present blob is reused with no network call. `verify="size"` trusts a regular-file blob whose
-    `BlobStamp` (size, mtime, inode, ctime) equals the one recorded when its dataset was completed; `"full"`,
-    and any other blob, re-hashes it. A download streams to `tmp/<uuid>`, is bounded by the declared
-    size, is hashed, and is linked into `blobs/<sha256>` only on a match (first writer wins); a transfer
-    that fails transiently is retried under `retry` (the packaged `laptop` profile's when None), a request waits
-    `timeout_s` seconds (its `timeouts.fetch_s` when None), and on a
+    `BlobStamp` (size, inode) equals the one recorded when its dataset was completed; `"full"`, and any other
+    blob, re-hashes it, so only `"full"` catches a same-size rewrite in place. A download streams to
+    `tmp/<uuid>`, is bounded by the declared size, is hashed, and is linked into `blobs/<sha256>` only on a match
+    (first writer wins); a transfer that fails transiently is retried under `retry` (the packaged `laptop`
+    profile's when None), a request waits `timeout_s` seconds (its `timeouts.fetch_s` when None), and on a
     mismatch or failed transfer the next mirror is tried. When every link is in place
     `datasets/<name>@<version>/.complete` records the dataset, the manifest digest and the blob stamps;
     it is rewritten when a stamp has changed, so a repaired blob is trusted again by size. The marker also
@@ -786,15 +784,7 @@ def _fetch_into(  # noqa: PLR0913 - fetch's arguments plus the two directories i
                 "version": manifest.version,
                 "manifest_sha256": manifest.digest(),
                 "superseded": sorted(now_superseded),
-                "stamps": {
-                    sha: {
-                        "size": st.size,
-                        "mtime_ns": str(st.mtime_ns),
-                        "inode": str(st.inode),
-                        "ctime_ns": str(st.ctime_ns),
-                    }
-                    for sha, st in stamps.items()
-                },
+                "stamps": {sha: {"size": st.size, "inode": str(st.inode)} for sha, st in stamps.items()},
             }
             try:
                 with Staging(tmp, mode=PRIVATE_DIR_MODE) as private:

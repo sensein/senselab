@@ -15,7 +15,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
-from typing import IO, Any, BinaryIO
+from typing import IO, Any, BinaryIO, Literal
 
 import pytest
 import yaml
@@ -439,6 +439,51 @@ def test_a_blob_is_stamped_after_its_file_is_closed(
     assert _rehashed(caplog) == []
 
 
+def _change_blob(root: Path, change: str) -> None:
+    """Change the completed blob under `root`: its times (mtime and ctime), its size, its inode, or its bytes."""
+    blob = root / "blobs" / SHA
+    if change == "times":
+        st = blob.stat()
+        os.utime(blob, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+    elif change == "size":
+        _unseal(blob).write_bytes(PAYLOAD + b"x")
+    elif change == "inode":
+        (root / "copy").write_bytes(PAYLOAD)
+        os.replace(root / "copy", blob)
+    else:
+        _unseal(blob).write_bytes(b"POISONED!!!!" + PAYLOAD[12:])
+    blob.chmod(0o440)
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize(
+    ("change", "size_rehashes", "size_refetches"),
+    [("times", False, False), ("size", True, True), ("inode", True, False), ("bytes", False, False)],
+)
+@pytest.mark.parametrize("verify", ["size", "full"])
+def test_size_mode_compares_size_and_inode_and_full_mode_always_rehashes(  # noqa: PLR0913 - the parameter grid
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    change: str,
+    size_rehashes: bool,
+    size_refetches: bool,
+    verify: Literal["size", "full"],
+) -> None:
+    """`verify="size"` re-hashes a blob only when its size or inode moved; `"full"` re-hashes and repairs every one."""
+    fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
+    _change_blob(tmp_path, change)
+    calls: list[str] = []
+    with caplog.at_level("DEBUG", logger="senselab"):
+        paths = fetch(
+            _manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}, calls), verify=verify
+        )
+    full = verify == "full"
+    assert bool(_rehashed(caplog)) is (full or size_rehashes)
+    assert bool(calls) is (size_refetches or (full and change in ("size", "bytes")))
+    if full or change != "bytes":
+        assert paths["a/voice.wav"].read_bytes() == PAYLOAD
+
+
 @pytest.mark.contract
 @pytest.mark.parametrize("existing", ["good", "other_bytes", "truncated", "empty", "symlink_to_good", "dangling"])
 def test_link_race_keeps_an_existing_blob_only_if_it_verifies(tmp_path: Path, existing: str) -> None:
@@ -477,7 +522,7 @@ def test_completion_marker_records_manifest_hash(tmp_path: Path) -> None:
     fetch(manifest, cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
     marker = json.loads((_dataset(tmp_path) / ".complete").read_text())
     assert marker["manifest_sha256"] == manifest.digest()
-    assert (marker["format"], marker["name"], marker["version"]) == ("dataset-marker@2.1", "demo", "1")
+    assert (marker["format"], marker["name"], marker["version"]) == ("dataset-marker@3.0", "demo", "1")
 
 
 @pytest.mark.logic
@@ -615,12 +660,13 @@ def test_corrupt_marker_is_replaced_once_dataset_verifies(tmp_path: Path, caplog
         "{}",
         '{"manifest_sha256": 1, "stamps": {}}',
         '{MARKER, "stamps": []}',
-        '{MARKER, "stamps": {"a": {"size": "big", "mtime_ns": "1", "inode": "1", "ctime_ns": "1"}}}',
-        '{MARKER, "stamps": {"a": {"size": true, "mtime_ns": "1", "inode": "1", "ctime_ns": "1"}}}',
-        '{MARKER, "stamps": {"a": {"size": -1, "mtime_ns": "1", "inode": "1", "ctime_ns": "1"}}}',
-        '{MARKER, "stamps": {"a": {"size": 1, "mtime_ns": 1, "inode": "1", "ctime_ns": "1"}}}',
-        '{MARKER, "stamps": {"a": {"size": 1, "mtime_ns": "1", "inode": "1"}}}',
-        '{MARKER, "format": "dataset-marker@1.0", "stamps": {}}',
+        '{MARKER, "stamps": {"a": {"size": "big", "inode": "1"}}}',
+        '{MARKER, "stamps": {"a": {"size": true, "inode": "1"}}}',
+        '{MARKER, "stamps": {"a": {"size": -1, "inode": "1"}}}',
+        '{MARKER, "stamps": {"a": {"size": 1, "inode": 1}}}',
+        '{MARKER, "stamps": {"a": {"size": 1}}}',
+        '{MARKER, "stamps": {"a": {"size": 1, "mtime_ns": "1", "inode": "1", "ctime_ns": "1"}}}',
+        '{MARKER, "format": "dataset-marker@2.1", "stamps": {}}',
         "\xff",
     ],
 )
@@ -843,25 +889,6 @@ def test_blob_cannot_be_written_through_the_returned_path(tmp_path: Path) -> Non
         open(paths["a/voice.wav"], "r+b")
 
 
-@pytest.mark.logic
-@pytest.mark.parametrize("change", ["rewrite", "replace"])
-def test_same_size_rewrite_is_not_trusted(tmp_path: Path, change: str) -> None:
-    """Under verify='size' a blob whose mtime or inode moved since completion is re-hashed and refetched."""
-    fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
-    blob = tmp_path / "blobs" / SHA
-    poison = b"POISONED!!!!" + PAYLOAD[12:]
-    if change == "rewrite":
-        _unseal(blob).write_bytes(poison)
-    else:
-        (tmp_path / "p").write_bytes(poison)
-        os.replace(tmp_path / "p", blob)
-        os.utime(blob, ns=(0, 0))
-    calls: list[str] = []
-    paths = fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}, calls))
-    assert calls == ["https://x/a.wav"]
-    assert paths["a/voice.wav"].read_bytes() == PAYLOAD
-
-
 def probe_download_from_an_endless_source(directory: str, size: str) -> dict[str, Any]:
     """Download from a source that would serve far more than `size`; report what it served and what was written."""
     source = FiniteSource(int(size))
@@ -1052,18 +1079,6 @@ def test_dangling_blob_symlink_is_not_trusted(tmp_path: Path) -> None:
     assert not (tmp_path / "blobs" / SHA).is_symlink()
 
 
-@pytest.mark.logic
-def test_poisoned_blob_is_not_served_under_size_verification(tmp_path: Path) -> None:
-    """A same-size overwrite through the returned path is refetched under `verify="size"`."""
-    paths = fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
-    _unseal(tmp_path / "blobs" / SHA)
-    with open(paths["a/voice.wav"], "r+b") as f:
-        f.write(b"POISONED!!!!!!!!!!")
-    calls: list[str] = []
-    paths = fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}, calls))
-    assert paths["a/voice.wav"].read_bytes() == PAYLOAD and calls == ["https://x/a.wav"]
-
-
 @pytest.mark.limits
 def test_endless_source_is_cut_at_declared_size(tmp_path: Path) -> None:
     """An endless source is cut at the declared size + 1 bytes and leaves nothing in tmp/."""
@@ -1077,7 +1092,7 @@ def test_endless_source_is_cut_at_declared_size(tmp_path: Path) -> None:
 def test_repaired_blob_is_trusted_again_by_size(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """After a blob is repaired its new stamp is recorded, so the next size-verified fetch reads nothing."""
     fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
-    _unseal(tmp_path / "blobs" / SHA).write_bytes(b"x" * len(PAYLOAD))
+    _change_blob(tmp_path, "size")
     fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
     with caplog.at_level("DEBUG", logger="senselab"):
         fetch(_manifest(), cache_root=tmp_path, opener=_opener({}))
@@ -1108,9 +1123,7 @@ def test_complete_read_only_cache_still_serves(tmp_path: Path) -> None:
 def test_read_only_cache_whose_blob_stamp_moved_still_serves(tmp_path: Path) -> None:
     """A read-only completed cache whose blob stamp no longer matches its marker re-hashes the blob and serves it."""
     paths = fetch(_manifest(), cache_root=tmp_path / "c", opener=_opener({"https://x/a.wav": PAYLOAD}))
-    blob = tmp_path / "c" / "blobs" / SHA
-    st = blob.stat()
-    os.utime(blob, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+    _change_blob(tmp_path / "c", "inode")
     dirs = [p for p in [tmp_path / "c", *(tmp_path / "c").rglob("*")] if p.is_dir() and not p.is_symlink()]
     for d in dirs:
         d.chmod(0o555)
@@ -1120,21 +1133,6 @@ def test_read_only_cache_whose_blob_stamp_moved_still_serves(tmp_path: Path) -> 
         for d in dirs:
             d.chmod(0o770)
     assert again == paths and again["a/voice.wav"].read_bytes() == PAYLOAD
-
-
-@pytest.mark.logic
-def test_mtime_restored_rewrite_is_caught_by_ctime(tmp_path: Path) -> None:
-    """A same-size rewrite whose mtime is put back with utime still changes ctime, so it is re-hashed and refetched."""
-    fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
-    blob = tmp_path / "blobs" / SHA
-    before = blob.stat()
-    _unseal(blob).write_bytes(b"POISONED!!!!" + PAYLOAD[12:])
-    blob.chmod(0o440)
-    os.utime(blob, ns=(before.st_atime_ns, before.st_mtime_ns))
-    assert blob.stat().st_mtime_ns == before.st_mtime_ns and blob.stat().st_ino == before.st_ino
-    calls: list[str] = []
-    paths = fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}, calls))
-    assert calls == ["https://x/a.wav"] and paths["a/voice.wav"].read_bytes() == PAYLOAD
 
 
 @pytest.mark.logic
