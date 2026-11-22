@@ -2,7 +2,7 @@
 
 The `model` sub-marker (loads weights or needs a backend env, ORCD only) goes with `limits`, `usecase` or `env`.
 A `gpu` test is skipped on a host with no GPU. A test with no `timeout` mark gets its tier's budget from
-`senselab/tests/data/tier_budgets.json`.
+`senselab/tests/data/tier_budgets.json`, or the `--timeout` of the command line when one is given.
 """
 
 from __future__ import annotations
@@ -106,8 +106,8 @@ def profile_loader(
 ) -> Callable[[Mapping[str, Any] | None], Any]:
     """Return `load(override=None)`, the test profile: `$SENSELAB_TEST_PROFILE` untouched, else the cluster fixture.
 
-    The fixture's env roots are `${SENSELAB_ENV_ROOT}` with no fallback; when that variable is unset they are pointed,
-    by a mapping override, at a session temp directory. The process environment is never changed.
+    When `SENSELAB_ENV_ROOT` is unset the fixture's env roots are pointed, by a mapping override, at a session temp
+    directory. The process environment is never changed.
     """
     from senselab_core.runtime.profiles import ExecutionProfile  # noqa: PLC0415 - core may not be installed
 
@@ -171,14 +171,14 @@ def tier_bound(request: pytest.FixtureRequest) -> float:
     return float(marker.args[0])
 
 
-def _apply_budgets(items: list[pytest.Item]) -> None:
+def _apply_budgets(items: list[pytest.Item], given: float | None) -> None:
     if not items:
         return
     budgets = tier_budgets()
     for item in items:
         tier = next((m.name for m in item.iter_markers() if m.name in TIERS), None)
         if tier is not None and not item.get_closest_marker("timeout"):
-            item.add_marker(pytest.mark.timeout(budgets[tier]))
+            item.add_marker(pytest.mark.timeout(budgets[tier] if given is None else given))
 
 
 SITE_TIER_MARKERS = ("model", "large_model", "gpu")
@@ -209,7 +209,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
             f"each test under packages/ needs exactly one tier marker of {sorted(TIERS)}, "
             f"and `model` only beside {sorted(MODEL_TIERS)}:\n" + "\n".join(offenders)
         )
-    _apply_budgets(owned)
+    _apply_budgets(owned, config.getoption("timeout", None))
     gpu = [item for item in items if item.get_closest_marker("gpu")]
     if gpu:
         from senselab_core.runtime.hardware import (

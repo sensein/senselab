@@ -5,11 +5,12 @@ Run with `uv run --no-sync python benchmarks/exit/orcd_driver.py <command> ...` 
 prints one `PASS <check>` or `FAIL <check>: <why>` line per check and, last, one JSON line
 `{"pass": bool, "failed": [...], "checks": n}`; it exits 0 only when every check passed.
 
-    profile      copy a site profile, refusing a worker class whose time_s exceeds its partition's limit
+    profile      copy a site profile with its variables expanded, refusing an unset variable and a worker class
+                 whose time_s exceeds its partition's limit
     identity     verdict of Step 2 (resample) and Step 3 (stt): plan hash, counts, identities, placement
     interrupt    verdict of Step 4's start job
     resume       verdict of Step 4's resume job
-    suite        verdict of one tier's pytest run, from its junit file
+    suite        verdict of one tier's pytest run, from its junit file (and its envs verdict, when given)
     envs         build every shipped env lock under SENSELAB_ENV_ROOT and import its packages
     crossnode    verdict of the lease cross-node probe, from its verdict file
     prov         verdict of the post-hoc provenance read of Step 4's store
@@ -88,12 +89,18 @@ def slurm_limit_s(partition: str) -> float | None:
 
 
 def cmd_profile(args: argparse.Namespace) -> int:
-    """Copy the site profile to `--out`; refuse a checked class whose time_s passes its partition's limit.
+    """Copy the site profile to `--out`, variables expanded; refuse an unset one and a class over its partition's limit.
 
-    `--substrate local` makes the copy's workers processes of this job (its Slurm keys dropped); `--no-progress-s`
-    sets the copy's `pool.no_progress_s`.
+    A checked class is one `--classes` names. `--substrate local` makes the copy's workers processes of this job (its
+    Slurm keys dropped); `--no-progress-s` sets the copy's `pool.no_progress_s`.
     """
-    document = load_yaml(args.src, "site profile")
+    from senselab_core.runtime.profiles import UnsetProfileVariable, expand_profile  # noqa: PLC0415
+
+    try:
+        document = expand_profile(load_yaml(args.src, "site profile"))
+    except UnsetProfileVariable as error:
+        print(f"REFUSED: {error}", file=sys.stderr)
+        return 2
     if args.substrate == "local":
         site = document["substrate"]
         document["substrate"] = {
@@ -111,9 +118,9 @@ def cmd_profile(args: argparse.Namespace) -> int:
             spec["time_s"] = min(spec["time_s"], args.worker_time_s)
         if name not in chosen:
             continue
-        partition = os.path.expandvars(str(spec.get("partition", "")))
-        if not partition or "$" in partition:
-            refused.append(f"{name} names partition {partition!r}, which is empty or an unset variable")
+        partition = str(spec.get("partition") or "")
+        if not partition:
+            refused.append(f"{name} names no partition")
             continue
         limit = slurm_limit_s(partition)
         print(f"class {name}: time_s {spec['time_s']}, partition {partition!r}, partition limit {limit}")
@@ -298,8 +305,14 @@ def cmd_resume(args: argparse.Namespace) -> int:
 
 
 def cmd_suite(args: argparse.Namespace) -> int:
-    """Verdict of one tier: its junit file holds tests, none failed or errored, and the pytest exit status is 0."""
+    """Verdict of one tier: its junit file holds tests, none failed or errored, and the pytest exit status is 0.
+
+    With `--envs`, the verdict of the tier's `envs` build must exist and pass as well.
+    """
     check = Checks()
+    if args.envs is not None:
+        built = _read(args.envs)
+        check(f"{args.tier}: every env built and imported", bool(built and built.get("pass")), json.dumps(built)[:300])
     root = ET.parse(args.junit).getroot() if args.junit.is_file() else None
     check(f"{args.tier}: pytest exited 0", args.status == 0, f"exit {args.status}")
     counts = {"tests": 0, "failures": 0, "errors": 0, "skipped": 0}
@@ -621,7 +634,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add("interrupt", cmd_interrupt, ("--out", path), ("--start-json", path), ("--status", status))
     add("resume", cmd_resume, ("--out", path), ("--start-json", path), ("--resume-json", path), ("--status", status))
-    add("suite", cmd_suite, ("--out", path), ("--tier", {"required": True}), ("--junit", path), ("--status", status))
+    add(
+        "suite",
+        cmd_suite,
+        ("--out", path),
+        ("--tier", {"required": True}),
+        ("--junit", path),
+        ("--status", status),
+        ("--envs", {"type": Path}),
+    )
     add("envs", cmd_envs, ("--out", path), ("--profile", path))
     add(
         "prov",

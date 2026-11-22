@@ -101,3 +101,17 @@ def test_each_test_gets_its_tiers_budget_unless_it_sets_its_own(
         f"BUDGET = {tier_budget_s['logic']}\n" + (pytester.path / "test_sample.py").read_text()
     )
     pytester.runpytest().assert_outcomes(passed=2)
+
+
+@pytest.mark.logic
+def test_a_command_line_timeout_replaces_every_tier_budget_but_not_a_tests_own_mark(
+    pytester: pytest.Pytester, project: Callable[[str], None]
+) -> None:
+    """`--timeout=N` marks each test without its own `timeout` mark `timeout(N)`, whatever its tier's budget."""
+    project(
+        "import pytest\n\n@pytest.mark.contract\ndef test_a(request):\n"
+        "    assert request.node.get_closest_marker('timeout').args == (120.0,)\n\n"
+        "@pytest.mark.logic\n@pytest.mark.timeout(5)\ndef test_b(request):\n"
+        "    assert request.node.get_closest_marker('timeout').args == (5,)\n",
+    )
+    pytester.runpytest("--timeout=120", "-m", "logic or contract").assert_outcomes(passed=2)
