@@ -563,6 +563,8 @@ def test_suite_combine_and_crossnode_verdicts(tmp_path: Path) -> None:
     out = tmp_path / "logic-verdict.json"
     base = ["suite", "--out", str(out), "--tier", "logic", "--junit", str(junit), "--status"]
     assert _drive(*base, "0") == 0 and _drive(*base, "1") == 1
+    missing = ["suite", "--out", str(out), "--tier", "logic", "--junit", str(tmp_path / "none.xml"), "--status", "1"]
+    assert _drive(*missing) == 1 and "logic: pytest wrote its junit file" in json.loads(out.read_text())["failed"]
     junit.write_text('<testsuites><testsuite tests="4" failures="1" errors="0" skipped="0"/></testsuites>')
     assert _drive(*base, "0") == 1
     junit.write_text('<testsuites><testsuite tests="4" failures="0" errors="0" skipped="0"/></testsuites>')
@@ -770,6 +772,71 @@ def test_every_tier_pytest_bounds_each_test_and_the_gpu_tier_folds_in_its_env_bu
         for command in _commands(script):
             if "uv run --no-sync pytest " in command and "--collect-only" not in command:
                 assert "--timeout" in command, f"{script.name}: {command[:80]}"
+
+
+_COLLECT = """
+import json, sys
+import pytest
+
+class Bounds:
+    def pytest_collection_finish(self, session):
+        found = {}
+        for item in session.items:
+            marker = item.get_closest_marker("timeout")
+            names = vars(getattr(item, "module", None) or object())
+            starts = any(n in names for n in ("start_vllm", "VllmServer", "vllm_backend"))
+            found[item.nodeid] = [marker.args[0] if marker else None, starts]
+        with open(sys.argv[1], "w") as out:
+            json.dump(found, out)
+
+sys.exit(pytest.main(sys.argv[2:], plugins=[Bounds()]))
+"""
+
+GPU_TIER_TESTS = {
+    "packages/senselab-core/tests/runtime/execution/services_gpu_test.py::"
+    "test_two_plans_share_one_pii_server_and_a_new_config_is_another_service",
+    "packages/senselab/tests/text/tasks/pii_spans/pii_spans_transformers_test.py::"
+    "test_pii_spans_transformers_finds_the_identifying_span_with_real_weights",
+    "packages/senselab/tests/text/tasks/pii_spans/pii_spans_transformers_test.py::"
+    "test_pii_spans_transformers_edge_inputs_with_real_weights",
+    "packages/senselab/tests/text/tasks/pii_spans/pii_spans_vllm_test.py::"
+    "test_pii_spans_vllm_on_the_h100_finds_spans_and_bounds_edge_inputs",
+}
+"""The GPU tests the GPU tier ran at S1b (ORCD, H100); the tier's selection must keep collecting them."""
+
+
+@pytest.mark.logic
+def test_the_gpu_tier_selection_collects_the_gpu_tests_and_bounds_each_server_start(tmp_path: Path) -> None:
+    """The GPU tier's selection, collected only, holds the known GPU tests and bounds every vLLM server start.
+
+    step-tier.sh's GPU suites, marks and `--timeout` are read from the script. Each test of a module that starts a
+    vLLM server runs under its own bound, at least the cluster profile's `vllm.startup_s`.
+    """
+    tier = "\n".join(_commands(STEPS / "step-tier.sh"))
+    block = re.search(r"\bgpu\)(.*?);;", tier, re.S)
+    assert block is not None
+    suites = re.search(r"SUITES=\((.*?)\)", block.group(1), re.S)
+    marks = re.search(r'MARKS="(.*?)"', block.group(1))
+    timeout = re.search(r"TIMEOUT=(\d+)", block.group(1))
+    assert suites and marks and timeout
+    report = tmp_path / "collected.json"
+    argv = [*suites.group(1).split(), "-m", marks.group(1), f"--timeout={timeout.group(1)}", "--collect-only", "-q"]
+    argv += ["-p", "no:cacheprovider"]
+    env = {**os.environ, "SENSELAB_TEST_PROFILE": str(CLUSTER)}
+    done = subprocess.run(
+        [sys.executable, "-c", _COLLECT, str(report), *argv],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        timeout=300,
+        check=False,
+    )
+    assert done.returncode == 0, done.stdout.decode()[-2000:] + done.stderr.decode()[-2000:]
+    collected: dict[str, list[Any]] = json.loads(report.read_text())
+    assert GPU_TIER_TESTS <= set(collected), GPU_TIER_TESTS - set(collected)
+    startup_s = ExecutionProfile.load(CLUSTER).vllm.startup_s
+    unbounded = {n: b for n, (b, starts) in collected.items() if starts and (b is None or b < startup_s)}
+    assert unbounded == {}, f"a vLLM server start needs its own timeout mark of at least {startup_s} s"
 
 
 @pytest.mark.logic

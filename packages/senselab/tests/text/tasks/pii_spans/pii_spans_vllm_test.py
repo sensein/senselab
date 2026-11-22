@@ -49,6 +49,8 @@ GPU_HOST = HardwareInfo(
 )
 ANSWER = '{"spans": [{"quote": "555-0100", "category": "CONTACT", "score": 0.9}]}'
 TEXT = "Call me on 555-0100 today."
+STARTUP_TIMEOUT_S = 1800.0
+"""The site profile's `vllm.startup_s`: each of the GPU test's four calls may start the server cold."""
 
 
 """The worker set, and so the servers, every call of this module runs on."""
@@ -268,6 +270,7 @@ def test_contract(case: Any) -> None:  # noqa: ANN401 - a no-argument contract c
 @pytest.mark.gpu
 @pytest.mark.model
 @pytest.mark.network
+@pytest.mark.timeout(4 * STARTUP_TIMEOUT_S)
 def test_pii_spans_vllm_on_the_h100_finds_spans_and_bounds_edge_inputs(
     tmp_path: Path, site_profile: Callable[..., ExecutionProfile]
 ) -> None:

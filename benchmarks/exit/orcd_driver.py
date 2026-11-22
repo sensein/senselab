@@ -305,7 +305,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
 
 
 def cmd_suite(args: argparse.Namespace) -> int:
-    """Verdict of one tier: its junit file holds tests, none failed or errored, and the pytest exit status is 0.
+    """Verdict of one tier: its junit file exists and holds tests, none failed or errored, and pytest exited 0.
 
     With `--envs`, the verdict of the tier's `envs` build must exist and pass as well.
     """
@@ -314,6 +314,7 @@ def cmd_suite(args: argparse.Namespace) -> int:
         built = _read(args.envs)
         check(f"{args.tier}: every env built and imported", bool(built and built.get("pass")), json.dumps(built)[:300])
     root = ET.parse(args.junit).getroot() if args.junit.is_file() else None
+    check(f"{args.tier}: pytest wrote its junit file", root is not None, str(args.junit))
     check(f"{args.tier}: pytest exited 0", args.status == 0, f"exit {args.status}")
     counts = {"tests": 0, "failures": 0, "errors": 0, "skipped": 0}
     if root is not None:
