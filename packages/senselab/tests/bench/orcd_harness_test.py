@@ -639,6 +639,7 @@ def test_the_test_tiers_run_on_a_local_substrate_and_only_the_pool_step_on_slurm
     setup = re.compile(r"^orcd_setup (\S+) (\S+)(?: (\S+))?")
     tiers = [c for c in _commands(STEPS / "step-5.sh") if c.startswith("orcd_setup ")]
     assert [m.group(3) for c in tiers if (m := setup.match(c))] == ["local"]
+    assert 'export NO_PROGRESS_S="${NO_PROGRESS_S:-600}"' in _commands(STEPS / "step-5.sh")
     pool = [c for c in _commands(STEPS / "step-pool.sh") if c.startswith("orcd_setup ")]
     assert [m.group(3) for c in pool if (m := setup.match(c))] == [None]
 

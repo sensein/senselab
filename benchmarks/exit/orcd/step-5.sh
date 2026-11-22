@@ -7,7 +7,8 @@
 # process of this allocation) and build their envs under $WORK_ROOT/envs-<sha>. pytest's temporary tree, and with it
 # every pool root a test opens, is under $WORK (`--basetemp`), the cache is the job's own, and WARNING records stream to
 # the job log, so a test that a timeout kills still shows the pool's warnings. Never `-n`: every xdist worker would load
-# the ML stack again. NO_PROGRESS_S (optional) bounds a run whose pool gives no outcome inside a test's budget.
+# the ML stack again. NO_PROGRESS_S (default 600) is the copy's pool.no_progress_s, inside the 700 s `limits` budget;
+# it holds because the envs are built before the tiers (with SKIP_ENVS=1 they must already be built at this SHA).
 # Submit (placeholders, P-28; one job per MODE):
 #   sbatch --partition="$CPU_PARTITION" --cpus-per-task=8 --mem=48G --time=04:00:00 --job-name=orcd-step5-cpu \
 #          --output="$WORK_ROOT/orcd-step5-cpu-%j.out" \
@@ -30,6 +31,7 @@ source "$SCRIPTS_DIR/lib.sh"
 MODE="${MODE:?MODE is cpu or gpu}"
 case "$MODE" in cpu | gpu) ;; *) echo "MODE is cpu or gpu" >&2; exit 2 ;; esac
 if [ "$MODE" = gpu ]; then nvidia-smi -L | grep -q H100 || { echo "this allocation has no H100" >&2; exit 2; }; fi
+export NO_PROGRESS_S="${NO_PROGRESS_S:-600}"
 orcd_setup "5-$MODE" "-" local
 export SENSELAB_CACHE="$WORK/cache"
 TIERS="${TIERS:-logic contract limits usecase env}"
