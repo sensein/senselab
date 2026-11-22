@@ -9,7 +9,8 @@ substrate starts the worker (`slurm`: one `sbatch` with the class's typed `--gre
 `.flac`) are the records. The run makes its own pool over its run directory and closes it when it ends. Each executed
 job's store entry records the pool facts of the call that computed it (`pool-facts@1`): the check is that every job
 completed, on one worker, under one residency, with exactly one cold call (the load) and N-1 warm ones. One JSON
-document is printed, and written to `FILE` when given; the exit status is 0 only when the check passes.
+document is printed, with the run's jobs by state, failures by fault class and unplaceable messages beside the check,
+and written to `FILE` when given; the exit status is 0 only when the check passes.
 """
 
 import argparse
@@ -86,6 +87,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     status = run.wait()
     keys = sorted({k for _, given in run.results() for k in getattr(given, "keys", {}).values()})
     verdict = {"hash": placed.hash, "done": status.done, **check(_facts(run, keys), args.items)}
+    verdict.update(jobs=dict(status.counts), faults=dict(status.faults), unplaceable=list(status.unplaceable))
     verdict["pass"] = bool(verdict["pass"] and status.done)
     text = json.dumps(verdict, sort_keys=True)
     print(text)
