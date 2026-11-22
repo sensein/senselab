@@ -198,6 +198,18 @@ def test_source_stamp_records_the_opened_file(tmp_path: Path) -> None:
     assert isinstance(data_group, RegularGroup) and data_group.source_stamp is None
 
 
+@pytest.mark.logic
+def test_a_stamp_taken_on_another_host_mount_still_reads(tmp_path: Path) -> None:
+    """A stamp whose `device` is another host's number for the same file (an NFS mount) decodes and checks."""
+    p = write_wav(tmp_path)
+    group = open_audio(p).groups["audio"]
+    assert isinstance(group, RegularGroup) and group.source_stamp is not None
+    elsewhere = group.source_stamp.model_copy(update={"device": group.source_stamp.device + 1})
+    samples = READER.decode(p, elsewhere, 0, 16)
+    assert samples.shape == (2, 16)
+    audio_io.check(elsewhere, p)
+
+
 _LSB = {"int16": 2.0**-15, "int32": 2.0**-31, "float32": 0.0, "float64": 0.0}
 _SUBTYPE = {"int16": "PCM_16", "int32": "PCM_32", "float32": "FLOAT", "float64": "DOUBLE"}
 
