@@ -384,6 +384,7 @@ def _isolated_built(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandl
 @pytest.mark.logic
 def test_a_backend_name_and_version_shared_by_two_envs_reads_each_env(tmp_path: Path) -> None:
     """A host backend and an isolated one named alike in one plan each get their env's handle, unit and context."""
+    pytest.importorskip("pydra", reason="the servable counts read the result store, a pydra store")
     profile = _profile(tmp_path)
     _seen(profile, SEEN)
     graph = Graph.model_validate(
