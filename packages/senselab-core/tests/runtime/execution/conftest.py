@@ -15,7 +15,14 @@ CLOCK_START = 1000.0
 collect_ignore = (
     []
     if importlib.util.find_spec("pydra") is not None
-    else ["provenance_check_test.py", "resume_test.py", "run_test.py", "runner_test.py", "warm_pool_test.py"]
+    else [
+        "provenance_check_test.py",
+        "resume_test.py",
+        "run_test.py",
+        "runner_test.py",
+        "served_pool_test.py",
+        "warm_pool_test.py",
+    ]
 )
 """The modules that run on pydra's pool, not collected where pydra is not installed (the core-only job)."""
 
