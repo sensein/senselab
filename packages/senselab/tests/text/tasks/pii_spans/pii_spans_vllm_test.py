@@ -123,7 +123,9 @@ def served(fake_env: EnvHandle) -> Iterator[Registry]:
         registry.add_backend(backend.model_copy(update={"devices": ("cpu",)}) if backend.name == "vllm" else backend)
     opened = [fake_env]
     previous = use_packaged(
-        Packaged(CATALOGUE, lambda _b, _p: opened[-1], registry, LOCK_RECORDS, env_lock=lambda _b: _lock(opened[-1]))
+        Packaged(
+            CATALOGUE, lambda _b, _p, _d: opened[-1], registry, LOCK_RECORDS, env_lock=lambda _b: _lock(opened[-1])
+        )
     )
     registry.opened = opened  # type: ignore[attr-defined]
     yield registry

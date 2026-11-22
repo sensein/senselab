@@ -67,7 +67,7 @@ def _license() -> License:
     return license_record("MIT", source="lock", verified={"date": "2026-11-02", "how": "pep639"}, gated=False)
 
 
-def _this_interpreter(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
+def _this_interpreter(backend: BackendSpec, profile: ExecutionProfile, device: str) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
     return EnvHandle(
         python=source_tree_python(),
         python_version=platform.python_version(),
@@ -286,9 +286,11 @@ def test_a_verified_hit_records_an_execution_naming_its_evidence(
     )
     status, store, _ = _run(placed, values, tmp_path)
     assert status.done
-    elsewhere = dataclasses.replace(_this_interpreter(REGISTRY.backends(SCORE.name)[0], PROFILE), wheel_set="5" * 64)
+    elsewhere = dataclasses.replace(
+        _this_interpreter(REGISTRY.backends(SCORE.name)[0], PROFILE, "cpu"), wheel_set="5" * 64
+    )
     records = {"pkg": _license()}
-    use_packaged(Packaged(CATALOGUE, lambda _b, _p: elsewhere, REGISTRY, lambda _: records))
+    use_packaged(Packaged(CATALOGUE, lambda _b, _p, _d: elsewhere, REGISTRY, lambda _: records))
     sampling = dataclasses.replace(placed, config=RunConfig(ReusePolicy.TOLERANT, 1.0))
     events = EventLog(tmp_path / "again", "a2", 1)
     with served(tmp_path / "again-pool", store=tmp_path / "pool" / "store") as (session, _):

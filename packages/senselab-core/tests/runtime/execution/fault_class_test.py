@@ -9,9 +9,11 @@ from pool_stack_fixture import host_env, registry, scoring
 from senselab_core.kernel.declare import BackendSpec
 from senselab_core.runtime.execution.executor import FaultRecord
 from senselab_core.runtime.execution.providers import Loader, SenselabHost
+from senselab_core.runtime.execution.warm import classify
 from senselab_core.runtime.execution.workers import WorkerLoadFailed, loaded
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.worker_client import WorkerFatal
+from senselab_worker.device_check import DeviceUnusable
 from senselab_worker.faults import MAX_TEXT_CHARS, ContentFault, InfrastructureFault, ResourceFault, error_record
 
 pytestmark = pytest.mark.logic
@@ -38,7 +40,7 @@ def host_load_failure(raised: Exception) -> WorkerLoadFailed:
     fixture.RAISE[:] = [raised]
     backend, profile = _backend(), ExecutionProfile.load()
     provider = SenselabHost()
-    spec = Loader(backend, host_env(backend, profile), None, "cpu", profile).spec
+    spec = Loader(backend, host_env(backend, profile, "cpu"), None, "cpu", profile).spec
     with pytest.raises(WorkerLoadFailed) as caught:
         provider.load(spec, None)
     return caught.value
@@ -86,6 +88,21 @@ def test_a_worker_fatal_carries_its_records_class_as_a_load(fault: str) -> None:
     fatal = WorkerFatal(error_record(TYPED[fault]("stated")))
     record = FaultRecord.from_exception(fatal)
     assert (record.fault, record.load) == ("infrastructure" if fault == "content" else fault, True)
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_a_device_the_env_cannot_use_moves_the_job_and_records_no_unfit_load(kind: str) -> None:
+    """A `DeviceUnusable` load, in-process or reported by a worker, is a resource fault of no memory at load.
+
+    The pool then moves the job up its ladder or fails it `Unplaceable` at once, instead of charging the residency
+    an infrastructure fault per load until it is held, and records no out-of-memory unfit load.
+    """
+    fault = classify(
+        KINDS[kind](DeviceUnusable("device cuda was granted, and this env's torch is a CPU build")), "load"
+    )
+    assert (fault.kind, fault.reason, fault.phase, fault.gap) == ("resource", None, "load", False)
+    assert kind == "client" or "CPU build" in fault.message
+    assert classify(KINDS[kind](ResourceFault("out of memory")), "load").reason == "oom"
 
 
 def test_a_load_failure_the_table_classified_is_a_gap_of_that_class() -> None:

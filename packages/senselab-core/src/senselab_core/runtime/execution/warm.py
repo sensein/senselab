@@ -34,6 +34,7 @@ from pydra.workers.pool.fit import MeasuredFit
 from pydra.workers.pool.pool import WarmPool, _newest_mtime
 from pydra.workers.pool.settings import PoolSettings
 from pydra.workers.pool.substrate import LocalSubstrate, SlurmSubstrate, Substrate
+from senselab_worker.device_check import DeviceUnusable
 from senselab_worker.faults import FaultClass, ProtocolError, classification
 
 from senselab_core.runtime.execution.executor import FaultRecord
@@ -124,7 +125,9 @@ WorkerCall = python.define(_worker_call, outputs={OUTPUTS: object}, name="Worker
 def classify(exc: BaseException, phase: str) -> PoolFault:
     """Senselab's fault classifier for the pool: an item's own record, the worker's verdicts, then the fault table.
 
-    Every exception the table does not classify is an infrastructure fault (a gap), never the job's own.
+    A worker whose env cannot use its device (`DeviceUnusable`, carried in a load's chain) is a resource fault of no
+    memory, so the job moves up its ladder or fails `Unplaceable` and no unfit load is recorded. Every exception the
+    table does not classify is an infrastructure fault (a gap), never the job's own.
     """
     name = type(exc).__name__
     message = str(exc)[:2000]
@@ -132,13 +135,29 @@ def classify(exc: BaseException, phase: str) -> PoolFault:
         return _of(exc.failure.fault_class, exc.failure.gap, name, exc.failure.message, phase)
     if isinstance(exc, LicenseRefused):
         return PoolFault("policy", name, message, phase)
-    if isinstance(exc, WorkerLoadFailed):
-        return _of(*exc.carried_class, name, message, "load")
-    if isinstance(exc, WorkerFatal) and exc.from_load:
-        return _of(*exc.carried_class, name, message, "load")
+    if isinstance(exc, WorkerLoadFailed) or (isinstance(exc, WorkerFatal) and exc.from_load):
+        return _at_load(exc, name, message)
     if isinstance(exc, (WorkerLost, ProtocolError, WorkerFatal)):
         return PoolFault("infrastructure", name, message, phase, reason="crash")
     return _of(*classification(exc), name, message, phase)
+
+
+def _at_load(exc: WorkerLoadFailed | WorkerFatal, name: str, message: str) -> PoolFault:
+    if _device_unusable(exc):
+        return PoolFault("resource", name, message, "load")
+    return _of(*exc.carried_class, name, message, "load")
+
+
+def _device_unusable(exc: BaseException) -> bool:
+    """Whether `exc` or what it was raised from is a `DeviceUnusable`, raised here or reported by a worker."""
+    link: BaseException | None = exc
+    while link is not None:
+        if isinstance(link, DeviceUnusable) or (
+            isinstance(link, WorkerFatal) and link.error.get("type") == DeviceUnusable.__name__
+        ):
+            return True
+        link = link.__cause__
+    return False
 
 
 def _of(fault: FaultClass, gap: bool, name: str, message: str, phase: str) -> PoolFault:

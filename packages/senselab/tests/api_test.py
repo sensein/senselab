@@ -175,7 +175,7 @@ def test_generated_source_is_formatter_stable(generated: ModuleType) -> None:
     assert done.returncode == 0, done.stderr
 
 
-def _this_interpreter(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
+def _this_interpreter(backend: BackendSpec, profile: ExecutionProfile, device: str) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
     """Every env is the running interpreter: the declared test seam of the fake stack; nothing is built."""
     return EnvHandle(sys.executable, platform.python_version(), "1" * 64, "2" * 64, None)
 

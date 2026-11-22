@@ -59,7 +59,7 @@ def test_a_second_model_less_unit_on_cpu_reports_a_load() -> None:
     """Two model-less units on cpu have keys of their own, so the second one's first request reports a load."""
     task, profile = scoring("host_reports_test.score"), ExecutionProfile.load("laptop")
     specs = [registry(task, name=name).backends(task.name)[0] for name in ("dsp", "other")]
-    keys = [host_model_key(spec, host_env(spec, profile), None, "cpu") for spec in specs]
+    keys = [host_model_key(spec, host_env(spec, profile, "cpu"), None, "cpu") for spec in specs]
     assert keys[0] != keys[1]
     cache = ModelCache(10)
     workers = [HostWorker(COUNTING, init={}, key=k, cache=cache, size_of=_size) for k in keys]

@@ -792,7 +792,7 @@ def place(  # noqa: PLR0913 - the plan, profile, hardware and config, then the e
         {
             p.env()
             for p in placed.values()
-            if p.backend.env.kind != "host" and not packaged().env_built(p.backend, profile)
+            if p.backend.env.kind != "host" and not packaged().env_built(p.backend, profile, p.device)
         }
     )
     profile.check_qos_cap({n: p.resource_class for n, p in placed.items()})

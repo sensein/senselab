@@ -99,7 +99,7 @@ OFFLINE = ExecutionProfile.load("laptop", {**BASE, "network": "offline"})
 OTHER_BACKEND = ExecutionProfile.load("laptop", {**BASE, "stack_preferences": {SCORE.name: ["alt"]}})
 
 
-def _this_interpreter(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
+def _this_interpreter(backend: BackendSpec, profile: ExecutionProfile, device: str) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
     return EnvHandle(
         python=source_tree_python(),
         python_version=platform.python_version(),

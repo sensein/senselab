@@ -323,7 +323,10 @@ ENV_IMPORTS = {
 
 
 def cmd_envs(args: argparse.Namespace) -> int:
-    """Build each shipped lock (`inputs.yaml`) under the profile's env roots and import its packages in it."""
+    """Build each shipped lock (`inputs.yaml`) for each of the profile's devices it runs on, and import its packages.
+
+    An env's torch build is its device's, so a lock is built once per device: a server env for `cuda` alone.
+    """
     from senselab_core.kernel.declare import Env  # noqa: PLC0415
     from senselab_core.runtime.envs import Uv, ensure_env, read_lock_inputs  # noqa: PLC0415
     from senselab_core.runtime.profiles import ExecutionProfile  # noqa: PLC0415
@@ -341,30 +344,34 @@ def cmd_envs(args: argparse.Namespace) -> int:
         kind, modules = ENV_IMPORTS.get(name, ("isolated", []))
         env = Env.server(name) if kind == "server" else Env.isolated(name)
         root = profile.env_root("server" if kind == "server" else "isolated")
-        try:
-            handle = ensure_env(
-                env,
-                lock_dir / f"{name}.txt",
-                root.expanduser(),
-                settings=profile.envs,
-                lease=profile.lease,
-                uv=Uv.find(),
+        for device in [d for d in profile.devices if kind != "server" or d == "cuda"]:
+            label = f"{name} ({device})"
+            try:
+                handle = ensure_env(
+                    env,
+                    lock_dir / f"{name}.txt",
+                    root.expanduser(),
+                    settings=profile.envs,
+                    lease=profile.lease,
+                    device=device,
+                    uv=Uv.find(),
+                )
+            except Exception as error:  # noqa: BLE001 - a build failure is the check's finding
+                check(f"env {label} builds", False, f"{type(error).__name__}: {str(error)[-400:]}")
+                continue
+            check(f"env {label} builds", True)
+            probe = (
+                "import importlib,sys,json; "
+                "print(json.dumps({m: bool(importlib.import_module(m)) for m in sys.argv[1:]}))"
             )
-        except Exception as error:  # noqa: BLE001 - a build failure is the check's finding
-            check(f"env {name} builds", False, f"{type(error).__name__}: {str(error)[-400:]}")
-            continue
-        check(f"env {name} builds", True)
-        probe = (
-            "import importlib,sys,json; print(json.dumps({m: bool(importlib.import_module(m)) for m in sys.argv[1:]}))"
-        )
-        done = subprocess.run(
-            [handle.python, "-c", probe, *modules], capture_output=True, text=True, timeout=600, check=False
-        )
-        check(f"env {name} imports {modules}", done.returncode == 0, done.stderr[-400:])
-        print(
-            f"env {name}: python {handle.python_version}, torch index {handle.torch_index}, "
-            f"wheel_set {handle.wheel_set[:16]}"
-        )
+            done = subprocess.run(
+                [handle.python, "-c", probe, *modules], capture_output=True, text=True, timeout=600, check=False
+            )
+            check(f"env {label} imports {modules}", done.returncode == 0, done.stderr[-400:])
+            print(
+                f"env {label}: python {handle.python_version}, torch index {handle.torch_index}, "
+                f"wheel_set {handle.wheel_set[:16]}"
+            )
     return check.verdict(args.out)
 
 

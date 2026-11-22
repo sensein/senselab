@@ -26,7 +26,7 @@ from senselab_core.runtime.envs import EnvHandle
 
 real = packaged()
 host = EnvHandle(sys.executable, "3", "0" * 64, "0" * 64, None)
-use_packaged(dataclasses.replace(real, open_env=lambda b, p: host if b.name == "fake" else real.open_env(b, p)))
+use_packaged(dataclasses.replace(real, open_env=lambda b, p, d: host if b.name == "fake" else real.open_env(b, p, d)))
 sys.argv = sys.argv[1:]
 runpy.run_path(sys.argv[0], run_name="__main__")
 """

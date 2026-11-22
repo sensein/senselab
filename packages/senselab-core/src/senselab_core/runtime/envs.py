@@ -2,7 +2,7 @@
 
 An isolated env is a uv venv on a uv-managed interpreter (`--python-preference only-managed`, the lock's named
 version, `t` for free-threaded), installed from its lock: a lock with `torch:` pins installs them from the PyTorch
-wheel index routed to the host's CUDA (`pick_torch_index`), then the lock body with `--no-deps`. Under `root`, env
+wheel index the target device selects (`pick_torch_index`), then the lock body with `--no-deps`. Under `root`, env
 `<name>` lives in `<name>[-<tag>]-<uuid>/`, and `<name>[-<tag>].json` (`env-record@1.0`) names the current build;
 both are written under a `Lease` on `<name>[-<tag>]`, kept alive by beats while the build runs. A builder whose
 lease was lost, or cannot prove it right before publishing (`Lease.prove`), does not publish its record. A build is
@@ -26,7 +26,7 @@ import tempfile
 import tomllib
 import urllib.request
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -42,7 +42,6 @@ from senselab_core.kernel.formats import FormatTag, Formatted
 from senselab_core.runtime.clock import Clock, SystemClock
 from senselab_core.runtime.config import load_yaml
 from senselab_core.runtime.execution_settings import JobLease
-from senselab_core.runtime.hardware import _run
 from senselab_core.runtime.locks import Lease
 from senselab_core.runtime.network import Network, require_online
 from senselab_core.runtime.profiles import Envs
@@ -66,8 +65,6 @@ PYTHON_PREFERENCE = "only-managed"
 ENV_RECORD_FORMAT = "env-record@1.0"
 WHEEL_SET_TAG = "wheel-set@1"
 _PYTHON_VERSION = re.compile(r"^\d+\.\d+t?$")
-_SMI_CUDA = re.compile(r"CUDA Version:\s*(\d+)\.(\d+)")
-_NVCC_CUDA = re.compile(r"release\s+(\d+)\.(\d+)")
 _NO_WHEEL = re.compile(
     r"(?:no matching distribution(?: found)?(?: for)?|could not find a (?:version|distribution)"
     r"(?: that satisfies)?(?: the requirement)?)\s+`([^`]+)`",
@@ -109,24 +106,15 @@ class ManagedPythonMissing(RuntimeError):
 
 
 class CudaCompatibilityError(RuntimeError):
-    """The routed PyTorch index serves no wheel for the lock's torch pins."""
+    """The selected PyTorch index serves no wheel for the lock's torch pins."""
 
-    def __init__(self, host: "HostCuda", index: "TorchIndex", packages: list[str]) -> None:
-        """Name the host CUDA, the index tried and the packages it lacks."""
-        cuda = ".".join(map(str, host.version)) if host.version else "none"
+    def __init__(self, device: str, index: "TorchIndex", packages: list[str]) -> None:
+        """Name the target device, the index tried and the packages it lacks."""
         super().__init__(
             f"no wheel for {packages} on torch build {index.tag} at {without_userinfo(index.url)} "
-            f"(host CUDA {cuda}, from {host.source}); set the execution profile's "
+            f"(target device {device}, index from the {index.source}); set the execution profile's "
             f"envs.torch_index to another index, e.g. {CPU_INDEX}"
         )
-
-
-@dataclass(frozen=True)
-class HostCuda:
-    """The host's CUDA version, `None` when no probe reports one, and the probe that reported it."""
-
-    version: tuple[int, int] | None
-    source: Literal["nvidia-smi", "nvcc", "none"]
 
 
 @dataclass(frozen=True)
@@ -135,7 +123,7 @@ class TorchIndex:
 
     url: str
     tag: str
-    source: Literal["probe", "profile"]
+    source: Literal["device", "profile"]
 
 
 @dataclass(frozen=True)
@@ -253,40 +241,23 @@ class Uv:
         return subprocess.run([*self.command, *args], capture_output=True, text=True, check=False)
 
 
-def detect_host_cuda(*, run: Callable[[list[str]], str] = _run) -> HostCuda:
-    """Return the CUDA version `nvidia-smi` reports, else the one `nvcc --version` reports, else none.
-
-    `run` executes a command and returns its stdout, raising when it cannot; tests inject it.
-    """
-    for command, pattern, source in (
-        (["nvidia-smi"], _SMI_CUDA, "nvidia-smi"),
-        (["nvcc", "--version"], _NVCC_CUDA, "nvcc"),
-    ):
-        try:
-            match = pattern.search(run(command))
-        except (OSError, subprocess.SubprocessError):
-            continue
-        if match:
-            return HostCuda((int(match[1]), int(match[2])), source)  # type: ignore[arg-type]
-    return HostCuda(None, "none")
-
-
 def pick_torch_index(
-    host: HostCuda, *, override: str | None = None, max_cuda: tuple[int, int] | None = None
+    device: str, *, override: str | None = None, max_cuda: tuple[int, int] | None = None
 ) -> TorchIndex:
-    """Return `override` when set, else the newest CUDA index at or below the host's CUDA capped at `max_cuda`.
+    """Return `override` when set, else the index the worker's `device` needs, never the build host's.
 
-    `max_cuda` defaults to `DEFAULT_MAX_CUDA`; a host without CUDA, or older than every index, gets the CPU index.
+    A `cuda` device gets the newest CUDA index at or below `max_cuda` (default `DEFAULT_MAX_CUDA`), the CPU index when
+    none is; any other device gets the CPU index, whose macOS wheels carry MPS.
     """
     if override:
         return TorchIndex(override, torch_build(override), "profile")
-    if host.version is not None:
-        effective = min(host.version, max_cuda or DEFAULT_MAX_CUDA)
+    if device == "cuda":
+        ceiling = max_cuda or DEFAULT_MAX_CUDA
         for tag, version in CUDA_INDEXES.items():
-            if version <= effective:
+            if version <= ceiling:
                 url = f"{PYTORCH_INDEX_BASE}/{tag}"
-                return TorchIndex(url, torch_build(url), "probe")
-    return TorchIndex(CPU_INDEX, torch_build(CPU_INDEX), "probe")
+                return TorchIndex(url, torch_build(url), "device")
+    return TorchIndex(CPU_INDEX, torch_build(CPU_INDEX), "device")
 
 
 def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings, and two injectable boundaries
@@ -296,17 +267,19 @@ def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings,
     *,
     settings: Envs,
     lease: JobLease,
+    device: str,
     requirements: Sequence[str] = (),
     workers: Mapping[str, Path] | None = None,
     uv: Uv | None = None,
-    host_cuda: HostCuda | None = None,
     network: Network = "online",
     clock: Clock = SystemClock(),  # noqa: B008 - stateless
 ) -> EnvHandle:
-    """Return the env `env` built from `lock` and overlaid with `workers` under `root`, built once across processes.
+    """Return the env `env` built from `lock` for `device` and overlaid with `workers` under `root`, built once.
 
-    A published env is never changed: an env of another lock, torch index, worker runtime or worker module source is
-    a separate build, named by its overlay digest, and the build it replaces stays for the workers running in it.
+    The torch build is the one `device` needs (`pick_torch_index`), whichever host builds it, so a worker on another
+    node runs an env built for its own device. A published env is never changed: an env of another lock, torch
+    index, worker runtime or worker module source is a separate build, named by its overlay digest, and the build
+    it replaces stays for the workers running in it.
 
     For `Env.host()`, `lock` is the senselab lock, or None when none ships with the install, in which case the installed
     distributions are checked against `requirements`; the env is this interpreter's, which must be uv-managed.
@@ -315,7 +288,8 @@ def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings,
         env: The env a backend declares.
         lock: The lock file the env is installed from.
         root: The directory the profile's `env_roots` gives for `env.kind`; unused for a host env.
-        settings: The profile's `envs`: `torch_index` replaces the probed index when set.
+        settings: The profile's `envs`: `torch_index` replaces the device's index when set.
+        device: The device the env's workers run on (`cuda`, `mps`, `cpu`); it selects the torch build.
         lease: The profile's `lease`: the build's lease beats under it, and a waiter waits `stale_after_s` plus
             `lease.wait_s`.
         requirements: The backend's requirements; required for a host env, which is refused unless `lock` covers each.
@@ -323,7 +297,6 @@ def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings,
             site-packages as that module, beside the worker runtime, when the env is built.
         uv: The `uv` command; `Uv.find()` when None.
         timeout_s: Seconds one request to a PyTorch index may take; the packaged profile's `timeouts.fetch_s` when None.
-        host_cuda: The host's CUDA; probed with `detect_host_cuda` when None and the lock pins torch.
         network: The profile's `network`; an `offline` profile uses a built env and builds none.
         clock: How the build lease reads time and waits.
 
@@ -352,7 +325,7 @@ def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings,
     if lock is None:
         raise EnvLockError(f"a {env.kind} env is built from its lock, none was given")
     parsed = EnvLock.read(lock)
-    stem, index, host_cuda = _stem(env, parsed, settings, workers, host_cuda)
+    stem, index = _stem(env, parsed, settings, workers, device)
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
     lock_sha = file_digest("file@1", parsed.path)
@@ -365,7 +338,7 @@ def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings,
         current = _read_record(root, stem)
         if current is None or (current.lock_sha, current.torch_index) != wanted:
             require_online(network, f"building env {stem}")
-            current = _build(root, stem, parsed, lock_sha, index, uv, host_cuda, workers or {})
+            current = _build(root, stem, parsed, lock_sha, index, uv, device, workers or {})
             if state.lost or not held.prove():
                 logger.warning("env %s: its build lease was lost; the build is used here and not published", stem)
             else:
@@ -374,28 +347,27 @@ def ensure_env(  # noqa: PLR0913 - the env, its lock, root and profile settings,
 
 
 def _stem(
-    env: Env, parsed: EnvLock, settings: Envs, workers: Mapping[str, Path] | None, host_cuda: HostCuda | None
-) -> tuple[str, TorchIndex | None, HostCuda | None]:
-    """Return the build name of `env` from `parsed`, its torch index, and the host CUDA probed to pick it."""
+    env: Env, parsed: EnvLock, settings: Envs, workers: Mapping[str, Path] | None, device: str
+) -> tuple[str, TorchIndex | None]:
+    """Return the build name of `env` from `parsed` for `device`, and its torch index."""
     index = None
     if parsed.torch_pins:
-        host_cuda = host_cuda or detect_host_cuda()
-        index = pick_torch_index(host_cuda, override=settings.torch_index, max_cuda=parsed.max_cuda)
+        index = pick_torch_index(device, override=settings.torch_index, max_cuda=parsed.max_cuda)
     overlay = overlay_digest(workers or {})
     stem = f"{env.name}-{index.tag}-{overlay[:16]}" if index else f"{env.name}-{overlay[:16]}"
-    return stem, index, host_cuda
+    return stem, index
 
 
-def current_env(  # noqa: PLR0913 - the env, its lock, root and profile settings, and the injectable CUDA probe
+def current_env(  # noqa: PLR0913 - the env, its lock, root, profile settings, device and overlay
     env: Env,
     lock: Path,
     root: Path,
     *,
     settings: Envs,
+    device: str,
     workers: Mapping[str, Path] | None = None,
-    host_cuda: HostCuda | None = None,
 ) -> EnvHandle | None:
-    """Return the handle `ensure_env` would return for `env` built from `lock` under `root`, or None if not built.
+    """Return the handle `ensure_env` would return for `env` built from `lock` for `device`, or None if not built.
 
     Nothing is built, locked or created.
 
@@ -403,7 +375,7 @@ def current_env(  # noqa: PLR0913 - the env, its lock, root and profile settings
         EnvLockError: the lock's header lacks what a build needs.
     """
     parsed = EnvLock.read(lock)
-    stem, index, _ = _stem(env, parsed, settings, workers, host_cuda)
+    stem, index = _stem(env, parsed, settings, workers, device)
     current = _read_record(Path(root), stem) if Path(root).is_dir() else None
     wanted = (file_digest("file@1", parsed.path), without_userinfo(index.url) if index else None)
     if current is None or (current.lock_sha, current.torch_index) != wanted:
@@ -417,15 +389,15 @@ def env_built(  # noqa: PLR0913 - as `current_env`
     root: Path,
     *,
     settings: Envs,
+    device: str,
     workers: Mapping[str, Path] | None = None,
-    host_cuda: HostCuda | None = None,
 ) -> bool:
-    """Return whether `ensure_env` would find `env` built from `lock` under `root`, building and creating nothing.
+    """Return whether `ensure_env` would find `env` built from `lock` for `device`, building and creating nothing.
 
     Raises:
         EnvLockError: the lock's header lacks what a build needs.
     """
-    return current_env(env, lock, root, settings=settings, workers=workers, host_cuda=host_cuda) is not None
+    return current_env(env, lock, root, settings=settings, device=device, workers=workers) is not None
 
 
 def _handle(root: Path, record: EnvRecord, lock: Path) -> EnvHandle:
@@ -477,7 +449,7 @@ def _build(  # noqa: PLR0913 - one build's inputs
     lock_sha: str,
     index: TorchIndex | None,
     uv: Uv,
-    host_cuda: HostCuda | None,
+    device: str,
     workers: Mapping[str, Path],
 ) -> EnvRecord:
     directory = root / f"{stem}-{uuid.uuid4().hex}"
@@ -496,7 +468,7 @@ def _build(  # noqa: PLR0913 - one build's inputs
             torch = uv("pip", "install", "--index-url", index.url, "--python", python, *lock.torch_pins)
             missing = _NO_WHEEL.findall(torch.stderr)
             if torch.returncode and missing:
-                raise CudaCompatibilityError(host_cuda or HostCuda(None, "none"), index, list(dict.fromkeys(missing)))
+                raise CudaCompatibilityError(device, index, list(dict.fromkeys(missing)))
             _check(torch, "install torch")
         body = ("pip", "install", "--python", python, "--no-deps", "--no-sources", "--requirement", str(lock.path))
         _check(uv(*body), "install the lock")
@@ -893,7 +865,6 @@ __all__ = [
     "EnvLock",
     "EnvLockError",
     "EnvRecord",
-    "HostCuda",
     "HostLockLacksBackend",
     "LockInputs",
     "ManagedPythonMissing",
@@ -901,7 +872,6 @@ __all__ = [
     "Uv",
     "compile_lock",
     "current_env",
-    "detect_host_cuda",
     "ensure_env",
     "host_lock_gaps",
     "installed_gaps",

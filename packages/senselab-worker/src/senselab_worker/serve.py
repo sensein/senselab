@@ -18,6 +18,7 @@ from senselab_worker.codec import (
     to_wire,
     validate_message,
 )
+from senselab_worker.device_check import require_device
 from senselab_worker.device_peak import Meter, torch_meter
 from senselab_worker.faults import (
     PASS_THROUGH,
@@ -84,14 +85,14 @@ def cached_load(load: Load, backend: str, cache: ModelCache) -> Load:
 def serve(load: Load, handle: Handle, rx: BinaryIO, tx: BinaryIO, meter: Meter[Any] = torch_meter) -> int:
     """Serve the protocol, reading from `rx` and writing to `tx`; return the process exit code.
 
-    `load(init)` is called once and returns the state. `handle(state, items, params)` gets the
-    decoded items (`{"id", "inputs"}`) and returns one `{"outputs": dict}` or `{"error": exception}`
-    per item, in order. Each item's result is written as its own line, then `done`, which carries the request's
-    device allocation peak and what stays allocated after it (`device_peak_bytes`, `device_allocated_bytes`) when
-    `meter` measures them (CUDA in use), the requests the state answered before it (`since_load`) and, on the first
-    one, the seconds the load took (`load_s`). Nothing an item
-    or `handle` does ends the loop, except `KeyboardInterrupt` and `SystemExit`. Returns 0 on stop
-    or EOF, and `EXIT_FATAL` after reporting a fatal error: a failed load, or a line from the host
+    `load(init)` is called once, after `require_device(init["device"])`, and returns the state.
+    `handle(state, items, params)` gets the decoded items (`{"id", "inputs"}`) and returns one `{"outputs": dict}`
+    or `{"error": exception}` per item, in order. Each item's result is written as its own line, then `done`, which
+    carries the request's device allocation peak and what stays allocated after it (`device_peak_bytes`,
+    `device_allocated_bytes`) when `meter` measures them (CUDA in use), the requests the state answered before it
+    (`since_load`) and, on the first one, the seconds the load took (`load_s`). Nothing an item or `handle` does ends
+    the loop, except `KeyboardInterrupt` and `SystemExit`. Returns 0 on stop or EOF, and `EXIT_FATAL` after reporting
+    a fatal error: a failed load, a granted device the env cannot use, or a line from the host
     that is not a valid message.
     """
     hello = {
@@ -107,6 +108,7 @@ def serve(load: Load, handle: Handle, rx: BinaryIO, tx: BinaryIO, meter: Meter[A
         if msg is None or _is_stop(msg):
             return 0
         array_dir, init = _init(msg)
+        require_device(init.get("device"))
         start = time.perf_counter()
         state = load(init)
         loaded_s = time.perf_counter() - start

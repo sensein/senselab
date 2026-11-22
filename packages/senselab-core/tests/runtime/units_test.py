@@ -97,7 +97,7 @@ OTHER = HardwareClass(device="cpu", name="Another CPU", cpus=4)
 PROVENANCE = Provenance(job=None, run="r1", senselab=None, profile="d" * 64, hardware=SEEN)
 
 
-def _handle(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
+def _handle(backend: BackendSpec, profile: ExecutionProfile, device: str) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
     return EnvHandle(
         python=source_tree_python(),
         python_version=platform.python_version(),
@@ -107,11 +107,11 @@ def _handle(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # no
     )
 
 
-def _unbuilt(backend: BackendSpec, profile: ExecutionProfile) -> None:  # noqa: ARG001 - an EnvRead
+def _unbuilt(backend: BackendSpec, profile: ExecutionProfile, device: str) -> None:  # noqa: ARG001 - an EnvRead
     return None
 
 
-def _unreadable(backend: BackendSpec, profile: ExecutionProfile) -> None:  # noqa: ARG001 - an EnvRead
+def _unreadable(backend: BackendSpec, profile: ExecutionProfile, device: str) -> None:  # noqa: ARG001 - an EnvRead
     raise EnvUnreadable("uv is not installed")
 
 
@@ -372,12 +372,12 @@ REGISTRY.add_task(ISOLATED)
 REGISTRY.add_backend(_backend(ISOLATED, env=Env.isolated("units-test")))
 
 
-def _isolated_unbuilt(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle | None:  # an EnvRead
-    return None if backend.env.kind == "isolated" else _handle(backend, profile)
+def _isolated_unbuilt(backend: BackendSpec, profile: ExecutionProfile, device: str) -> EnvHandle | None:  # an EnvRead
+    return None if backend.env.kind == "isolated" else _handle(backend, profile, device)
 
 
-def _isolated_built(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # an EnvRead
-    handle = _handle(backend, profile)
+def _isolated_built(backend: BackendSpec, profile: ExecutionProfile, device: str) -> EnvHandle:  # an EnvRead
+    handle = _handle(backend, profile, device)
     return replace(handle, lock_sha="3" * 64) if backend.env.kind == "isolated" else handle
 
 

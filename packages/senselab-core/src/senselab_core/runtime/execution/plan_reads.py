@@ -84,7 +84,7 @@ def servable_jobs(  # noqa: PLR0913 - the fragment's jobs and keys, the env, and
 
     Every job is computed where its env is not known: not built, not readable, or on a slurm node.
     """
-    env = envs.get(placement.backend)
+    env = envs.get(placement.backend, placement.device)
     if isinstance(env, Unresolved):
         return [False] * len(jobs)
     asks = job_asks(jobs, placement, keys, env, profile=profile, admits=admits, run=run, grid=BucketGrid.load_default())
@@ -124,7 +124,7 @@ def count_items(  # noqa: PLR0913 - the plan and its values, the store and run, 
         known = planned[node]
         jobs, placement = fragment_jobs(known.fragment, placed, values)
         backend = placement.backend
-        env = states.get(backend)
+        env = states.get(backend, placement.device)
         if isinstance(env, Unresolved):
             counts[record.resource_class] = replace(
                 held, undetermined=held.undetermined + len(jobs), why=(*held.why, env.reason)

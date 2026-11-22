@@ -6,6 +6,7 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 from senselab_worker.codec import validate_message
+from senselab_worker.device_check import require_device
 from senselab_worker.device_peak import torch_meter
 from senselab_worker.faults import PASS_THROUGH, FaultClass, ProtocolError, error_record
 from senselab_worker.model_cache import Loan, ModelCache, ModelKey, check_model_key
@@ -32,7 +33,7 @@ class HostWorker:
         cache: ModelCache,
         size_of: Callable[[object], int],
     ) -> None:
-        """Import `module` and load `init` under `key` in `cache`, sized by `size_of`.
+        """Check `init["device"]` (`require_device`), import `module` and load `init` under `key` in `cache`.
 
         Raises:
             ValueError: if `init` uses the reserved key `array_dir`, or `key` is not a `ModelKey`.
@@ -46,6 +47,7 @@ class HostWorker:
         self._cache = cache
         self._size_of = size_of
         with _fatal():
+            require_device(init.get("device"))
             backend = importlib.import_module(module)
             self._load = backend.load
             self._handle = backend.handle

@@ -94,20 +94,20 @@ class EnvStates:
     def __init__(self, profile: ExecutionProfile) -> None:
         """Read envs under `profile`."""
         self.profile = profile
-        self._built: dict[EnvIdentity, EnvHandle] = {}
+        self._built: dict[tuple[EnvIdentity, str], EnvHandle] = {}
 
-    def get(self, backend: BackendSpec) -> EnvHandle | Unresolved:
-        """Return the handle of `backend`'s built env, else the true reason it is not known before a worker starts.
+    def get(self, backend: BackendSpec, device: str) -> EnvHandle | Unresolved:
+        """Return the handle of `backend`'s env built for `device`, else why it is not known before a worker starts.
 
-        A handle is kept under its `env_identity`; an unbuilt env is read again, since the run builds it.
+        A handle is kept under its `env_identity` and device; an unbuilt env is read again, since the run builds it.
         """
         if self.profile.substrate.kind != "local":
             return Pending("the node a slurm worker runs on is chosen at submission, so its platform is not known")
-        key = env_identity(backend)
+        key = (env_identity(backend), device)
         if key in self._built:
             return self._built[key]
         try:
-            handle = packaged().env_read(backend, self.profile)
+            handle = packaged().env_read(backend, self.profile, device)
         except EnvUnreadable as err:
             return Unresolved(f"the env of backend {backend.name!r} cannot be read: {err}")
         if handle is None:
@@ -154,7 +154,7 @@ class UnitResolver:
         backend = placement.backend
         handle: EnvHandle | Unresolved | None = None
         if env is None:
-            handle = self.envs.get(backend)
+            handle = self.envs.get(backend, placement.device)
             if isinstance(handle, Unresolved):
                 return handle
         found = hardware if hardware is not None else self._hardware(placement)

@@ -125,7 +125,7 @@ entries:
 )
 
 
-def _no_env(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
+def _no_env(backend: BackendSpec, profile: ExecutionProfile, device: str) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
     raise AssertionError("resolving a plan opens no env")
 
 
@@ -530,12 +530,12 @@ def test_explain_lists_every_placement_field() -> None:
 @pytest.mark.logic
 def test_env_builds_announced() -> None:
     """An isolated env not yet built is announced, and a built one is not; a host env never is."""
-    _use(env_built=lambda backend, profile: False)
+    _use(env_built=lambda backend, profile, device: False)
     announced = _plan(_call(ISOLATED), _records("x"))
     assert announced.placement.env_builds == ("isolated:boxed",)
     assert "envs to build: isolated:boxed" in announced.explain()
     assert _plan(_call(), _records("x")).placement.env_builds == ()
-    _use(env_built=lambda backend, profile: True)
+    _use(env_built=lambda backend, profile, device: True)
     assert _plan(_call(ISOLATED), _records("x")).placement.env_builds == ()
 
 

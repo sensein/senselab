@@ -75,7 +75,7 @@ def registry(*tasks: TaskSpec, worker: str = BACKEND, name: str = "dsp", env: En
     return found
 
 
-def host_env(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
+def host_env(backend: BackendSpec, profile: ExecutionProfile, device: str) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
     """Return this interpreter as every backend's env, under a fixed lock."""
     return EnvHandle(
         python=source_tree_python(),

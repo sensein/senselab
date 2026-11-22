@@ -21,14 +21,12 @@ from senselab_core.runtime.envs import (
     CudaCompatibilityError,
     EnvHandle,
     EnvLockError,
-    HostCuda,
     HostLockLacksBackend,
     LockInputs,
     ManagedPythonMissing,
     TorchIndex,
     Uv,
     compile_lock,
-    detect_host_cuda,
     ensure_env,
     installed_gaps,
     lock_digest,
@@ -45,7 +43,6 @@ from syscall_faults_fixture import displace_before_proof
 pytestmark = pytest.mark.logic
 
 FAKE_UV = Uv((sys.executable, str(Path(__file__).with_name("fake_uv_fixture.py"))))
-CUDA_12_8 = HostCuda((12, 8), "nvidia-smi")
 PROFILE_INDEX = "https://mirror.example/whl/cu126"
 MIRROR = "https://user:secret@mirror.internal/whl/cu128"
 SETTINGS = Envs(server_start_margin_s=1.0)
@@ -78,12 +75,13 @@ def uv_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return log
 
 
-def _ensure(
+def _ensure(  # noqa: PLR0913 - the lock and the settings, lease, clock and device it is built under
     tmp_path: Path,
     lock: Path,
     settings: Envs = SETTINGS,
     lease: JobLease = LEASE,
     clock: Clock = SystemClock(),  # noqa: B008
+    device: str = "cuda",
 ) -> EnvHandle:
     return ensure_env(
         Env.isolated("demo"),
@@ -91,49 +89,54 @@ def _ensure(
         tmp_path / "envs",
         settings=settings,
         lease=lease,
+        device=device,
         uv=FAKE_UV,
-        host_cuda=CUDA_12_8,
         clock=clock,
     )
 
 
-def _smi(version: str) -> str:
-    return f"| NVIDIA-SMI 570.86   Driver Version: 570.86   CUDA Version: {version}  |"
-
-
 @pytest.mark.parametrize(
-    ("smi", "nvcc", "ceiling", "tag"),
+    ("device", "ceiling", "tag"),
     [
-        (_smi("12.9"), None, None, "cu128"),
-        (_smi("12.8"), None, (13, 0), "cu128"),
-        (_smi("13.0"), None, (13, 0), "cu130"),
-        (_smi("12.9"), None, (12, 1), "cu121"),
-        (_smi("12.4"), None, None, "cu124"),
-        (_smi("11.8"), None, None, "cpu"),
-        (None, "Cuda compilation tools, release 12.6, V12.6.85", None, "cu126"),
-        ("garbled", "garbled", None, "cpu"),
-        (None, None, None, "cpu"),
+        ("cuda", None, "cu128"),
+        ("cuda", (13, 0), "cu130"),
+        ("cuda", (12, 1), "cu121"),
+        ("cuda", (12, 0), "cpu"),
+        ("cuda", (0, 0), "cpu"),
+        ("cpu", (13, 0), "cpu"),
+        ("mps", None, "cpu"),
     ],
 )
-def test_cuda_index_routing(smi: str | None, nvcc: str | None, ceiling: tuple[int, int] | None, tag: str) -> None:
-    """The probed CUDA, capped by the lock's ceiling, picks the newest index at or below it; no CUDA picks CPU."""
-    outputs = {"nvidia-smi": smi, "nvcc": nvcc}
-
-    def run(cmd: list[str]) -> str:
-        out = outputs[cmd[0]]
-        if out is None:
-            raise FileNotFoundError(cmd[0])
-        return out
-
-    index = pick_torch_index(detect_host_cuda(run=run), max_cuda=ceiling)
+def test_the_device_picks_the_index(device: str, ceiling: tuple[int, int] | None, tag: str) -> None:
+    """A cuda device gets the newest CUDA index at or below the lock's ceiling; any other device the CPU index."""
+    index = pick_torch_index(device, max_cuda=ceiling)
     assert index.tag == tag
     assert index.url == (CPU_INDEX if tag == "cpu" else f"https://download.pytorch.org/whl/{tag}")
-    assert index.source == "probe"
+    assert index.source == "device"
 
 
-def test_profile_torch_index_overrides_probe_and_names_its_build(tmp_path: Path, uv_log: Path) -> None:
-    """The profile's `envs.torch_index` replaces the probed index, and torch installs from it."""
-    assert pick_torch_index(CUDA_12_8, override=PROFILE_INDEX) == TorchIndex(PROFILE_INDEX, "cu126", "profile")
+def test_a_cuda_env_built_on_a_host_without_cuda_installs_cuda_torch(
+    tmp_path: Path, uv_log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A coordinator on a CPU node builds a cuda class's env from the CUDA index, and a cpu class's apart from it.
+
+    No `nvidia-smi` or `nvcc` is reachable, as on a CPU node: the index is the worker's device's, not the build
+    host's, so a GPU worker on another node never reuses a CPU torch build.
+    """
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    lock = _lock(tmp_path)
+    cuda = _ensure(tmp_path, lock, device="cuda")
+    cpu = _ensure(tmp_path, lock, device="cpu")
+    indexes = [c[c.index("--index-url") + 1] for c in _calls(uv_log) if "--index-url" in c]
+    assert indexes == ["https://download.pytorch.org/whl/cu128", CPU_INDEX]
+    assert cuda.torch_index == "https://download.pytorch.org/whl/cu128" and cpu.torch_index == CPU_INDEX
+    assert cuda.python != cpu.python
+    assert sorted(p.name.split("-")[1] for p in (tmp_path / "envs").glob("demo-*.json")) == ["cpu", "cu128"]
+
+
+def test_profile_torch_index_overrides_the_device_and_names_its_build(tmp_path: Path, uv_log: Path) -> None:
+    """The profile's `envs.torch_index` replaces the device's index, and torch installs from it."""
+    assert pick_torch_index("cuda", override=PROFILE_INDEX) == TorchIndex(PROFILE_INDEX, "cu126", "profile")
     handle = _ensure(tmp_path, _lock(tmp_path), Envs(server_start_margin_s=1.0, torch_index=PROFILE_INDEX))
     (stage_one,) = [c for c in _calls(uv_log) if "--index-url" in c]
     assert stage_one[stage_one.index("--index-url") + 1] == PROFILE_INDEX
@@ -162,6 +165,7 @@ def test_torch_index_recorded_in_context(tmp_path: Path, uv_log: Path) -> None:
         tmp_path / "envs",
         settings=SETTINGS,
         lease=LEASE,
+        device="cuda",
         uv=FAKE_UV,
     )
     assert torch_free.torch_index is None
@@ -172,13 +176,12 @@ _DRIVER = """
 import sys
 from pathlib import Path
 from senselab_core.kernel.declare import Env
-from senselab_core.runtime.envs import HostCuda, Uv, ensure_env
+from senselab_core.runtime.envs import Uv, ensure_env
 from senselab_core.runtime.profiles import ExecutionProfile
 root, lock, fake = sys.argv[1:]
 handle = ensure_env(Env.isolated("demo"), Path(lock), Path(root), settings=ExecutionProfile.load().envs,
-                    lease=ExecutionProfile.load().lease,
-                    uv=Uv((sys.executable, fake)),
-                    host_cuda=HostCuda((12, 8), "nvidia-smi"))
+                    lease=ExecutionProfile.load().lease, device="cuda",
+                    uv=Uv((sys.executable, fake)))
 print(handle.python)
 """
 
@@ -285,8 +288,8 @@ def test_worker_modules_are_placed_where_the_worker_imports_them(tmp_path: Path,
             tmp_path / "envs",
             settings=SETTINGS,
             lease=LEASE,
+            device="cuda",
             uv=FAKE_UV,
-            host_cuda=CUDA_12_8,
             workers=workers,
         )
         return next((Path(handle.python).parent.parent / "lib").glob("python*/site-packages"))
@@ -313,12 +316,16 @@ def test_host_env_requires_a_managed_interpreter(tmp_path: Path, monkeypatch: py
     lock = tmp_path / "uv.lock"
     lock.write_text('version = 1\n[[package]]\nname = "numpy"\nversion = "2.1.0"\n')
     monkeypatch.setenv("FAKE_UV_PYTHON_DIR", str(Path(sys.base_prefix).resolve().parent))
-    handle = ensure_env(Env.host(), lock, tmp_path, settings=SETTINGS, lease=LEASE, uv=FAKE_UV, requirements=["numpy"])
+    handle = ensure_env(
+        Env.host(), lock, tmp_path, settings=SETTINGS, lease=LEASE, device="cpu", uv=FAKE_UV, requirements=["numpy"]
+    )
     assert handle.python == sys.executable
     assert handle.torch_index is None
     monkeypatch.setenv("FAKE_UV_PYTHON_DIR", str(tmp_path / "elsewhere"))
     with pytest.raises(ManagedPythonMissing, match="uv python install"):
-        ensure_env(Env.host(), lock, tmp_path, settings=SETTINGS, lease=LEASE, uv=FAKE_UV, requirements=["numpy"])
+        ensure_env(
+            Env.host(), lock, tmp_path, settings=SETTINGS, lease=LEASE, device="cpu", uv=FAKE_UV, requirements=["numpy"]
+        )
 
 
 def test_other_venv_failure_is_not_managed_python_missing(
@@ -391,14 +398,23 @@ def _uv_lock(tmp_path: Path, *packages: tuple[str, str], extras: dict[str, dict[
 
 
 def _host(tmp_path: Path, lock: Path, requirements: list[str]) -> EnvHandle:
-    return ensure_env(Env.host(), lock, tmp_path, settings=SETTINGS, lease=LEASE, uv=FAKE_UV, requirements=requirements)
+    return ensure_env(
+        Env.host(), lock, tmp_path, settings=SETTINGS, lease=LEASE, device="cpu", uv=FAKE_UV, requirements=requirements
+    )
 
 
 def test_host_without_a_lock_checks_the_installed_packages(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """With no lock, a host env is opened when the installed distributions satisfy the requirements."""
     monkeypatch.setenv("FAKE_UV_PYTHON_DIR", str(Path(sys.base_prefix).resolve().parent))
     handle = ensure_env(
-        Env.host(), None, tmp_path, settings=SETTINGS, lease=LEASE, uv=FAKE_UV, requirements=["numpy", "pytest>=1"]
+        Env.host(),
+        None,
+        tmp_path,
+        settings=SETTINGS,
+        lease=LEASE,
+        device="cpu",
+        uv=FAKE_UV,
+        requirements=["numpy", "pytest>=1"],
     )
     assert handle.python == sys.executable and handle.lock_sha
     assert installed_gaps(["numpy>=0", "no-such-dist-xyz", "numpy<0.1", "no-such-dist-xyz; python_version < '3'"]) == [
@@ -416,6 +432,7 @@ def test_host_without_a_lock_refuses_a_real_gap(tmp_path: Path) -> None:
             tmp_path,
             settings=SETTINGS,
             lease=LEASE,
+            device="cpu",
             uv=FAKE_UV,
             requirements=["numpy", "no-such-dist-xyz"],
         )

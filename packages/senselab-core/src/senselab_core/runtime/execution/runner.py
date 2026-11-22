@@ -883,7 +883,7 @@ def prepare(  # noqa: PLR0913 - the fragment and the run it is of
     jobs, placement = fragment_jobs(fragment, placed, values)
     backend, call = placement.backend, jobs[0].call
     licensed = code_license(run, placement, call)
-    env = packaged().open_env(backend, profile)
+    env = packaged().open_env(backend, profile, placement.device)
     expected = service_of(backend, call.model)
     grid = BucketGrid.load_default()
     store = session.store

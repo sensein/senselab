@@ -76,7 +76,7 @@ for _spec in (INVARIANT, BUCKETED, UNKEYED, TEXT_BUCKETED, PASS):
     REGISTRY.add_backend(_spec)
 
 
-def _this_interpreter(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
+def _this_interpreter(backend: BackendSpec, profile: ExecutionProfile, device: str) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
     return EnvHandle(source_tree_python(), platform.python_version(), "1" * 64, "2" * 64, None)
 
 

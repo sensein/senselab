@@ -15,7 +15,7 @@ from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.testing.workers import mit_lock_records
 
 
-def this_interpreter(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
+def this_interpreter(backend: BackendSpec, profile: ExecutionProfile, device: str) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
     """Open every backend's env as this interpreter."""
     return EnvHandle(sys.executable, platform.python_version(), "1" * 64, "2" * 64, None)
 

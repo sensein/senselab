@@ -78,7 +78,7 @@ class RealWorkers:
         entry = packaged().catalogue.backend_entry(backend)
         if entry is not None:
             init["model"] = {"source": "hf", "id": entry.id, "identity": entry.revision}
-        env = packaged().open_env(backend, self.profile)
+        env = packaged().open_env(backend, self.profile, self.device)
         if backend.env.kind == "server":
             if entry is None:
                 raise ValueError(f"backend {name!r} serves a model through a server, and none is catalogued for it")
