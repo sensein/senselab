@@ -257,10 +257,13 @@ def calibration_root(profile: ExecutionProfile) -> Path | None:
     """Return where every session of the profile keeps the pool's calibration: under its first writable measures root.
 
     The roots are the profile's `calibration.measures_roots` (`resolve_roots`), so a later session, over any pool
-    root, reads the samples and unfit records an earlier one wrote. None (logged) when no root is writable.
+    root, reads the samples and unfit records an earlier one wrote. Under `calibration.trust: own` the directory is
+    the reader's own (named by its uid), so another user's records never steer its placement; under `group` it is
+    shared. None (logged) when no root is writable.
     """
+    own = profile.calibration.trust == "own"
     for root in resolve_roots(profile.calibration.measures_roots, cache_root()):
-        found = root / CALIBRATION_DIR
+        found = root / CALIBRATION_DIR / str(os.geteuid()) if own else root / CALIBRATION_DIR
         try:
             found.mkdir(parents=True, exist_ok=True)
         except OSError as err:

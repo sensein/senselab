@@ -232,6 +232,29 @@ def test_a_later_session_reads_an_earlier_ones_unfit_record_and_starts_on_the_la
     assert _loads(tmp_path) == 3
 
 
+def test_under_own_trust_another_users_unfit_record_does_not_steer_placement(tmp_path: Path, planted: Path) -> None:
+    """A group-trusted session's unfit record is not read by an own-trusted one, whose calibration is the uid's."""
+    group = TWO_CLASSES.model_copy(
+        update={"calibration": TWO_CLASSES.calibration.model_copy(update={"trust": "group"})}
+    )
+    with packaged(registry(TASK, worker=BACKEND), tmp_path / "cache"):
+        (tmp_path / "oom").write_text("1")
+        with served(tmp_path / "first", group, store=tmp_path / "store") as (session, pool):
+            pool.serve("cpu:big")
+            placed, values = planned(TASK, group, ["a"])
+            assert start(placed, session, values=values).wait(timeout=100).done
+            shared = session.calibration.root
+        with served(tmp_path / "second", TWO_CLASSES, store=tmp_path / "store") as (session, pool):
+            pool.serve("cpu:big")
+            assert session.calibration.root == shared / str(os.geteuid())
+            placed, values = planned(TASK, TWO_CLASSES, ["b"])
+            run = start(placed, session, values=values)
+            assert run.wait(timeout=100).done
+            [(_, given)] = list(run.results())
+            stored = session.store.stored(next(iter(given.keys.values())))  # type: ignore[union-attr]
+    assert [context["pool"]["class"] for _, context, _ in stored] == ["cpu"]
+
+
 def test_off_host_workers_get_only_tolerant_unsampled_hits_served_by_the_coordinator(
     tmp_path: Path, planted: Path
 ) -> None:

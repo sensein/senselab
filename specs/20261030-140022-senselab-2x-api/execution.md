@@ -751,7 +751,10 @@ round 1). `substrate.placement_hook_s` stays: it bounds the site hook, which a r
 **Calibration.** The pool's `DirectoryCalibration` (memory samples, unfit records) lives under the profile's first
 writable `calibration.measures_roots` entry, in `pydra-directory-calibration@1/` (fix round 1), so every session of the
 profile, over any pool root, reads what earlier ones measured: a backend that ran out of memory on a class is placed above
-it at once by the next run. pydra reads every file under that root; `calibration.trust: own` does not filter it.
+it at once by the next run. pydra reads every file under its directory, so under `calibration.trust: own` the
+directory is the user's own, `<root>/pydra-directory-calibration@1/<uid>` (fix round 2), and another user's records
+never steer placement; under `group` it is the shared one. Owner filtering inside `DirectoryCalibration` is a pydra
+follow-up.
 
 **Storage.** The work directories and the pool root are on storage every node sees (RFC 0003 §5.4); pydra needs nothing
 under `cache_root` for a job that has a work directory. **A resume waits out the store's leases:** a job lease a killed
