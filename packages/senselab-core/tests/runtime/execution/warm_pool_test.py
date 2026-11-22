@@ -202,6 +202,26 @@ def test_a_process_holds_one_default_session_and_closes_the_one_it_replaces(tmp_
     assert second is not first and first.pool._closed and not second.pool._closed
 
 
+def test_a_failed_open_of_a_new_default_session_closes_the_one_it_replaced(
+    tmp_path: Path, planted: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The open of the next default session raises: the session it replaced is closed all the same, and none is held."""
+    two = RESIDENT.model_copy(
+        update={"resource_classes": {"cpu": RESIDENT.resource_classes["cpu"].model_copy(update={"max_workers": 2})}}
+    )
+
+    def refused(*_: object, **__: object) -> PoolSession:
+        raise NodeLocalRoot("refused for the test")
+
+    with packaged(registry(TASK, worker=BACKEND), tmp_path / "cache"):
+        call(TaskCall.model_validate({"task": TASK.name, "inputs": {"text": "a"}}), profile=RESIDENT)
+        [first] = warm._DEFAULTS.values()
+        monkeypatch.setattr(warm, "PoolSession", refused)
+        with pytest.raises(NodeLocalRoot):
+            call(TaskCall.model_validate({"task": TASK.name, "inputs": {"text": "b"}}), profile=two)
+    assert first.pool._closed and not warm._DEFAULTS and not warm._RETIRED
+
+
 def test_a_replaced_default_session_is_closed_only_when_its_live_run_ends(
     tmp_path: Path, planted: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

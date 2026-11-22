@@ -442,22 +442,24 @@ def default_session(
     """
     key = (profile.canonical_digest(), str(Path(store).absolute()), repr(worker_classes(profile, placements)))
     idle: list[PoolSession] = []
-    with _DEFAULTS_LOCK:
-        found = _DEFAULTS.get(key)
-        if found is None:
-            for held in _DEFAULTS.values():
-                (_RETIRED if _LIVE.get(id(held), 0) else idle).append(held)
-            _DEFAULTS.clear()
-            root = cache_root() / POOLS_DIR / f"{os.getpid()}-{secrets.token_hex(4)}"
-            found = PoolSession(profile, root, Path(store), placements=placements)
-            if not _OPENER:
-                atexit.unregister(close_default_sessions)
-                atexit.register(close_default_sessions)
-            _OPENER[:] = [os.getpid()]
-            _DEFAULTS[key] = found
-        _LIVE[id(found)] = _LIVE.get(id(found), 0) + 1
-    for held in idle:
-        _close(held)
+    try:
+        with _DEFAULTS_LOCK:
+            found = _DEFAULTS.get(key)
+            if found is None:
+                for held in _DEFAULTS.values():
+                    (_RETIRED if _LIVE.get(id(held), 0) else idle).append(held)
+                _DEFAULTS.clear()
+                root = cache_root() / POOLS_DIR / f"{os.getpid()}-{secrets.token_hex(4)}"
+                found = PoolSession(profile, root, Path(store), placements=placements)
+                if not _OPENER:
+                    atexit.unregister(close_default_sessions)
+                    atexit.register(close_default_sessions)
+                _OPENER[:] = [os.getpid()]
+                _DEFAULTS[key] = found
+            _LIVE[id(found)] = _LIVE.get(id(found), 0) + 1
+    finally:
+        for held in idle:
+            _close(held)
     return found
 
 
