@@ -15,7 +15,7 @@ import re
 import secrets
 import tempfile
 import threading
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -31,7 +31,7 @@ from pydra.workers.pool.classes import WorkerClass
 from pydra.workers.pool.faults import FaultBudgets
 from pydra.workers.pool.faults import FaultRecord as PoolFault
 from pydra.workers.pool.fit import MeasuredFit
-from pydra.workers.pool.pool import WarmPool
+from pydra.workers.pool.pool import WarmPool, _newest_mtime
 from pydra.workers.pool.settings import PoolSettings
 from pydra.workers.pool.substrate import LocalSubstrate, SlurmSubstrate, Substrate
 from senselab_worker.faults import FaultClass, ProtocolError, classification
@@ -377,12 +377,36 @@ class PoolSession:
             settings=pool_settings if pool_settings is not None else settings(profile),
         )
         self.submitter = Submitter(worker=self.pool, providers=list(self.providers), telemetry=False)
+        self._beats: dict[tuple[str, str], float] = {}
 
     @property
     def epoch(self) -> int:
         """The pool's coordinator epoch."""
         assert self.pool.epoch is not None
         return int(self.pool.epoch)
+
+    def working(self, jobs: Iterable[object], classes: Iterable[str]) -> bool:
+        """Whether the pool is at work for `jobs` (pool jobs of this session) since this was last asked.
+
+        It is when a worker of one of `classes`, or of the class a job's ticket is queued on, is ready or starting
+        (a submitted Slurm job still queued is starting), or when the claim lease of a ticket holding one of `jobs`
+        has beaten: its newest mtime differs from the one seen at the last call, or it is seen for the first time.
+        These are read from the pool's own state, which pydra does not yet expose.
+        """
+        pool: Any = self.pool
+        with pool._lock:  # noqa: SLF001 - pydra exposes no reader of its open jobs and started workers yet
+            held = [pool._open.get(job) for job in jobs]  # noqa: SLF001
+            tickets = {(j.ticket.queue, j.ticket.digest) for j in held if j is not None and j.ticket is not None}
+            started = {h.worker_class for h in pool._started.values()}  # noqa: SLF001
+        if started & ({*classes} | {queue.split("#", 1)[0] for queue, _ in tickets}):
+            return True
+        beat = False
+        for queue, digest in tickets:
+            newest = _newest_mtime(pool.pool.queue(queue).path / "claims" / f"{digest}.lease")
+            if newest is not None and self._beats.get((queue, digest)) != newest:
+                self._beats[(queue, digest)] = newest
+                beat = True
+        return beat
 
     def job(self, doc: JobDoc, loader: Loader, name: str) -> PydraJob:
         """Return the pool job of `doc`, its model worker loaded by `loader`, asking for its plan class's resources."""

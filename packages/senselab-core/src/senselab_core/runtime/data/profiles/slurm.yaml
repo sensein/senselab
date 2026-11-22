@@ -59,7 +59,8 @@ substrate:
     retry_first_s: 0.5
 # The quantum ceilings, how pool workers poll and how long they stay idle, the threads that ask the store which jobs it
 # would serve, how often a following coordinator checks a cancel, how often `Run.wait` reads another process's run, and
-# how long a run with jobs in the pool waits with no outcome before it fails naming the classes still waiting.
+# how long a run with jobs in the pool waits with no outcome, no ready or starting worker and no claim heartbeat
+# before it fails naming the classes still waiting.
 pool:
   quantum_items: 100
   quantum_s: 300
@@ -68,7 +69,7 @@ pool:
   idle_polls: 3
   cancel_check_s: 0.05
   event_poll_s: 0.5
-  no_progress_s: 7200
+  no_progress_s: 2700
 # The fractions and targets each unit's batch, quantum and worker count are derived from: the load's largest share of a
 # quantum, the share of a worker's memory a batch fills, the wall time a queue's work aims to end in, and the one-job
 # items a unit without a measure runs first, the workers its queue is given for them, and the seconds a worker's read

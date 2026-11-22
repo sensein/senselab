@@ -5,8 +5,9 @@ import os
 import tempfile
 import threading
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pool_stack_fixture import packaged, planned, registry, scoring
@@ -71,6 +72,40 @@ CLUSTER = (
     next(p for p in Path(__file__).resolve().parents if p.name == "packages")
     / "senselab-core/tests/data/profiles/cluster.yaml"
 )
+
+
+@dataclass(frozen=True)
+class _Pending:
+    """A worker handle of a submitted job that stays queued: listed live, never ready."""
+
+    token: str
+    worker_class: str
+    cause: str | None = None
+
+
+class _Queued:
+    """A substrate whose every start is a job that stays queued, as a Slurm worker job waiting for a GPU does."""
+
+    def __init__(self) -> None:
+        """No job submitted yet."""
+        self.handles: list[_Pending] = []
+
+    def attach(self, attachment: object) -> None:
+        """Nothing to keep."""
+
+    def start(self, cls: Any, n: int) -> list[_Pending]:  # noqa: ANN401 - a pydra worker class
+        made = [_Pending(f"{len(self.handles) + i:032x}", cls.name) for i in range(n)]
+        self.handles += made
+        return made
+
+    def live(self) -> list[_Pending]:
+        return list(self.handles)
+
+    def stop(self, workers: object) -> None:
+        """A queued job is left to the test's end."""
+
+    def can_start(self, cls: object) -> bool:
+        return True
 
 
 class _Refusing:
@@ -451,6 +486,36 @@ def test_a_run_whose_pool_starts_no_worker_fails_within_its_no_progress_bound(tm
     assert caught.value.classes == ("cpu",)
     assert caught.value.bound_s == BOUND_S
     assert BOUND_S <= took < BOUND_S + 10
+
+
+def test_a_job_longer_than_the_bound_completes_while_its_worker_beats_its_claim(
+    tmp_path: Path, planted: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One job runs past `no_progress_s` on a worker whose claim lease beats: the run ends done, not `NoProgress`."""
+    monkeypatch.setenv("SENSELAB_TEST_SLEEP_S", str(3 * BOUND_S))
+    with (
+        packaged(registry(TASK, worker=BACKEND), tmp_path / "cache"),
+        served(tmp_path, BOUNDED) as (session, _),
+    ):
+        placed, values = planned(TASK, BOUNDED, ["a"])
+        run = start(placed, session, values=values)
+        status = run.wait(timeout=60)
+    assert status.done and _kinds(run.run_dir) == ["finished"]
+
+
+def test_a_class_whose_worker_is_still_starting_is_not_stalled(tmp_path: Path, planted: Path) -> None:
+    """A worker job that stays queued past the bound keeps the run waiting; the run is then cancelled, not stalled."""
+    with (
+        packaged(registry(TASK, worker=BACKEND), tmp_path / "cache"),
+        PoolSession(BOUNDED, tmp_path / "session", tmp_path / "store", substrate=_Queued(), here=True) as session,
+    ):
+        placed, values = planned(TASK, BOUNDED, ["a"])
+        run = start(placed, session, values=values)
+        time.sleep(3 * BOUND_S)
+        assert not run.status().done
+        run.cancel()
+        status = run.wait(timeout=60)
+    assert status.cancelled
 
 
 def test_the_no_progress_error_names_the_pools_latest_start_error(tmp_path: Path, planted: Path) -> None:

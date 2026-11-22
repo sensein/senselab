@@ -396,7 +396,8 @@ class _Driver:
     `Result` holding the job's `ResultRef`, or `Failed(ElementFailed)`. A node whose jobs cannot be formed is, for each
     of its jobs: `Failed` for a license refusal or any other exception (the latter raised after the run). A held job
     is `NotRun(held=True)`, and the run raises the hold after the loop; a cancelled one is `NotRun`. While jobs are in
-    the pool, `no_progress_s` with no outcome and no job sent raises `NoProgress`.
+    the pool, `no_progress_s` with no outcome, no job sent and the pool not working for them (`PoolSession.working`)
+    raises `NoProgress`.
     """
 
     def __init__(  # noqa: PLR0913 - the run's parts
@@ -436,7 +437,8 @@ class _Driver:
         Raises:
             Exception: the first error of the run that is no job's failure, or a cancellation.
             QueueHeld: the pool held jobs of the run; they have no terminal event.
-            NoProgress: jobs were in the pool, and none gave an outcome nor was one sent, for `no_progress_s`.
+            NoProgress: jobs were in the pool, and none gave an outcome, none was sent and the pool was not working
+                for them, for `no_progress_s`.
             WorkflowError: pydra errored a job no pool job failed.
             RuntimeError: nothing can progress, but the run is not done.
         """
@@ -488,11 +490,17 @@ class _Driver:
             if self._receive(graph, wait):
                 self.moved = time.monotonic()
             elif self.sent and time.monotonic() - self.moved >= self.no_progress_s:
-                raise self._stalled()
+                if not self.session.working(self.sent, self._waiting()):
+                    raise self._stalled()
+                self.moved = time.monotonic()
+
+    def _waiting(self) -> tuple[str, ...]:
+        """The resource classes the run's open pool jobs were placed on."""
+        return tuple(sorted({s.doc.placement.resource_class for s in self.sent.values()}))
 
     def _stalled(self) -> NoProgress:
         """Return the run's `NoProgress`: the classes its open pool jobs wait on, and the pool's latest start errors."""
-        classes = tuple(sorted({s.doc.placement.resource_class for s in self.sent.values()}))
+        classes = self._waiting()
         causes = getattr(self.session.pool, "_cause", {})
         return NoProgress(self.no_progress_s, classes, {c: str(causes[c]) for c in classes if c in causes})
 
@@ -945,7 +953,7 @@ class PydraRunner:
             ValueError: as `compile_plan`, or the plan was placed under another profile than the session's.
             RunCancelled: `cancel` was set before every job ran.
             QueueHeld: the pool held jobs of the run; they have no terminal event.
-            NoProgress: the pool gave no outcome for `pool.no_progress_s` while jobs were in it.
+            NoProgress: the pool was not working for the run's open jobs for `pool.no_progress_s`.
             WorkflowError: pydra errored a job no pool job failed.
             Exception: the first other error forming a node's jobs raised, after the run.
         """

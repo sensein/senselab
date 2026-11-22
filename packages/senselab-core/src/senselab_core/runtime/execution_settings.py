@@ -108,7 +108,8 @@ class PoolSettings(Frozen):
     threads that ask the result store which jobs it would serve, for a plan's counts. A worker exits once its queues
     stayed empty for `idle_polls` polls of `poll_s`; a following coordinator checks its cancel event every
     `cancel_check_s`; `Run.wait` reads the event log of a run another process drives every `event_poll_s`. A run with
-    jobs in the pool fails with `NoProgress` once no outcome has come back and no job was sent for `no_progress_s`.
+    jobs in the pool fails with `NoProgress` once no outcome has come back, no job was sent and no worker of theirs was
+    ready, starting or beating its claim for `no_progress_s`.
     """
 
     quantum_items: PositiveInt

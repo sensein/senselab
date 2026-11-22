@@ -351,17 +351,19 @@ class WorkersBroken(QueueHeld):
 
 
 class NoProgress(RuntimeError):
-    """A run's pool jobs gave no outcome, and no job was sent, for `bound_s` (`pool.no_progress_s`).
+    """A run's pool jobs made no progress for `bound_s` (`pool.no_progress_s`).
 
-    `classes` are the resource classes of the jobs still waiting; `start_errors` the pool's latest start error of each
-    that has one.
+    No outcome came back, no job was sent, and no worker of theirs was ready, starting or beating its claim.
+    `classes` are the resource classes of the jobs still waiting; `start_errors` the pool's latest start error of
+    each that has one.
     """
 
     def __init__(self, bound_s: float, classes: tuple[str, ...], start_errors: Mapping[str, str]) -> None:
         """Name the bound, the waiting classes and each one's latest start error."""
         errors = "; ".join(f"{c}: {e}" for c, e in start_errors.items()) or "the pool reported none"
         super().__init__(
-            f"no outcome for {bound_s:g} s (pool.no_progress_s) while jobs wait on resource classes"
+            f"no outcome and no ready, starting or beating worker for {bound_s:g} s (pool.no_progress_s) while jobs"
+            " wait on resource classes"
             f" {', '.join(classes)}; latest start errors: {errors}"
         )
         self.bound_s, self.classes, self.start_errors = bound_s, classes, dict(start_errors)
