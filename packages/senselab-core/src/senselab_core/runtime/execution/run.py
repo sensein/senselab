@@ -589,10 +589,12 @@ class Run:
 
     def _stopped(self) -> bool:
         """Return whether the pool the run's latest attempt opened has no live coordinator; one not open yet has."""
+        pool = self.manifest().get("pool")
+        if not (isinstance(pool, str) and (Path(pool) / "pool.json").is_file()):
+            return False
         from senselab_core.runtime.execution.warm import coordinator_live  # noqa: PLC0415 - needs pydra
 
-        pool = self.manifest().get("pool")
-        return isinstance(pool, str) and (Path(pool) / "pool.json").is_file() and not coordinator_live(Path(pool))
+        return not coordinator_live(Path(pool))
 
     @property
     def cancelled(self) -> threading.Event:

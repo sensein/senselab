@@ -484,8 +484,9 @@ class Plan:
             )
         found, bound, unbound, resolver = reading.store, reading.bound, reading.unbound, reading.resolver
         run = self.config if self.config is not None else RunConfig()
+        unread = "the result store is read through pydra, which is not installed"
         counted = (
-            undetermined_lines(self.placement, unbound)
+            undetermined_lines(self.placement, unbound if bound is None else unread)
             if bound is None or found is None
             else item_lines(
                 plan_reads.count_items(self, bound, admits=found, run=run, profile=profile, envs=resolver.envs)
@@ -504,7 +505,7 @@ class Plan:
     ) -> "_Reading":
         """Return what `explain` and `placement_request` read a plan against: measures, inputs, store and units.
 
-        The store is opened only where pydra is installed; without it, nothing is read from one.
+        The store is opened only where pydra is installed; without it, nothing is read from one (`store` is None).
         """
         from senselab_core.runtime.execution.events import run_dir_of  # noqa: PLC0415 - as above
         from senselab_core.runtime.execution.run import (  # noqa: PLC0415 - run imports this module
@@ -528,9 +529,6 @@ class Plan:
 
             work = run_dir_of(self.hash) / "private" / "work"
             opened = functools.partial(admits, open_store(store if store is not None else results_root(), work))
-        elif bound is not None:
-            unbound = "the result store is read through pydra, which is not installed"
-            bound = None
         return _Reading(
             unit_reads.source,
             opened,
