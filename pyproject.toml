@@ -99,7 +99,7 @@ members = ["packages/senselab-*"]
 [tool.uv.sources]
 senselab-core = { workspace = true }
 senselab-worker = { workspace = true }
-pydra = { git = "https://github.com/nipype/pydra", rev = "3046e31e723c467150fb57d37a782c17b8e163f3" }
+pydra = { git = "https://github.com/nipype/pydra", rev = "b98cb8a0034543523c278f115422ff21a1bcb0e8" }
 
 [tool.hatch.metadata.hooks.custom]
 path = "hatch_build_pins.py"
