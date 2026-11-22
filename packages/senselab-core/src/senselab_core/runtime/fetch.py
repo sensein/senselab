@@ -736,7 +736,11 @@ def fetch(  # noqa: PLR0913 - the manifest, then keyword-only cache, source, ver
 
 
 _READ_ONLY_ERRNOS = frozenset({errno.EACCES, errno.EPERM, errno.EROFS})
-"""The errors of a cache that can be read but not written; a valid dataset in one is served with its marker kept."""
+"""The errors of a cache that can be read but not written.
+
+A dataset in one is served with its marker kept when the marker is valid, or when it is corrupt (an older format
+included) and this fetch hashed every blob in full.
+"""
 
 
 def _fetch_into(  # noqa: PLR0913 - fetch's arguments plus the two directories it opened
@@ -798,7 +802,10 @@ def _fetch_into(  # noqa: PLR0913 - fetch's arguments plus the two directories i
                         keeps=lambda: _read_marker(ds, manifest, tmp)[1] == "valid",
                     )
             except OSError as err:
-                if marker_state != "valid" or err.errno not in _READ_ONLY_ERRNOS:
+                proven = marker_state == "valid" or (
+                    marker_state == "corrupt" and len(stamps) == len({f.sha256 for f in manifest.files})
+                )
+                if not proven or err.errno not in _READ_ONLY_ERRNOS:
                     raise
                 logger.warning("cannot refresh the marker of the read-only dataset %s: %s", ds.path, err)
         for name in replaced:
