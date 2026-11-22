@@ -9,18 +9,21 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from senselab_core.kernel import prov
 from senselab_core.kernel.dataset import Record, ValueInput
 from senselab_core.kernel.declare import BackendSpec, Env, Registry, TaskParams, TaskSpec
 from senselab_core.kernel.graph import Edge, Graph, Node, fan_out_issues
+from senselab_core.kernel.identity import ReusePolicy
 from senselab_core.kernel.license import License
 from senselab_core.runtime.call import Packaged, RunConfig, bind_input, use_packaged
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.datasets import RecordSet
 from senselab_core.runtime.envs import EnvHandle
-from senselab_core.runtime.execution import runner
+from senselab_core.runtime.execution import portable, runner
 from senselab_core.runtime.execution.events import TERMINAL, EventLog, read_events, run_dir_of, status_from
 from senselab_core.runtime.execution.executor import RunCancelled
-from senselab_core.runtime.execution.portable import read_outputs
+from senselab_core.runtime.execution.job import job_context
+from senselab_core.runtime.execution.portable import read_outputs, stored_evidence
 from senselab_core.runtime.execution.records import add_plan_entity
 from senselab_core.runtime.licenses import LicensePolicy, license_record
 from senselab_core.runtime.planner import Plan, plan
@@ -272,6 +275,35 @@ def test_records_of_one_content_are_one_execution_and_exact_reuses(tmp_path: Pat
     plan_entity.write(run_dir_of(placed.hash))
     activities = ProvStore.read(run_dir_of(placed.hash)).activities()
     assert sorted("senselab:Reuse" in a.types() for a in activities) == [False, False, True, True]
+
+
+@pytest.mark.contract
+def test_a_verified_hit_records_an_execution_naming_its_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sampled cross-context hit recomputes: its executed activity's `senselab:verifies` is the evidence's digest."""
+    placed, values = _plan(
+        _graph([("a", SCORE)], [("input.text", "a.text", "map")], text="list[json]"), [{"text": "v"}]
+    )
+    status, store, _ = _run(placed, values, tmp_path)
+    assert status.done
+    monkeypatch.setattr(
+        "senselab_core.runtime.execution.portable.job_context",
+        lambda *a: job_context(*a).model_copy(update={"numerics": {"elsewhere": "gpu"}}),
+    )
+    sampling = dataclasses.replace(placed, config=RunConfig(ReusePolicy.TOLERANT, 1.0))
+    events = EventLog(tmp_path / "again", "a2", 1)
+    with served(tmp_path / "again-pool", store=tmp_path / "pool" / "store") as (session, _):
+        again = runner.PydraRunner(profile=PROFILE, work_dir=tmp_path / "pydra2").run_plan(
+            sampling, session, values=values, events=events
+        )
+        [evidence] = stored_evidence(session.store)
+    assert again.done and evidence.agree
+    executed = [a for a in ProvStore.read(run_dir_of(placed.hash)).activities() if "senselab:Reuse" not in a.types()]
+    verifying = [a for a in executed if "senselab:verifies" in a.node()]
+    assert len(executed) == 2 and len(verifying) == 1
+    assert prov.literal_value(verifying[0].node()["senselab:verifies"]) == evidence.canonical_digest()
+    assert portable._VERIFIED == {} and portable._RAN == {}
 
 
 @pytest.mark.contract

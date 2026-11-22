@@ -135,24 +135,31 @@ def stored_context(context: Mapping[str, Any]) -> ExecutionContext:
 
 
 _RAN: dict[str, dict[str, str | None]] = {}
+_VERIFIED: dict[str, str] = {}
 _RAN_LOCK = threading.Lock()
 
 
 def ran(checksum: str, started: datetime, output: str) -> None:
     """Note, in the process that ran job `checksum`, when its call started and ended and its output identity."""
     with _RAN_LOCK:
-        _RAN[checksum] = {"started": started.isoformat(), "ended": _now(), "output": output, "verifies": None}
+        _RAN[checksum] = {"started": started.isoformat(), "ended": _now(), "output": output}
+        _VERIFIED.pop(checksum, None)
 
 
 def _verified(checksum: str, evidence: str) -> None:
     with _RAN_LOCK:
-        _RAN.setdefault(checksum, {"started": _now(), "ended": _now(), "output": None})["verifies"] = evidence
+        _VERIFIED[checksum] = evidence
+
+
+def _verifies(checksum: str) -> str | None:
+    with _RAN_LOCK:
+        return _VERIFIED.pop(checksum, None)
 
 
 def _ran(checksum: str) -> dict[str, str | None]:
     with _RAN_LOCK:
         found = _RAN.pop(checksum, None)
-    return found if found is not None else {"started": _now(), "ended": _now(), "output": None, "verifies": None}
+    return found if found is not None else {"started": _now(), "ended": _now(), "output": None}
 
 
 def _now() -> str:
@@ -183,7 +190,7 @@ class SenselabIdentity:
     def context(self, job: "PydraJob", phase: str) -> dict[str, Any]:
         """Return the lookup context the job carries, or the context of running it here, with its `senselab` section.
 
-        The execute context also records when the call ran and the evidence it verified (`ran`).
+        The execute context also records when the call ran and its output identity (`ran`).
         """
         doc = doc_of(job.task)
         section = doc.section()
@@ -367,7 +374,7 @@ def record_execution(
     """The store's `on_commit`: write the executed activity of an entry to its run's provenance, before its rename.
 
     The activity names the job's node and plan, the inputs it used, the output identity of its outputs and, for a
-    verified job, the evidence it recorded.
+    verified job, the evidence its comparison recorded (noted by `SenselabReuse.compare`, which runs before this).
     """
     section = context[JOB]
     logical = LogicalKey.model_validate(dict(key))
@@ -375,8 +382,9 @@ def record_execution(
     ref = JobRef(plan_hash=section["plan"], node=section["node"], element=tuple(section["element"]))
     used = [(port, identity) for port, identity in section["used"]]
     attributes: dict[str, object] = {}
-    if section.get("verifies"):
-        attributes["senselab:verifies"] = section["verifies"]
+    verifies = _verifies(checksum)
+    if verifies is not None:
+        attributes["senselab:verifies"] = verifies
     started = datetime.fromisoformat(section["started"])
     output = section["output"]
     if output is None:
