@@ -24,6 +24,7 @@ from senselab_core.runtime.profiles import (
     UnknownProfileKey,
     UnlistedSource,
     UnsetProfileVariable,
+    WrittenFormsGiven,
     expand_profile,
     packaged_profiles,
     resolve_execution,
@@ -286,7 +287,7 @@ def test_every_variable_form_is_expanded_at_load_and_an_optional_item_is_left_ou
 
 @pytest.mark.logic
 def test_a_profiles_identity_is_its_values_as_written(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Two environments that expand the fixture differently give one identity, which a dumped profile keeps."""
+    """Two environments that expand the fixture differently give one identity; another value gives another."""
     monkeypatch.setenv("SENSELAB_ENV_ROOT", str(tmp_path / "a"))
     first = ExecutionProfile.load(CLUSTER)
     monkeypatch.setenv("SENSELAB_ENV_ROOT", str(tmp_path / "b"))
@@ -295,9 +296,39 @@ def test_a_profiles_identity_is_its_values_as_written(monkeypatch: pytest.Monkey
     assert first.canonical_digest() != second.canonical_digest()
     assert first.identity_digest() == second.identity_digest()
     assert ExecutionProfile.load(CLUSTER, {"retry": {"attempts": 5}}).identity_digest() != first.identity_digest()
-    dumped = tmp_path / "dumped.json"
-    dumped.write_text(second.model_dump_json())
-    assert ExecutionProfile.load(dumped).identity_digest() == first.identity_digest()
+
+
+@pytest.mark.logic
+def test_a_constrained_or_numeric_value_written_as_a_variable_has_one_identity_on_every_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pattern-checked string and a number taken from variables give an identity, the same whatever they expand to."""
+    written = {
+        "substrate": {"placement_hook": "${SENSELAB_TEST_HOOK}"},
+        "pool": {"start_deadline_failures": "${SENSELAB_TEST_FAILURES}"},
+    }
+    identities = []
+    for hook, failures in (("mod.sub:fn", "2"), ("other.mod:g", "5")):
+        monkeypatch.setenv("SENSELAB_TEST_HOOK", hook)
+        monkeypatch.setenv("SENSELAB_TEST_FAILURES", failures)
+        loaded = ExecutionProfile.load("laptop", written)
+        assert (loaded.substrate.placement_hook, loaded.pool.start_deadline_failures) == (hook, int(failures))
+        identities.append(loaded.identity_digest())
+    assert identities[0] == identities[1]
+
+
+@pytest.mark.logic
+def test_written_forms_are_the_loaders_and_a_profile_that_gives_them_is_refused(tmp_path: Path) -> None:
+    """Only `load` records written forms: an override or a file holding a `written` block is refused, typed."""
+    block = {"written": {'["network"]': ['"${NET}"', '"online"']}}
+    with pytest.raises(WrittenFormsGiven, match="written"):
+        ExecutionProfile.load(CLUSTER, block)
+    site = tmp_path / "site.json"
+    site.write_text(ExecutionProfile.load(CLUSTER).model_dump_json())
+    with pytest.raises(WrittenFormsGiven, match="written"):
+        ExecutionProfile.load(site)
+    site.write_text(ExecutionProfile.load(CLUSTER).model_dump_json(exclude={"written"}))
+    assert ExecutionProfile.load(site).name == "cluster"
 
 
 @pytest.mark.logic

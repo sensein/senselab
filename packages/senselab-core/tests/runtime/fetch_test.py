@@ -1275,7 +1275,7 @@ def test_a_fetch_request_waits_timeout_s(monkeypatch: pytest.MonkeyPatch, tmp_pa
 @pytest.mark.logic
 def test_data_fetch_waits_the_profiles_fetch_s(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`senselab data fetch --profile FILE` opens each URL within that profile's `timeouts.fetch_s`."""
-    document = ExecutionProfile.packaged().model_dump(mode="json")
+    document = ExecutionProfile.packaged().model_dump(mode="json", exclude={"written"})
     document["timeouts"]["fetch_s"] = 7.0
     document["retry"]["attempts"] = 1
     profile = tmp_path / "site.yaml"

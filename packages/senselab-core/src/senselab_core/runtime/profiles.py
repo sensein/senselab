@@ -20,7 +20,7 @@ from typing import Annotated, Any, Final, Literal
 
 from pydantic import AfterValidator, Field, PlainSerializer, model_validator
 
-from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr
+from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr, value_digest
 from senselab_core.kernel.declare import BackendSpec, Registry, TaskSpec
 from senselab_core.kernel.formats import (
     EXECUTION_PROFILE_FORMAT,
@@ -142,6 +142,18 @@ class UnsetProfileVariable(ValueError):
         self.key, self.variable = key, variable
 
 
+class WrittenFormsGiven(ValueError):
+    """A profile file or override that holds a `written` block, which only `ExecutionProfile.load` records."""
+
+    def __init__(self, source: str) -> None:
+        """Name the profile."""
+        super().__init__(
+            f"{source}: `written` is recorded by the loader and is not read from a profile; drop it, or dump a"
+            " loaded profile with `model_dump_json(exclude={'written'})`"
+        )
+        self.source = source
+
+
 class QosCapTooSmall(ValueError):
     """A resource class whose workers need more CPUs than the substrate's QOS CPU cap allows at all."""
 
@@ -194,8 +206,7 @@ class ExecutionProfile(Formatted):
         vllm: How a `vllm serve` process is started, polled, asked and stopped.
         worker: How a worker client starts and watches its worker subprocess.
         written: Each value `load` expanded, by its key path (a JSON list of keys), as `(written, expanded)` JSON:
-            what `identity_digest` takes in its place. A dumped profile keeps it, so reloading the dump keeps the
-            identity.
+            what `identity_digest` takes in its place, the expanded form as validated. Only `load` records it.
     """
 
     format: FormatTag = EXECUTION_PROFILE_FORMAT
@@ -265,6 +276,7 @@ class ExecutionProfile(Formatted):
             UnfilledProfile: a value is still a `<fill: ...>` placeholder.
             UnknownProfileKey: a key of `override` that the format does not define, naming the closest one.
             UnsetProfileVariable: a value names a variable that is unset or empty, with no fallback.
+            WrittenFormsGiven: the profile or `override` holds a `written` block, which only the loader records.
             LeaseBoundError: two of the lease's beat intervals plus its attribute delay are not below its stale bound.
             ValueError: the merged mapping is invalid.
         """
@@ -282,10 +294,14 @@ class ExecutionProfile(Formatted):
         if unfilled:
             raise UnfilledProfile(str(merged.get("name", source)), unfilled)
         _check_keys(merged, cls.model_fields)
-        given = merged.pop("written", {})
+        if "written" in merged:
+            raise WrittenFormsGiven(os.fspath(source))
         expanded = expand_profile(merged)
-        changed = {json.dumps(p): (json.dumps(old), json.dumps(new)) for p, old, new in _changed(merged, expanded)}
-        profile = cls.model_validate({**expanded, "written": {**given, **changed}})
+        read = cls.model_validate(expanded).model_dump(mode="json")
+        written = {
+            json.dumps(p): (json.dumps(old), json.dumps(_at(read, p))) for p, old, _ in _changed(merged, expanded)
+        }
+        profile = cls.model_validate({**expanded, "written": written})
         profile.lease.check_bound()
         return profile
 
@@ -294,10 +310,10 @@ class ExecutionProfile(Formatted):
 
         It is the profile's identity in a plan (`PlanPlacement.profile_digest`) and the check a resume makes, so two
         hosts whose environments expand a profile's variables differently place and resume under one profile. A
-        value changed since `load` (it no longer equals its expansion) counts as it is.
+        value changed since `load` (it no longer equals its expansion as read) counts as it is. The digest is the
+        `value@2` digest of the dumped document with the written forms in place, which is not validated again: a
+        written form such as `${HOOK}` need not satisfy its field.
         """
-        if not self.written:
-            return self.canonical_digest()
         document = self.model_dump(mode="json", exclude={"written"})
         for path, (written, expanded) in self.written.items():
             *above, last = json.loads(path)
@@ -306,7 +322,7 @@ class ExecutionProfile(Formatted):
                 holder = holder.get(key) if isinstance(holder, dict) else None
             if isinstance(holder, dict) and holder.get(last) == json.loads(expanded):
                 holder[last] = json.loads(written)
-        return type(self).model_validate(document).canonical_digest()
+        return value_digest(f"{type(self).__module__}.{type(self).__qualname__}", document)
 
     @property
     def probe_s(self) -> float:
@@ -408,6 +424,13 @@ def expand_profile(node: Any, key: str = "") -> Any:  # noqa: ANN401 - any YAML 
         items = [(item, expand_profile(item, f"{key}[{i}]")) for i, item in enumerate(node)]
         return [new for old, new in items if not (new == "" and isinstance(old, str) and _VARIABLE.search(old))]
     return node
+
+
+def _at(document: Any, path: list[str]) -> Any:  # noqa: ANN401 - any JSON node
+    """Return the value at the key path `path` of `document`, None where it has none."""
+    for key in path:
+        document = document.get(key) if isinstance(document, dict) else None
+    return document
 
 
 def _changed(old: Any, new: Any, path: tuple[str, ...] = ()) -> list[tuple[list[str], Any, Any]]:  # noqa: ANN401

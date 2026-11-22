@@ -671,3 +671,35 @@ def test_a_plan_placed_in_one_shell_runs_in_another_whose_env_root_differs(
     with packaged(registry(TASK, worker=BACKEND), tmp_path / "cache"), served(tmp_path, second) as (session, _):
         placed, values = planned(TASK, first, ["a"])
         assert start(placed, session, values=values).wait(timeout=100).done
+
+
+def site_hook_one(request: PlacementRequest) -> PlacementAnswer:  # noqa: ARG001 - answers every request alike
+    """A site hook that keeps the profile's values: named by one host's `SENSELAB_TEST_HOOK`."""
+    return PlacementAnswer(classes={}, why="the profile's values")
+
+
+def site_hook_two(request: PlacementRequest) -> PlacementAnswer:  # noqa: ARG001 - answers every request alike
+    """The same hook under another name: named by another host's `SENSELAB_TEST_HOOK`."""
+    return PlacementAnswer(classes={}, why="the profile's values")
+
+
+def test_a_plan_whose_placement_hook_is_a_variable_runs_where_the_variable_names_another_hook(
+    tmp_path: Path, planted: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pattern-checked value written as a variable loads, plans and runs, under one identity on both hosts."""
+    override = {
+        "devices": ["cpu"],
+        "resource_classes": {"cpu": {"device": "cpu", "mem_bytes": 2**30, "max_workers": 1}},
+        "pool": {"poll_s": 0.05, "quantum_items": 8, "quantum_s": 60, "idle_polls": 40},
+        "lease": {"stale_after_s": 4.0, "renew_fraction": 0.2, "attribute_delay_s": 0, "wait_s": 10.0},
+        "substrate": {"placement_hook": "${SENSELAB_TEST_HOOK}"},
+    }
+    monkeypatch.setenv("SENSELAB_TEST_HOOK", f"{__name__}:site_hook_one")
+    first = ExecutionProfile.load("laptop", override)
+    monkeypatch.setenv("SENSELAB_TEST_HOOK", f"{__name__}:site_hook_two")
+    second = ExecutionProfile.load("laptop", override)
+    assert first.substrate.placement_hook != second.substrate.placement_hook
+    assert first.identity_digest() == second.identity_digest()
+    with packaged(registry(TASK, worker=BACKEND), tmp_path / "cache"), served(tmp_path, second) as (session, _):
+        placed, values = planned(TASK, first, ["a"])
+        assert start(placed, session, values=values).wait(timeout=100).done
