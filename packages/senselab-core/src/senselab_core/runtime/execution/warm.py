@@ -265,7 +265,8 @@ def calibration_root(profile: ExecutionProfile) -> Path | None:
     for root in resolve_roots(profile.calibration.measures_roots, cache_root()):
         found = root / CALIBRATION_DIR / str(os.geteuid()) if own else root / CALIBRATION_DIR
         try:
-            found.mkdir(parents=True, exist_ok=True)
+            found.parent.mkdir(parents=True, exist_ok=True)
+            found.mkdir(mode=0o700 if own else 0o777, exist_ok=True)
         except OSError as err:
             logger.info("measures root %s takes no pool calibration: %s", root, err)
             continue
