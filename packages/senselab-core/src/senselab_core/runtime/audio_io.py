@@ -87,12 +87,13 @@ def _remember(path: str | os.PathLike[str], stamp: SourceStamp, ctime_ns: int) -
     VERIFIED.put((os.fspath(path), stamp.canonical_digest()), ctime_ns)
 
 
-def _stat_fields(st: os.stat_result) -> tuple[int, int, int, int]:
-    return st.st_size, st.st_mtime_ns, st.st_ino, st.st_dev
+def _stat_fields(st: os.stat_result) -> tuple[int, int, int]:
+    """Return the stat fields a stamp is checked by: size, mtime and inode; `st_dev` is numbered per host."""
+    return st.st_size, st.st_mtime_ns, st.st_ino
 
 
-def _stamped_fields(stamp: SourceStamp) -> tuple[int, int, int, int]:
-    return stamp.size, stamp.mtime_ns, stamp.inode, stamp.device
+def _stamped_fields(stamp: SourceStamp) -> tuple[int, int, int]:
+    return stamp.size, stamp.mtime_ns, stamp.inode
 
 
 def _header(f: soundfile.SoundFile) -> str:

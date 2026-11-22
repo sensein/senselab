@@ -37,11 +37,11 @@ def host_lock() -> Path | None:
     return None
 
 
-def open_env(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:
-    """Open the env `backend` declares.
+def open_env(backend: BackendSpec, profile: ExecutionProfile, device: str) -> EnvHandle:
+    """Open the env `backend` declares, for workers on `device`.
 
     A host backend is checked against the senselab lock, or the installed packages when the install ships none; any
-    other is built from `data/env_locks/`.
+    other is built from `data/env_locks/` with the torch build `device` needs.
 
     Raises:
         As `ensure_env`.
@@ -56,6 +56,7 @@ def open_env(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:
             root,
             settings=profile.envs,
             lease=profile.lease,
+            device=device,
             requirements=backend.requirements,
             network=profile.network,
         )
@@ -66,6 +67,7 @@ def open_env(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:
         profile.env_root(env.kind),
         settings=profile.envs,
         lease=profile.lease,
+        device=device,
         workers=workers,
         network=profile.network,
     )
@@ -82,8 +84,8 @@ def _built_from(backend: BackendSpec) -> tuple[Path, dict[str, Path]]:
     return env_lock, {module: Path(source) for module, source in backend.worker_sources.items()}
 
 
-def is_built(backend: BackendSpec, profile: ExecutionProfile) -> bool:
-    """Return whether the env `backend` declares is built under `profile`; a host env always is.
+def is_built(backend: BackendSpec, profile: ExecutionProfile, device: str) -> bool:
+    """Return whether the env `backend` declares is built under `profile` for `device`; a host env always is.
 
     Raises:
         As `env_built`.
@@ -91,11 +93,12 @@ def is_built(backend: BackendSpec, profile: ExecutionProfile) -> bool:
     if backend.env.kind == "host":
         return True
     env_lock, workers = _built_from(backend)
-    return env_built(backend.env, env_lock, profile.env_root(backend.env.kind), settings=profile.envs, workers=workers)
+    root = profile.env_root(backend.env.kind)
+    return env_built(backend.env, env_lock, root, settings=profile.envs, device=device, workers=workers)
 
 
-def read_env(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle | None:
-    """Return the handle of the env `backend` declares if it is built under `profile`, else None; builds nothing.
+def read_env(backend: BackendSpec, profile: ExecutionProfile, device: str) -> EnvHandle | None:
+    """Return the handle of the env `backend` declares if it is built for `device`, else None; builds nothing.
 
     A host env is always built: its handle is this interpreter's.
 
@@ -104,10 +107,10 @@ def read_env(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle | Non
     """
     try:
         if backend.env.kind == "host":
-            return open_env(backend, profile)
+            return open_env(backend, profile, device)
         env_lock, workers = _built_from(backend)
         root = profile.env_root(backend.env.kind)
-        return current_env(backend.env, env_lock, root, settings=profile.envs, workers=workers)
+        return current_env(backend.env, env_lock, root, settings=profile.envs, device=device, workers=workers)
     except (EnvLockError, ManagedPythonMissing, CudaCompatibilityError, OSError, RuntimeError, LookupError) as err:
         raise EnvUnreadable(str(err)) from err
 

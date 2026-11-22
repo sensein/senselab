@@ -184,7 +184,7 @@ def test_declared_minimum_is_the_loaded_models_receptive_field(real_worker: Real
     """In the backend's env, the segmentation model's receptive field is `SEGMENTATION_RECEPTIVE_FIELD_SAMPLES`."""
     (spec,) = REGISTRY.backends("diarize")
     entry = CATALOGUE.entry(pa.MODEL_ID)
-    python = packaged().open_env(spec, real_worker.profile).python
+    python = packaged().open_env(spec, real_worker.profile, real_worker.device).python
     code = (
         "import os, sys\n"
         "from pyannote.audio import Pipeline\n"

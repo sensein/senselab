@@ -151,7 +151,16 @@ def registered_types() -> set[type[Frozen]]:
     return set(_SAMPLES)
 
 
-OPTIONAL_MODULES: Mapping[str, str] = {"senselab_core.runtime.execution.runner": "pydra"}
+OPTIONAL_MODULES: Mapping[str, str] = {
+    f"senselab_core.{name}": "pydra"
+    for name in (
+        "runtime.execution.runner",
+        "runtime.execution.warm",
+        "runtime.execution.portable",
+        "runtime.execution.calls",
+        "testing.pools",
+    )
+}
 """Modules that import an optional extra, by module, with the distribution they need."""
 
 
@@ -970,7 +979,7 @@ def _register_runtime_samples() -> None:
         invalid_updates=[
             {"network": "maybe"},
             {"devices": ("tpu",)},
-            {"format": "execution-profile@6.0"},
+            {"format": "execution-profile@7.0"},
             {"resource_classes": {"gpu:h100": ResourceClass(device="cpu", max_workers=1)}},
         ],
     )

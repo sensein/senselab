@@ -1,28 +1,26 @@
-"""The plan runner: a placed plan compiled to a pydra workflow, its jobs sent through an `Executor` (`PydraRunner`).
+"""The plan runner: a placed plan compiled to a pydra workflow, its jobs run on a warm pool (`PydraRunner`).
 
 `compile_plan` turns a plan into a pydra workflow: a `records` node split over the manifest's rows, one node per
 graph node (a `map` edge reads the row, so every mapped node shares the one record axis, and a node with several
 mapped upstreams is split over them zipped), and, for each node a `gather` edge reads, a copy of it combined over the
 rows. Each node's checksum is the job's senselab key digest (`job_checksum`), so pydra hashes no senselab code.
-The runner drives pydra's `GraphRunner` from outside (RFC 0002 §3.5) on one thread: each round's ready jobs go to
-the `Executor` in one `submit_many` call, as fragments of the placement's batch size (`node_fragment`), or one
-fragment per node to an executor that splits fragments. Submissions run on sender threads and one poll thread
-follows every open fragment; both hand what they learn to the driver thread through a queue, which alone calls the
-`GraphRunner`. A job pydra settles as the twin of another job of its key is sent again, to be served as a reuse.
-`SenselabStore` holds the run's completion records; no result is pickled. Its job leases take no lock file: the
-run's coordinator epoch is the one exclusion of a run (ADR-003). Each attempt has a pydra root of its own,
-`<work dir>/<attempt>`.
+The runner drives pydra's `GraphRunner` from outside (RFC 0002 §3.5) on one thread: each round's ready jobs are formed
+(`prepare`); those the store would serve are served by the driver, and the rest become pool jobs submitted to the
+session's `WarmPool` in one `submit`, so a store hit starts no worker. The pool's follower hands each outcome to the
+driver thread through a queue, and the driver alone calls the `GraphRunner`. A job pydra settles as the twin of another
+job of its key is served the entry that job committed, as an exact reuse. The `GraphRunner`'s store is
+`SenselabStore`, the run's completion records in memory; results live in the session's store. Each attempt has a
+pydra root of its own, `<work dir>/<attempt>`.
 """
 
-import asyncio
-import contextvars
+import contextlib
+import logging
 import queue
 import threading
+import time
 import typing
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from concurrent.futures import CancelledError as FutureCancelled
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -34,30 +32,49 @@ from pydra.engine.runner import Failed, GraphRunner, NotRun, Round
 from pydra.engine.store import context_key
 from pydra.engine.submitter import Submitter, WorkflowError
 from pydra.utils.resources import ComputeResources
+from pydra.workers.pool.pool import UnplaceableJob
 
 from senselab_core.kernel.graph import Edge, fan_out_issues, mapped_nodes, order, split
-from senselab_core.kernel.identity import InputIdentity, gather_identity, port_output_identity
-from senselab_core.runtime.clock import Clock, SystemClock
-from senselab_core.runtime.execution.epoch import StaleCoordinator
-from senselab_core.runtime.execution.events import TERMINAL, EventKind, EventLog, run_dir_of
+from senselab_core.kernel.identity import InputIdentity, ReusePolicy, gather_identity, port_output_identity
+from senselab_core.runtime.call import RunConfig, packaged
+from senselab_core.runtime.execution.batching import BucketGrid, keyed_formation, recording_span_ns
+from senselab_core.runtime.execution.events import TERMINAL, UNPLACEABLE, EventKind, EventLog, run_dir_of
 from senselab_core.runtime.execution.executor import (
     Admission,
-    Executor,
     FaultRecord,
-    Handle,
     JobRef,
+    NoProgress,
     PlanFragment,
     QueueHeld,
     ResultRef,
     RunCancelled,
 )
-from senselab_core.runtime.execution.in_process import fragment_keys, job_checksum, node_fragment, plan_keys
+from senselab_core.runtime.execution.fragments import fragment_jobs, job_checksum, node_fragment, plan_keys
+from senselab_core.runtime.execution.job import code_license, job_context, resolved, stale, used
+from senselab_core.runtime.execution.outputs import decoded
+from senselab_core.runtime.execution.portable import (
+    OUTPUTS,
+    JobDoc,
+    entry_outputs,
+    read_entry,
+    read_outputs,
+    record_reuse,
+    serving,
+    stored_context,
+)
+from senselab_core.runtime.execution.providers import Loader
 from senselab_core.runtime.execution.run import PYDRA_DIR
+from senselab_core.runtime.execution.warm import PoolSession, item_failure
+from senselab_core.runtime.execution.workers import service_of
+from senselab_core.runtime.keys import build_key, request_components
 from senselab_core.runtime.licenses import LicenseRefused
 from senselab_core.runtime.planner import Plan, check_mapped_outputs
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.revision import attempt_scope
 from senselab_core.runtime.storage import PRIVATE_DIR, private_dir
+from senselab_core.runtime.store import output_identity
+
+logger = logging.getLogger("senselab")
 
 RECORDS = "records"
 """The pydra node split over the manifest's rows; every mapped node reads its row from it."""
@@ -76,13 +93,6 @@ class ElementFailed(RuntimeError):
         self.failure = failure
 
 
-Interrupted = (QueueHeld, StaleCoordinator)
-"""The errors that hold a run's unsent jobs without failing them, each `NotRun(held=True)`: a held env or queue, a
-newer coordinator."""
-_CANCELLED = (asyncio.CancelledError, FutureCancelled)
-"""The cancellations a submission can raise; each is the run's `RunCancelled`."""
-
-
 @dataclass(frozen=True)
 class RunOutcome:
     """A finished run: each node's results in element order, and the elements a failed upstream element blocked."""
@@ -99,7 +109,7 @@ class RunOutcome:
 
 
 class _EpochLease:
-    """pydra's lease of a job, held without a lock file: the run's coordinator epoch excludes other coordinators."""
+    """pydra's lease of a job, held without a lock file: the run's records are its own, in memory."""
 
     def __init__(self, checksum: str, cache_dir: Path, lockfile: Path) -> None:
         """Name the job `checksum` whose directory is `cache_dir` and whose (unwritten) lock is `lockfile`."""
@@ -355,7 +365,7 @@ def _label(job_name: str, state_index: object) -> str:
 
 @dataclass(eq=False)
 class _Batch:
-    """One fragment sent: its node and the pydra job of each element; `served` for jobs pydra settled as twins.
+    """The jobs of one node sent in one round: the pydra job of each element; `served` for jobs pydra settled as twins.
 
     A twin's result is senselab's reuse of another job's: it is logged and held, and never reported to pydra.
     """
@@ -366,159 +376,74 @@ class _Batch:
     given: set[tuple[int, ...]] = field(default_factory=set)
 
 
-Message = tuple[str, _Batch, object]
-"""What a sender or the poll thread hands the driver: (`result`, `ended` or `refused`, the batch, the payload)."""
+Message = tuple[str, object, object]
+"""What the pool's follower hands the driver: (`outcome`, the pool job, its outcome)."""
 
 
-class _Poller:
-    """The poll thread: `Executor.poll` per open handle per round, each result and each end handed to `post`.
+@dataclass(frozen=True)
+class _Sent:
+    """A pool job in flight: its batch, element, key digest, and the senselab job it runs."""
 
-    A handle ends once: with None once every result was given, with the error its poll raised, or with
-    `RunCancelled` once `cancel` is set (the handle is cancelled through the executor after its landed results are
-    posted). A round that gives nothing waits `first_s`, doubling up to `max_s`; a new handle or `cancel` ends the
-    wait, which checks `cancel` every `cancel_check_s` on `clock`. The thread runs in the context it was made in.
-    """
-
-    def __init__(  # noqa: PLR0913 - the executor, cancel and post, then keyword-only waits and the clock
-        self,
-        executor: Executor,
-        cancel: threading.Event,
-        post: Callable[[Message], object],
-        *,
-        first_s: float,
-        max_s: float,
-        cancel_check_s: float,
-        clock: Clock = SystemClock(),  # noqa: B008 - stateless
-    ) -> None:
-        """Poll the handles of `executor`, posting to `post` and stopping at `cancel`; waits run on `clock`."""
-        self.executor, self.cancel, self.post, self._clock = executor, cancel, post, clock
-        self.first_s, self.max_s, self.cancel_check_s = first_s, max_s, cancel_check_s
-        self._open: dict[str, tuple[Handle, _Batch]] = {}
-        self._lock = threading.Lock()
-        self._wake = threading.Event()
-        self._closed = False
-        self._thread: threading.Thread | None = None
-        self._context = contextvars.copy_context()
-
-    def follow(self, handle: Handle, batch: _Batch) -> None:
-        """Poll `handle`, the fragment of `batch`, from the next round, which starts at once."""
-        with self._lock:
-            self._open[handle.id] = (handle, batch)
-            if self._thread is None:
-                self._thread = threading.Thread(
-                    target=self._context.run, args=(self._loop,), name="senselab-poll", daemon=True
-                )
-                self._thread.start()
-        self._wake.set()
-
-    def _round(self) -> bool:
-        """Poll every open handle once; return whether any result was given."""
-        with self._lock:
-            followed = list(self._open.values())
-        gave = False
-        for handle, batch in followed:
-            try:
-                refs, done = self.executor.poll(handle)
-            except Exception as error:  # noqa: BLE001 - the handle's end, which the driver classifies
-                self._end(handle, batch, error)
-                continue
-            for ref in refs:
-                self.post(("result", batch, ref))
-            gave = gave or bool(refs)
-            if done:
-                self._end(handle, batch, None)
-            elif self.cancel.is_set():
-                self._end(handle, batch, self._cancelled(handle))
-        return gave
-
-    def _cancelled(self, handle: Handle) -> Exception:
-        """Cancel `handle` through the executor; return `RunCancelled`, or the error the cancel raised."""
-        try:
-            self.executor.cancel(handle)
-        except Exception as error:  # noqa: BLE001 - the handle's end
-            return error
-        return RunCancelled(f"the run was cancelled while {handle.id} was polled")
-
-    def _end(self, handle: Handle, batch: _Batch, error: Exception | None) -> None:
-        with self._lock:
-            self._open.pop(handle.id, None)
-        self.post(("ended", batch, error))
-
-    def _loop(self) -> None:
-        pause = self.first_s
-        while not self._closed:
-            self._wake.clear()
-            if self._round():
-                pause = self.first_s
-            elif self._open:
-                self._nap(pause)
-                pause = min(2 * pause, self.max_s)
-            else:
-                self._wake.wait()
-
-    def _nap(self, seconds: float) -> None:
-        """Wait up to `seconds`, ending early on a new handle, on `close`, or once `cancel` is set."""
-        deadline = self._clock.now() + seconds
-        while not self._wake.is_set() and not self.cancel.is_set() and (left := deadline - self._clock.now()) > 0:
-            self._clock.wait(self._wake, min(left, self.cancel_check_s))
-
-    def close(self) -> None:
-        """Stop polling and cancel every handle still open through the executor."""
-        self._closed = True
-        self._wake.set()
-        if self._thread is not None:
-            self._thread.join()
-        with self._lock:
-            left, self._open = list(self._open.values()), {}
-        for handle, _ in left:
-            self._cancelled(handle)
+    batch: _Batch
+    element: tuple[int, ...]
+    doc: JobDoc
 
 
 class _Driver:
-    """One run: the `GraphRunner` of a placed plan driven on this thread (RFC 0002 §3.5), its rounds sent and settled.
+    """One run: the `GraphRunner` of a placed plan driven on this thread (RFC 0002 §3.5), its rounds sent to a pool.
 
-    Senders and the poll thread only post to `inbox`; every `GraphRunner` call is made here. An executor's result is
-    a pydra `Result` holding the job's `ResultRef`, or `Failed(ElementFailed)`. A fragment the executor refused is,
-    for each of its jobs: `Failed` for a license refusal or any other exception (the latter raised after the run),
-    `NotRun(held=True)` for a held env or queue or a newer coordinator, and `NotRun` once the run is cancelled.
+    Every `GraphRunner` call is made here; the pool's follower only posts outcomes to `inbox`. A pool result is a pydra
+    `Result` holding the job's `ResultRef`, or `Failed(ElementFailed)`. A node whose jobs cannot be formed is, for each
+    of its jobs: `Failed` for a license refusal or any other exception (the latter raised after the run). A held job
+    is `NotRun(held=True)`, and the run raises the hold after the loop; a cancelled one is `NotRun`. While jobs are in
+    the pool, `no_progress_s` with no outcome, no job sent and the pool not working for them (`PoolSession.working`)
+    raises `NoProgress`.
     """
 
     def __init__(  # noqa: PLR0913 - the run's parts
         self,
         placed: Plan,
-        admission: Admission,
         values: Mapping[InputIdentity, object],
-        executor: Executor,
+        session: PoolSession,
+        run: RunConfig,
         store: "SenselabStore",
         events: EventLog,
         cancel: threading.Event,
-        poller: Callable[[Callable[[Message], object]], _Poller],
-        senders: int,
+        cancel_check_s: float,
+        no_progress_s: float,
     ) -> None:
-        """Run `placed` through `executor` under `admission`, on `senders` sender threads and the poller made."""
-        self.placed, self.admission, self.values, self.executor = placed, admission, values, executor
-        self.store, self.events, self.cancel = store, events, cancel
+        """Run `placed` on `session`'s pool under `run`, its graph inputs `values`, logging to `events`."""
+        self.placed, self.values, self.session, self.run = placed, values, session, run
+        self.store, self.events, self.cancel, self.cancel_check_s = store, events, cancel, cancel_check_s
+        self.no_progress_s = no_progress_s
+        self.moved = time.monotonic()
         self.inbox: queue.Queue[Message] = queue.Queue()
-        self.poller = poller(self.inbox.put)
-        self.senders = ThreadPoolExecutor(senders, thread_name_prefix="senselab-send")
         self.results: dict[str, dict[tuple[int, ...], ResultRef]] = {}
         self.ended: set[tuple[str, tuple[int, ...]]] = set()
         self.errors: list[BaseException] = []
-        self.open: set[_Batch] = set()
+        self.sent: dict[object, _Sent] = {}
+        self.handles: list[Any] = []
         self.refs: dict[Job, ResultRef] = {}
         self.first: dict[str, ResultRef] = {}
         self.twins: dict[str, dict[tuple[int, ...], Job]] = {}
         self.reported: set[str] = set()
-        self.halt = threading.Event()
+        self.held: list[str] = []
+        self.cancelled = False
+        self.completed = 0
 
     def drive(self, task: Any) -> None:  # noqa: ANN401 - a pydra workflow task
-        """Drive `task`'s `GraphRunner` until no job can progress and no fragment is open.
+        """Drive `task`'s `GraphRunner` until no job can progress and no pool job is open.
 
         Raises:
-            Exception: the first error of the run that is no job's failure: an executor's, a hold, a cancellation.
-            WorkflowError: pydra errored a job no executor failed.
+            Exception: the first error of the run that is no job's failure, or a cancellation.
+            QueueHeld: the pool held jobs of the run; they have no terminal event.
+            NoProgress: jobs were in the pool, and none gave an outcome, none was sent and the pool was not working
+                for them, for `no_progress_s`.
+            WorkflowError: pydra errored a job no pool job failed.
             RuntimeError: nothing can progress, but the run is not done.
         """
+        pool = self.session.pool
+        pool.bind(self._report)
         with Submitter(worker="debug", store=self.store, telemetry=False) as submitter:
             graph = GraphRunner(
                 task, self.store, on_error="raise_at_end", lookup_before_dispatch=False, submitter=submitter
@@ -527,31 +452,66 @@ class _Driver:
                 self._loop(graph)
                 foreign = [e for e in graph.entries if _label(e.job_name, e.state_index) not in self.reported]
             finally:
-                self.halt.set()
+                if self.sent:
+                    for handle in self.handles:
+                        with contextlib.suppress(Exception):
+                            pool.cancel(handle)
+                pool.unbind(self._report)
                 graph.close()
-                self.senders.shutdown(cancel_futures=True)
-                self.poller.close()
         if self.errors:
             raise self.errors[0]
+        if self.held:
+            raise QueueHeld("pool", "pool", len(self.held), self.held[0])
         if foreign:
             listed = "\n".join(f"{_label(e.job_name, e.state_index)} ({e.phase}): {e.message}" for e in foreign)
             raise WorkflowError(
-                f"pydra errored jobs no executor failed:\n{listed}", [e.message for e in foreign], foreign
+                f"pydra errored jobs no pool job failed:\n{listed}", [e.message for e in foreign], foreign
             )
+
+    def _report(self, job: object, outcome: object) -> None:
+        """The pool's report callable, called on its follower thread: hand the outcome to the driver."""
+        self.inbox.put(("outcome", job, outcome))
 
     def _loop(self, graph: GraphRunner) -> None:
         while True:
+            self._check_cancel()
             rnd = graph.ready()
             progressed = self._settle_round(rnd)
             progressed = self._dispatch(graph, rnd.dispatch) or progressed
             if progressed:
+                self.moved = time.monotonic()
                 continue
-            if not self.open:
+            if not self.sent:
                 if graph.done:
                     return
                 if rnd.retry_after is None:
                     raise RuntimeError(graph.stuck() or "nothing can progress, but the run is not done")
-            self._receive(graph, rnd.retry_after)
+            wait = self.cancel_check_s if rnd.retry_after is None else min(rnd.retry_after, self.cancel_check_s)
+            if self._receive(graph, wait):
+                self.moved = time.monotonic()
+            elif self.sent and time.monotonic() - self.moved >= self.no_progress_s:
+                if not self.session.working(self.sent, self._waiting()):
+                    raise self._stalled()
+                self.moved = time.monotonic()
+
+    def _waiting(self) -> tuple[str, ...]:
+        """The resource classes the run's open pool jobs were placed on."""
+        return tuple(sorted({s.doc.placement.resource_class for s in self.sent.values()}))
+
+    def _stalled(self) -> NoProgress:
+        """Return the run's `NoProgress`: the classes its open pool jobs wait on, and the pool's latest start errors."""
+        classes = self._waiting()
+        causes = getattr(self.session.pool, "_cause", {})
+        return NoProgress(self.no_progress_s, classes, {c: str(causes[c]) for c in classes if c in causes})
+
+    def _check_cancel(self) -> None:
+        """Once `cancel` is set, record the run's cancellation and withdraw its jobs still open in the pool."""
+        if self.cancel.is_set() and not self.cancelled:
+            self.cancelled = True
+            self._record(RunCancelled(f"run {self.placed.hash} was cancelled"))
+            for handle in self.handles:
+                with contextlib.suppress(Exception):
+                    self.session.pool.cancel(handle)
 
     def _settle_round(self, rnd: Round) -> bool:
         """Take the jobs pydra settled as twins: a failed one fails, a served one is sent with the round."""
@@ -575,7 +535,7 @@ class _Driver:
             self.twins.setdefault(node, {})[element] = job
 
     def _dispatch(self, graph: GraphRunner, jobs: Sequence[Job]) -> bool:
-        """Send `jobs` and the twins to serve as one round; return whether any job was settled here instead."""
+        """Send `jobs` and the twins to serve as one round to the pool; return whether any job was settled here."""
         grouped: dict[str, dict[tuple[int, ...], Job]] = {}
         settled = False
         for job in jobs:
@@ -583,19 +543,95 @@ class _Driver:
             if node is None:
                 graph.complete(job, self._row(job))
             elif self._stopped():
-                graph.complete(job, NotRun("the run was stopped before it was sent", held=self._held()))
+                graph.complete(job, NotRun("the run was stopped before it was sent", held=bool(self.held)))
             else:
                 grouped.setdefault(node, {}).setdefault(element, job)
                 continue
             settled = True
+        before = self.completed
         twins, self.twins = self.twins, {}
-        sends = [(n, js, False) for n, js in grouped.items()]
-        sends += [] if self._stopped() else [(n, js, True) for n, js in twins.items()]
-        items = [item for node, chosen, served in sends for item in self._fragments(graph, node, chosen, served)]
-        if items:
-            self.open.update(batch for batch, _ in items)
-            self.senders.submit(contextvars.copy_context().run, self._send, items)
-        return settled
+        sends = [_Batch(n, js) for n, js in grouped.items()]
+        sends += [] if self._stopped() else [_Batch(n, js, served=True) for n, js in twins.items()]
+        pool_jobs: list[object] = []
+        for batch in sends:
+            pool_jobs += self._formed(graph, batch)
+        if pool_jobs:
+            self.handles.append(self.session.pool.submit(pool_jobs))
+            self.moved = time.monotonic()
+        return settled or self.completed != before
+
+    def _formed(self, graph: GraphRunner, batch: _Batch) -> list[object]:
+        """Return the pool jobs of `batch`, each logged `started`; a job that cannot be formed is settled here."""
+        try:
+            fragment = node_fragment(
+                self.placed,
+                ADMISSION.model_copy(update={"plan_hash": self.placed.hash}),
+                batch.node,
+                upstream=self._upstream(graph, batch),
+                elements=list(batch.jobs),
+            )
+            prepared = prepare(fragment, self.placed, self.values, self.run, self.session, self.events.attempt)
+        except Exception as error:  # noqa: BLE001 - the batch's refusal
+            self._unsent(graph, batch, list(batch.jobs), error)
+            return []
+        formed = []
+        for (element, job), made in zip(batch.jobs.items(), prepared, strict=True):
+            if isinstance(made, FaultRecord):
+                self._given(
+                    graph,
+                    batch,
+                    ResultRef(job=self._job_ref(batch.node, element), key_digest=job.checksum, failure=made),
+                )
+                continue
+            doc, loader = made
+            hit = self._served(doc, batch.served)
+            if hit is not None:
+                self._given(graph, batch, hit)
+                continue
+            pool_job = self.session.job(doc, loader, f"{batch.node}-{doc.key.digest()[:12]}")
+            self.log("started", batch.node, element, key=doc.key.digest())
+            self.sent[pool_job] = _Sent(batch, element, doc)
+            formed.append(pool_job)
+        return formed
+
+    def _served(self, doc: JobDoc, twin: bool) -> ResultRef | None:
+        """Return the result the store serves `doc`'s job here, its reuse recorded, or None to send it to the pool.
+
+        A twin is served the entry its run's first job of the key committed, exact. Any other job is looked up in the
+        context it would run in, which the coordinator knows when the session's workers run on this host
+        (`PoolSession.here`); otherwise only under a `tolerant` policy with no verify sampling, the one rule no
+        measured numerics decide, against the declared context.
+        """
+        store, key = self.session.store, doc.key.digest()
+        if twin:
+            first = self.first.get(key)
+            found = (
+                None
+                if first is None or first.output_identity is None
+                else read_entry(store, key, first.output_identity)
+            )
+            if found is None:
+                return None
+            outputs, stored = found
+            record_reuse(doc, stored, outputs, ReusePolicy.EXACT, current=stored)
+            return served_ref(doc, outputs, ReusePolicy.EXACT.value)
+        if self.session.here:
+            here = doc.execute_context()
+        elif ReusePolicy(doc.run.reuse) is ReusePolicy.TOLERANT and doc.run.verify == 0:
+            here = doc.context
+        else:
+            return None
+        candidate = serving(store, key, here, doc.run, doc.key.backend, doc.equivalence)
+        if candidate is None:
+            return None
+        try:
+            outputs = entry_outputs(store, candidate.entry)
+        except (OSError, ValueError) as err:
+            logger.warning("the stored entry of %s was not read; the job is sent to the pool: %s", key, err)
+            return None
+        policy = ReusePolicy(candidate.admitted_by)
+        record_reuse(doc, stored_context(candidate.context), outputs, policy, current=here)
+        return served_ref(doc, outputs, policy.value)
 
     def _row(self, job: Job) -> Result:
         """Return the result of a `records` job: its row."""
@@ -615,50 +651,14 @@ class _Driver:
         return result
 
     def _stopped(self) -> bool:
-        """Whether no fragment is sent any more: the run is cancelled or held by a newer coordinator.
-
-        A cancel seen here for the first time is recorded as the run's `RunCancelled`.
-        """
-        if self.cancel.is_set():
-            self._record(RunCancelled(f"run {self.placed.hash} was cancelled before every fragment was sent"))
-        return self.cancel.is_set() or any(isinstance(e, (RunCancelled, StaleCoordinator)) for e in self.errors)
+        """Whether no job is sent any more: the run is cancelled, or the pool held its jobs."""
+        return self.cancel.is_set() or bool(self.held)
 
     def _record(self, error: Exception) -> None:
         """Hold `error` as one of the run's, a cancellation once."""
         cancelled = isinstance(error, RunCancelled) and any(isinstance(e, RunCancelled) for e in self.errors)
         if not cancelled and not any(e is error for e in self.errors):
             self.errors.append(error)
-
-    def _stop(self) -> bool:
-        """Whether a submission not yet started is to be skipped: the run is cancelled, or the driver has ended."""
-        return self.cancel.is_set() or self.halt.is_set()
-
-    def _held(self) -> bool:
-        """Whether a newer coordinator stopped the run, which holds every job not yet sent."""
-        return any(isinstance(e, StaleCoordinator) for e in self.errors)
-
-    def _fragments(
-        self, graph: GraphRunner, node: str, chosen: Mapping[tuple[int, ...], Job], served: bool
-    ) -> list[tuple[_Batch, PlanFragment | BaseException]]:
-        """Return the batches of `node`'s `chosen` jobs, each with its fragment (or the error forming it raised)."""
-        elements = sorted(chosen)
-        size = None if self.executor.splits_fragments else self.executor.fragment_size(self.placed, node)
-        size = size or max(1, len(elements))
-        made: list[tuple[_Batch, PlanFragment | BaseException]] = []
-        for start in range(0, len(elements), size):
-            batch = _Batch(node, {e: chosen[e] for e in elements[start : start + size]}, served)
-            try:
-                fragment = node_fragment(
-                    self.placed, self.admission, node, upstream=self._upstream(graph, batch), elements=list(batch.jobs)
-                )
-            except Exception as error:  # noqa: BLE001 - the batch's refusal
-                made.append((batch, error))
-                continue
-            if not self.executor.logs_claims:
-                for job, key in zip(fragment.jobs, fragment_keys(fragment, self.placed, self.values), strict=True):
-                    self.log("started", node, job.element, key=key)
-            made.append((batch, fragment))
-        return made
 
     def _upstream(self, graph: GraphRunner, batch: _Batch) -> dict[str, list[ResultRef]]:
         """Return each upstream node's results the jobs of `batch` read (`GraphRunner.upstream`), by element.
@@ -677,67 +677,40 @@ class _Driver:
                         found.setdefault(source, {})[ref.job.element] = ref
         return {source: list(refs.values()) for source, refs in found.items()}
 
-    def _send(self, items: Sequence[tuple[_Batch, PlanFragment | BaseException]]) -> None:
-        """Submit a round's fragments in one `submit_many`, following each handle and posting each refusal.
-
-        Whatever this raises is posted as the refusal of every batch not yet followed or refused, so each batch of the
-        round ends once.
-        """
-        ended: set[int] = set()
-        try:
-            formed = [(batch, f) for batch, f in items if isinstance(f, PlanFragment)]
-            for batch, error in items:
-                if not isinstance(error, PlanFragment):
-                    self._refuse(batch, error, ended)
-            if not formed:
-                return
-            try:
-                taken: Sequence[Handle | BaseException] = self.executor.submit_many(
-                    [f for _, f in formed], stop=self._stop
-                )
-            except BaseException as error:  # noqa: BLE001 - every fragment's refusal, a cancellation included
-                taken = [error] * len(formed)
-            for (batch, _), handle in zip(formed, taken, strict=True):
-                if isinstance(handle, Handle):
-                    self.poller.follow(handle, batch)
-                    ended.add(id(batch))
-                else:
-                    self._refuse(batch, handle, ended)
-        except BaseException as error:  # noqa: BLE001 - posted for the driver, which raises it after the run
-            for batch, _ in items:
-                if id(batch) not in ended:
-                    self._refuse(batch, error, ended)
-
-    def _refuse(self, batch: _Batch, error: BaseException, ended: set[int]) -> None:
-        self.inbox.put(("refused", batch, error))
-        ended.add(id(batch))
-
-    def _receive(self, graph: GraphRunner, timeout: float | None) -> None:
-        """Apply the next message, waiting up to `timeout` (None: until one comes), then every message waiting."""
+    def _receive(self, graph: GraphRunner, timeout: float | None) -> bool:
+        """Apply the next outcome, waiting up to `timeout`, then every outcome waiting; return whether one came."""
         try:
             message = self.inbox.get(timeout=timeout)
         except queue.Empty:
-            return
+            return False
         while True:
             self._apply(graph, message)
             try:
                 message = self.inbox.get_nowait()
             except queue.Empty:
-                return
+                return True
 
     def _apply(self, graph: GraphRunner, message: Message) -> None:
-        kind, batch, payload = message
-        if kind == "result":
-            self._given(graph, batch, typing.cast(ResultRef, payload))
+        _, pool_job, outcome = message
+        sent = self.sent.pop(pool_job, None)
+        if sent is None:
             return
-        self.open.discard(batch)
-        missing = [e for e in batch.jobs if e not in batch.given]
-        if missing:
-            error = payload or RuntimeError(f"the executor gave node {batch.node!r} no result for elements {missing}")
-            self._unsent(graph, batch, missing, typing.cast(BaseException, error))
+        if isinstance(outcome, NotRun):
+            self._not_run(graph, sent, outcome)
+            return
+        self._given(graph, sent.batch, ref_of(sent, outcome))
+
+    def _not_run(self, graph: GraphRunner, sent: _Sent, outcome: NotRun) -> None:
+        """Give a job the pool did not run its outcome: a hold (raised after the run) or a cancellation."""
+        if outcome.held:
+            self.held.append(str(outcome.reason))
+        job = sent.batch.jobs[sent.element]
+        if not sent.batch.served:
+            graph.complete(job, NotRun(str(outcome.reason), held=outcome.held))
 
     def _given(self, graph: GraphRunner, batch: _Batch, ref: ResultRef) -> None:
         """Settle an element's result; report it to pydra unless pydra settled the job as a twin."""
+        self.completed += 1
         element = ref.job.element
         job = batch.jobs[element]
         batch.given.add(element)
@@ -760,28 +733,22 @@ class _Driver:
     def _unsent(
         self, graph: GraphRunner, batch: _Batch, elements: Sequence[tuple[int, ...]], error: BaseException
     ) -> None:
-        """Give each job of `elements` its outcome for `error`, which kept it from a result (`_Driver`)."""
-        if isinstance(error, _CANCELLED):
-            cancelled = RunCancelled(f"run {self.placed.hash}: the submission of node {batch.node!r} was cancelled")
-            cancelled.__cause__ = error
-            error = cancelled
+        """Give each job of `elements` its outcome for `error`, which kept it from the pool (`_Driver`)."""
         if not isinstance(error, Exception):
             raise error
-        held = isinstance(error, (RunCancelled, *Interrupted))
-        outcome = NotRun(str(error), held=isinstance(error, Interrupted)) if held else Failed(error)
-        failure = None if held else FaultRecord.from_exception(error)
+        failure = FaultRecord.from_exception(error)
+        self.completed += 1
         if not isinstance(error, LicenseRefused):
             self._record(error)
         for element in elements:
             job = batch.jobs[element]
-            if failure is not None:
-                ref = ResultRef(job=self._job_ref(batch.node, element), key_digest=job.checksum, failure=failure)
-                self.settle(batch.node, ref)
-                self.first.setdefault(job.checksum, ref)
-                self.refs[job] = ref
-                self.reported.add(_label(job.name, job.state_index))
+            ref = ResultRef(job=self._job_ref(batch.node, element), key_digest=job.checksum, failure=failure)
+            self.settle(batch.node, ref)
+            self.first.setdefault(job.checksum, ref)
+            self.refs[job] = ref
+            self.reported.add(_label(job.name, job.state_index))
             if not batch.served:
-                graph.complete(job, outcome)
+                graph.complete(job, Failed(error))
 
     def _job_ref(self, node: str, element: tuple[int, ...]) -> JobRef:
         return JobRef(plan_hash=self.placed.hash, node=node, element=element)
@@ -812,9 +779,9 @@ class _Driver:
     def close(self) -> None:
         """Give every job with no terminal event its own: `cancelled` once cancelled, else `blocked`.
 
-        A run stopped by a held env or a newer coordinator (`Interrupted`) leaves them without one, for a later epoch.
+        A run whose jobs the pool held leaves them without one, for a later run.
         """
-        if any(isinstance(e, Interrupted) for e in self.errors):
+        if self.held:
             return
         cancelled = any(isinstance(e, RunCancelled) for e in self.errors)
         for node, element in self.expected():
@@ -849,73 +816,156 @@ class _Driver:
         )
 
 
-class PydraRunner:
-    """Runs placed plans through an `Executor`: pydra's `GraphRunner` expands the graph and releases its jobs.
+ADMISSION = Admission(id="run", plan_hash="0" * 64)
+"""The admission a run's fragments name: the run holds its graph-input values itself."""
 
-    `lease` is the profile's `lease` section; it is held and not passed to pydra. Rounds are submitted on `senders`
-    threads, the sum of the profile's `max_workers` by default; their results are followed by one poll thread per
-    run, so neither bounds the fragments in flight.
+
+def ref_of(sent: _Sent, outcome: object) -> ResultRef:
+    """Return the `ResultRef` of a pool job's outcome: its output identity and lengths, or its failure."""
+    doc = sent.doc
+    ref, key = doc.ref, doc.key.digest()
+    if isinstance(outcome, Failed):
+        return ResultRef(job=ref, key_digest=key, failure=pool_failure(outcome.error))
+    assert isinstance(outcome, Result)
+    if outcome.errored:
+        errors = outcome.errors or {}
+        text = "\n".join(errors.get("error message", [])) if isinstance(errors, dict) else str(errors)
+        last = outcome.failure or " ".join(text.strip().splitlines()[-1:])
+        failure = item_failure(text) or FaultRecord.from_pool({"kind": "content", "message": last}, "TaskError")
+        return ResultRef(job=ref, key_digest=key, failure=failure)
+    outputs = dict(getattr(outcome.outputs, OUTPUTS))
+    hit = outcome.committed is None or outcome.committed.served
+    served = (doc.run.reuse.value if outcome.cross_context else ReusePolicy.EXACT.value) if hit else None
+    return served_ref(doc, outputs, served)
+
+
+def served_ref(doc: JobDoc, outputs: Mapping[str, object], served: str | None) -> ResultRef:
+    """Return the `ResultRef` of `doc`'s job given `outputs`: their identity and lengths, `served` by that policy."""
+    read = decoded(doc.job.call.task, outputs)
+    return ResultRef(
+        job=doc.ref,
+        key_digest=doc.key.digest(),
+        output_identity=output_identity(dict(outputs)),
+        served=served,
+        lengths_ns={p: n for p, v in read.items() if (n := recording_span_ns(v)) is not None},
+    )
+
+
+def pool_failure(error: BaseException) -> FaultRecord:
+    """Return the senselab fault record of a job the pool failed: from the pool's own record when it carries one."""
+    fault = getattr(error, "fault", None)
+    if isinstance(fault, Mapping):
+        carried = item_failure(str(fault.get("message", "")))
+        return carried if carried is not None else FaultRecord.from_pool(fault, type(error).__name__)
+    if isinstance(error, UnplaceableJob):
+        return FaultRecord.from_pool({"kind": "resource", "message": str(error)}, UNPLACEABLE)
+    return FaultRecord.from_exception(error)
+
+
+def prepare(  # noqa: PLR0913 - the fragment and the run it is of
+    fragment: PlanFragment,
+    placed: Plan,
+    values: Mapping[InputIdentity, object],
+    run: RunConfig,
+    session: PoolSession,
+    attempt: str,
+) -> list[tuple[JobDoc, Loader] | FaultRecord]:
+    """Return, per job of `fragment`, its `JobDoc` and the loader of its model worker, or the failure that keeps it.
+
+    The backend's env is opened and its license checked once; each job's upstream inputs are read from the session's
+    store, its stamps checked, its formation picked by its length and its key and lookup context built.
+
+    Raises:
+        LicenseRefused: the run's policy refuses the backend's env or the model.
+        ValueError: as `fragment_jobs`.
+    """
+    profile = session.profile
+    jobs, placement = fragment_jobs(fragment, placed, values)
+    backend, call = placement.backend, jobs[0].call
+    licensed = code_license(run, placement, call)
+    env = packaged().open_env(backend, profile, placement.device)
+    expected = service_of(backend, call.model)
+    grid = BucketGrid.load_default()
+    store = session.store
+    made: list[tuple[JobDoc, Loader] | FaultRecord] = []
+    for given in jobs:
+        job, unread = resolved(
+            replace(given, call=replace(given.call, service=expected)), lambda k, o: read_outputs(store, k, o)
+        )
+        picked, unrecorded = keyed_formation(job, backend, grid)
+        keyed = replace(placement, **request_components(backend, picked))
+        gap = None if unrecorded is None else FaultRecord.gap_of(type(unrecorded).__name__, str(unrecorded))
+        failure = unread or gap or stale(job)
+        if failure is not None:
+            made.append(failure)
+            continue
+        context = job_context(keyed, env, expected, profile, job, licensed, declared=True)
+        doc = JobDoc(
+            job=job,
+            placement=keyed,
+            env=env,
+            expected=expected,
+            profile=profile,
+            code_license=licensed,
+            key=build_key(job.call, keyed, context),
+            context=context,
+            run=run,
+            used=used(job),
+            attempt=attempt,
+        )
+        made.append((doc, Loader(backend, env, call.model, keyed.device, profile, expected)))
+    return made
+
+
+class PydraRunner:
+    """Runs placed plans on a pool session: pydra's `GraphRunner` expands the graph and releases its jobs.
+
+    `cancel_check_s` is how often the driver looks at a set cancel while it waits on the pool, and `no_progress_s` how
+    long it waits on pool jobs that give no outcome (the profile's).
     """
 
-    def __init__(
-        self,
-        *,
-        profile: ExecutionProfile | None = None,
-        work_dir: Path | None = None,
-        senders: int | None = None,
-        clock: Clock = SystemClock(),  # noqa: B008 - stateless
-    ) -> None:
-        """Run under `profile`'s job leases, pydra's files under `work_dir` (`<run dir>/private/pydra`).
-
-        The poll thread's waits run on `clock`.
-
-        Raises:
-            ValueError: `senders` is below 1.
-        """
+    def __init__(self, *, profile: ExecutionProfile | None = None, work_dir: Path | None = None) -> None:
+        """Run under `profile`, pydra's files under `work_dir` (`<run dir>/private/pydra`)."""
         self.profile = profile if profile is not None else ExecutionProfile.load()
-        self.work_dir, self._clock = work_dir, clock
-        self.senders = (
-            senders if senders is not None else sum(c.max_workers for c in self.profile.resource_classes.values())
-        )
-        if self.senders < 1:
-            raise ValueError(f"a runner submits on at least one thread, got {self.senders}")
+        self.work_dir = work_dir
 
-    def run_plan(  # noqa: PLR0913 - the plan, its executor and values, then keyword-only run inputs
+    def run_plan(  # noqa: PLR0913 - the plan and its session, then keyword-only run inputs
         self,
         placed: Plan,
-        executor: Executor,
+        session: PoolSession,
         *,
         values: Mapping[InputIdentity, object],
         events: EventLog,
         store: SenselabStore | None = None,
         cancel: threading.Event | None = None,
     ) -> RunOutcome:
-        """Run every job of `placed` through `executor`, admitted with `values`, and return what became of each.
+        """Run every job of `placed` on `session`'s pool, its graph inputs `values`, and return what became of each.
 
         Each job is first logged `queued` with its key under this plan (`plan_keys`).
 
         A failed element fails only its descendants, which are reported `blocked`; every other element runs. A job
         sharing its key with another job of the run is that job's reuse, or its failure. A license refusal fails each
-        job of its fragment and is not raised. Each job's `queued`, `started` and `finished` or `failed` event is
-        appended to `events`. Once `cancel` is set no further fragment is sent: open fragments are cancelled and the
-        run raises `RunCancelled`. While it runs, `attempt_id()` is the attempt of `events`. pydra's files are under
-        `<work dir>/<attempt of events>`.
+        job of its node and is not raised. Each job's `queued`, `started` and `finished`, `cache_hit` or `failed`
+        event is appended to `events`. Once `cancel` is set no further job is sent, open jobs are withdrawn from the
+        pool and the run raises `RunCancelled`. While it runs, `attempt_id()` is the attempt of `events`.
 
         Raises:
-            ValueError: as `compile_plan`, or as `executor.admit`.
-            RunCancelled: `cancel` was set before every fragment was sent, or a submission was cancelled.
-            QueueHeld, StaleCoordinator: a held env or queue, or a newer coordinator, kept jobs from running; they
-                have no terminal event.
-            WorkflowError: pydra errored a job no executor failed.
-            Exception: the first other error an executor call raised, or a result it did not give, after the run.
+            ValueError: as `compile_plan`, or the plan was placed under another profile than the session's.
+            RunCancelled: `cancel` was set before every job ran.
+            QueueHeld: the pool held jobs of the run; they have no terminal event.
+            NoProgress: the pool was not working for the run's open jobs for `pool.no_progress_s`.
+            WorkflowError: pydra errored a job no pool job failed.
+            Exception: the first other error forming a node's jobs raised, after the run.
         """
+        if placed.placement.profile_digest != session.profile.canonical_digest():
+            raise ValueError(f"plan {placed.hash} was placed under another execution profile than the session's")
         with attempt_scope(events.attempt):
-            return self._run_plan(placed, executor, values, events, store, cancel)
+            return self._run_plan(placed, session, values, events, store, cancel)
 
     def _run_plan(  # noqa: PLR0913 - as `run_plan`
         self,
         placed: Plan,
-        executor: Executor,
+        session: PoolSession,
         values: Mapping[InputIdentity, object],
         events: EventLog,
         store: SenselabStore | None,
@@ -926,29 +976,18 @@ class PydraRunner:
         base = private_dir(self.work_dir if self.work_dir is not None else run_dir_of(placed.hash) / PYDRA_DIR)
         root = private_dir(base / events.attempt)
         store = store if store is not None else SenselabStore(root)
-        admission = executor.admit(placed, values)
+        config = placed.config if placed.config is not None else RunConfig(reuse=ReusePolicy(placed.logical.reuse))
         cancel = cancel if cancel is not None else threading.Event()
         pool = self.profile.pool
-
-        def poller(post: Callable[[Message], object]) -> _Poller:
-            return _Poller(
-                executor,
-                cancel,
-                post,
-                first_s=pool.first_poll_s,
-                max_s=pool.poll_s,
-                cancel_check_s=pool.cancel_check_s,
-                clock=self._clock,
-            )
-
-        driver = _Driver(placed, admission, values, executor, store, events, cancel, poller, self.senders)
+        driver = _Driver(
+            placed, values, session, config, store, events, cancel, pool.cancel_check_s, pool.no_progress_s
+        )
         keys = plan_keys(placed, values)
         for node, element in driver.expected():
             driver.log("queued", node, element, key=keys.get((node, element)))
         try:
             driver.drive(compile_plan(placed))
         finally:
-            executor.release(admission)
             driver.close()
         return _outcome(placed, driver.results)
 
@@ -967,7 +1006,7 @@ def _outcome(placed: Plan, results: Mapping[str, Mapping[tuple[int, ...], Result
 
 
 def run_plan(
-    placed: Plan, executor: Executor, *, values: Mapping[InputIdentity, object], events: EventLog
+    placed: Plan, session: PoolSession, *, values: Mapping[InputIdentity, object], events: EventLog
 ) -> RunOutcome:
-    """Run `placed` through `executor` on a `PydraRunner` under the packaged default profile."""
-    return PydraRunner().run_plan(placed, executor, values=values, events=events)
+    """Run `placed` on `session` with a `PydraRunner` under the plan's profile."""
+    return PydraRunner(profile=placed.execution).run_plan(placed, session, values=values, events=events)

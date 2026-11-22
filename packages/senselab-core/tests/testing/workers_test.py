@@ -68,7 +68,7 @@ def env_python(tmp_path: Path) -> Iterator[Path]:
     registry.add_task(fake.ECHO)
     registry.add_backend(BACKEND)
 
-    def opener(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
+    def opener(backend: BackendSpec, profile: ExecutionProfile, device: str) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
         return EnvHandle(
             python=str(python),
             python_version=platform.python_version(),
@@ -115,7 +115,7 @@ def _opened_by(seen: list[BackendSpec], python: Path, backend: BackendSpec) -> N
     registry.add_task(fake.ECHO)
     registry.add_backend(backend)
 
-    def opener(b: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
+    def opener(b: BackendSpec, profile: ExecutionProfile, device: str) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
         seen.append(b)
         return EnvHandle(str(python), platform.python_version(), "1" * 64, "2" * 64, None)
 

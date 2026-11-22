@@ -17,7 +17,6 @@ from pathlib import Path
 from senselab_core.kernel import prov as kprov
 from senselab_core.kernel.identity import LogicalKey
 from senselab_core.runtime.execution.events import RESULTS, read_events
-from senselab_core.runtime.execution.queue import RUN_QUEUES
 from senselab_core.runtime.provenance import PROV_DIR, ProvStore
 
 
@@ -53,41 +52,14 @@ class ProvenanceIncomplete(AssertionError):
         self.report = report
 
 
-def _outcome_jobs(run_dir: Path) -> list[dict[str, object]]:
-    """Return every job record of the `done` outcomes under `run_dir`'s queues, failed jobs excluded.
-
-    A staged outcome (a dot-named temporary of an interrupted commit) is no outcome.
-    """
-    found: list[dict[str, object]] = []
-    for outcome in sorted(p for p in (run_dir / RUN_QUEUES).glob("*/outcome/*") if not p.name.startswith(".")):
-        try:
-            record = json.loads(outcome.read_bytes())
-        except (OSError, ValueError):
-            continue
-        jobs = record.get("jobs") if isinstance(record, dict) else None
-        found += [j for j in jobs or [] if isinstance(j, dict) and "key_digest" in j and not j.get("failure")]
-    return found
-
-
 def committed_keys(run_dir: Path) -> set[str]:
-    """Return the key digest of every job a result stands for in `run_dir`: pool outcomes and logged results.
-
-    A pool item's `done` outcome record names its jobs, each with the failure it ended in or none; a failed job stored
-    nothing and an item that ended `dead` has no jobs. The event log's `finished` and `cache_hit` lines name the jobs an
-    in-process attempt gave.
-    """
-    keys = {str(j["key_digest"]) for j in _outcome_jobs(run_dir)}
-    return keys | {e.key for e in read_events(run_dir) if e.kind in RESULTS and e.key is not None}
+    """Return the key digest of every job a result stands for in `run_dir`: its `finished` and `cache_hit` lines."""
+    return {e.key for e in read_events(run_dir) if e.kind in RESULTS and e.key is not None}
 
 
 def _jobs_per_item(run_dir: Path) -> Counter[tuple[str, str]]:
     """Return how many committed jobs the run has per (key digest, graph node)."""
-    pool: Counter[tuple[str, str]] = Counter()
-    for job in _outcome_jobs(run_dir):
-        ref = job.get("job")
-        pool[(str(job["key_digest"]), str(ref.get("node", "")) if isinstance(ref, dict) else "")] += 1
-    logged = Counter((e.key, e.node or "") for e in read_events(run_dir) if e.kind in RESULTS and e.key is not None)
-    return pool | logged
+    return Counter((e.key, e.node or "") for e in read_events(run_dir) if e.kind in RESULTS and e.key is not None)
 
 
 def _reuse_items(data: bytes) -> list[tuple[str, str]]:

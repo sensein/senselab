@@ -1,6 +1,5 @@
 """The plan-time unit resolver: `explain` and the in-process executor read measures before any worker starts."""
 
-import logging
 import platform
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import replace
@@ -34,21 +33,19 @@ from senselab_core.runtime.call import (
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.datasets import RecordSet
 from senselab_core.runtime.envs import EnvHandle
-from senselab_core.runtime.execution.events import EventLog
-from senselab_core.runtime.execution.in_process import InProcess, fragment_jobs, node_call, node_fragment
+from senselab_core.runtime.execution.executor import Admission
+from senselab_core.runtime.execution.fragments import fragment_jobs, node_call, node_fragment
 from senselab_core.runtime.execution.job import Job
 from senselab_core.runtime.execution.plan_reads import count_items, plan_decoder, unit_of_node
-from senselab_core.runtime.execution.run import InputChanged
-from senselab_core.runtime.execution.workers import WorkerSet
+from senselab_core.runtime.execution.run import InputChanged, results_root, start
 from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.licenses import license_record
 from senselab_core.runtime.measures import MeasureSource, MeasureUnit, Provenance
 from senselab_core.runtime.planner import Plan, plan
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.units import UnitResolver, Unresolved, decoder_of, default_measures, measure_roots
-from senselab_core.testing.calibration_samples import UNIT, observation
+from senselab_core.testing.calibration_samples import observation
 from senselab_core.testing.interpreter import source_tree_python
 
 CLUSTER = (
@@ -100,7 +97,7 @@ OTHER = HardwareClass(device="cpu", name="Another CPU", cpus=4)
 PROVENANCE = Provenance(job=None, run="r1", senselab=None, profile="d" * 64, hardware=SEEN)
 
 
-def _handle(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
+def _handle(backend: BackendSpec, profile: ExecutionProfile, device: str) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
     return EnvHandle(
         python=source_tree_python(),
         python_version=platform.python_version(),
@@ -110,11 +107,11 @@ def _handle(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # no
     )
 
 
-def _unbuilt(backend: BackendSpec, profile: ExecutionProfile) -> None:  # noqa: ARG001 - an EnvRead
+def _unbuilt(backend: BackendSpec, profile: ExecutionProfile, device: str) -> None:  # noqa: ARG001 - an EnvRead
     return None
 
 
-def _unreadable(backend: BackendSpec, profile: ExecutionProfile) -> None:  # noqa: ARG001 - an EnvRead
+def _unreadable(backend: BackendSpec, profile: ExecutionProfile, device: str) -> None:  # noqa: ARG001 - an EnvRead
     raise EnvUnreadable("uv is not installed")
 
 
@@ -324,17 +321,18 @@ def test_jobs_of_two_decoders_are_two_units(tmp_path: Path) -> None:
     soundfile.write(tmp_path / "a.wav", numpy.zeros(1600, dtype=numpy.float32), 16000)
     profile = _profile(tmp_path)
     placed, bound = _plan([str(tmp_path / "a.wav")], profile, AUDIO, "Audio")
-    jobs, _ = fragment_jobs(node_fragment(placed, InProcess(profile=profile).admit(placed, bound)), placed, bound)
+    jobs, _ = fragment_jobs(node_fragment(placed, Admission(id="a", plan_hash=placed.hash)), placed, bound)
     bare = Job(jobs[0].ref, jobs[0].call, {})
     assert isinstance(decoder_of([jobs[0], bare]), Unresolved)
     assert isinstance(decoder_of([jobs[0]]), str) and decoder_of([bare]) is None
 
 
 def _warm(tmp_path: Path, profile: ExecutionProfile, rows: Sequence[str]) -> None:
-    """Run a plan over `rows` into the result store a run uses by default."""
+    """Run a plan over `rows` into the result store a run uses by default, on a pool served here."""
+    pools = pytest.importorskip("senselab_core.testing.pools", exc_type=ImportError)
     warmed, values = _plan(rows, profile)
-    executor = InProcess(profile=profile, run=RunConfig(), workers=WorkerSet(2))
-    executor.forget(executor.submit(node_fragment(warmed, executor.admit(warmed, values))))
+    with pools.served(tmp_path / "warm", profile, store=results_root()) as (session, _):
+        assert start(warmed, session, values=values).wait(timeout=120).done
 
 
 @pytest.mark.logic
@@ -346,8 +344,7 @@ def test_explain_counts_servable_and_computed_items_by_default(tmp_path: Path) -
     text = placed.explain(hardware=HOST)
     assert "class cpu: 1 servable, 2 computed" in text
     assert text.index("class cpu:") < text.index("waits on another run")
-    other = ResultStore(tmp_path / "elsewhere")
-    assert "class cpu: 0 servable, 3 computed" in placed.explain(store=other, hardware=HOST)
+    assert "class cpu: 0 servable, 3 computed" in placed.explain(store=tmp_path / "elsewhere", hardware=HOST)
     use_packaged(_use(_unbuilt))
     unbuilt = placed.explain(hardware=HOST)
     assert "class cpu: 0 servable, 0 computed, 3 undetermined (the env of backend 'score' is not built)" in unbuilt
@@ -362,7 +359,7 @@ def test_jobs_whose_context_is_unknowable_are_undetermined(tmp_path: Path) -> No
     counted = count_items(
         placed,
         bound,
-        store=ResultStore(tmp_path / "cache" / "results"),
+        admits=lambda *_: True,
         run=RunConfig(),
         profile=ExecutionProfile.load(CLUSTER),
     )
@@ -370,55 +367,24 @@ def test_jobs_whose_context_is_unknowable_are_undetermined(tmp_path: Path) -> No
     assert "chosen at submission" in counted["cpu"].why[0]
 
 
-@pytest.mark.logic
-def test_the_in_process_executor_sizes_from_the_unit_it_resolves(tmp_path: Path) -> None:
-    """With no `units` given, the executor resolves the unit itself: measured once this host's class is seen."""
-    profile = _profile(tmp_path)
-    placed, bound = _plan(["x", "y"], profile)
-    resolver = UnitResolver(profile, hardware=HOST)
-    executor = InProcess(profile=profile, workers=WorkerSet(1), measures=_source(), units=resolver.unit)
-    jobs, placement = fragment_jobs(node_fragment(placed, executor.admit(placed, bound)), placed, bound)
-    assert not executor.sizing(jobs, placement).measured.time
-    _seen(profile, SEEN)
-    assert executor.sizing(jobs, placement).measured.time
-
-
-@pytest.mark.logic
-def test_the_extrapolation_log_starts_afresh_with_each_run(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    """An executor reused for a second run logs a unit's extrapolation again: once per unit per run."""
-    profile = _profile(tmp_path)
-    placed, bound = _plan(["a long enough text"], profile, TEXTY, "Text")
-    source = MeasureSource([_Root()], estimate=lambda unit, observed: _estimate("chars", hi=5.0))
-    executor = InProcess(
-        profile=profile, workers=WorkerSet(1), measures=source, units=lambda call, placement, decoder: UNIT
-    )
-    jobs, placement = fragment_jobs(node_fragment(placed, executor.admit(placed, bound)), placed, bound)
-    with caplog.at_level(logging.INFO, logger="senselab_core.runtime.sizing"):
-        executor.sizing(jobs, placement)
-        executor.sizing(jobs, placement)
-        assert [UNIT.label() in r.getMessage() for r in caplog.records] == [True]
-        executor.bind_epoch(2, EventLog(tmp_path / "run", "a2", 2, epoch=2))
-        executor.sizing(jobs, placement)
-    assert len(caplog.records) == 2
-
-
 ISOLATED = SCORE.model_copy(update={"name": "units_test.isolated", "outputs": {"label": "sha256"}})
 REGISTRY.add_task(ISOLATED)
 REGISTRY.add_backend(_backend(ISOLATED, env=Env.isolated("units-test")))
 
 
-def _isolated_unbuilt(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle | None:  # an EnvRead
-    return None if backend.env.kind == "isolated" else _handle(backend, profile)
+def _isolated_unbuilt(backend: BackendSpec, profile: ExecutionProfile, device: str) -> EnvHandle | None:  # an EnvRead
+    return None if backend.env.kind == "isolated" else _handle(backend, profile, device)
 
 
-def _isolated_built(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # an EnvRead
-    handle = _handle(backend, profile)
+def _isolated_built(backend: BackendSpec, profile: ExecutionProfile, device: str) -> EnvHandle:  # an EnvRead
+    handle = _handle(backend, profile, device)
     return replace(handle, lock_sha="3" * 64) if backend.env.kind == "isolated" else handle
 
 
 @pytest.mark.logic
 def test_a_backend_name_and_version_shared_by_two_envs_reads_each_env(tmp_path: Path) -> None:
     """A host backend and an isolated one named alike in one plan each get their env's handle, unit and context."""
+    pytest.importorskip("pydra", reason="the servable counts read the result store, a pydra store")
     profile = _profile(tmp_path)
     _seen(profile, SEEN)
     graph = Graph.model_validate(
@@ -533,5 +499,5 @@ def test_a_run_over_an_undecodable_file_raises_input_unreadable(tmp_path: Path, 
     with pytest.raises(InputUnreadable):
         _plan([str(path)], _profile(tmp_path), AUDIO, "Audio")
     with pytest.raises(InputChanged) as raised:
-        placed.run(store=ResultStore(tmp_path / "store"))
+        placed.run(store=tmp_path / "store")
     assert isinstance(raised.value.__cause__, InputUnreadable) and raised.value.changed == (("r0", "text"),)

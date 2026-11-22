@@ -47,15 +47,14 @@ def has_live_jobs(prefix: str, timeout_s: float, run: Callable[[list[str], float
         return None
 
 
-def run_prefixes(runs_glob: str, profile: Path) -> Callable[[], list[str]]:
+def run_prefixes(runs_glob: str) -> Callable[[], list[str]]:
     """Return a function giving the Slurm job-name prefix of each run directory matching `runs_glob`, as it stands.
 
     A run directory is named by its plan hash. The prefix is `exitlib.slurm_prefix`, the one the run's own jobs carry,
     so another run's jobs under the same login are not this run's. Each is computed once, when its directory first
-    appears (the computation writes a profile file into the run directory), and kept; one that fails is logged and
-    tried again on the next call, and does not drop the others.
+    appears (from the run's pool header), and kept; one that fails is logged and tried again on the next call, and
+    does not drop the others.
     """
-    loaded = exitlib.load_profile(str(profile))
     known: dict[str, str] = {}
 
     def prefixes() -> list[str]:
@@ -64,7 +63,7 @@ def run_prefixes(runs_glob: str, profile: Path) -> Callable[[], list[str]]:
             if found in known or not run.is_dir():
                 continue
             try:
-                known[found] = exitlib.slurm_prefix(loaded, run, run.name)
+                known[found] = exitlib.slurm_prefix(run)
             except Exception as error:  # noqa: BLE001 - the watchdog must outlive any one failed computation
                 print(f"WATCHDOG: no prefix for {found} yet: {error!r}", file=sys.stderr, flush=True)
         return list(known.values())

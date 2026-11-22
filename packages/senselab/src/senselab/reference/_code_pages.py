@@ -17,10 +17,8 @@ from senselab_core.runtime import planner
 from senselab_core.runtime.config import load_yaml
 from senselab_core.runtime.execution import run as run_module
 from senselab_core.runtime.execution.events import RunStatus
-from senselab_core.runtime.execution.executor import Executor
-from senselab_core.runtime.execution.in_process import InProcess
-from senselab_core.runtime.execution.pool import Pool
-from senselab_core.runtime.execution.substrates import Local, Slurm, Substrate, substrate_of
+from senselab_core.runtime.execution.warm import PoolSession, worker_classes
+from senselab_core.runtime.execution.warm import substrate_of as pool_substrate
 from senselab_core.runtime.fetch import DataManifest
 from senselab_core.runtime.profiles import ExecutionProfile, packaged_profiles
 from senselab_core.runtime.site_placement import PlacementAnswer, PlacementRequest
@@ -127,33 +125,21 @@ Properties:
 
 
 def executors_page() -> str:
-    """Return the executor reference: `Executor`, `InProcess`, `Pool` and the substrates."""
+    """Return the execution reference: `PoolSession`, how a profile becomes pydra worker classes and a substrate."""
     return f"""{BADGES["2x"]}
 
-An executor runs the fragments of an admitted plan. `Plan.run` takes one, and the session default is set with
-`senselab.use(executor=..., store=...)`. With none, a plan under a local substrate runs on `InProcess`, and a plan
-under a `slurm` substrate on a `Pool` over `Slurm`.
+A plan runs on pydra's warm worker pool (`pydra.workers.pool.WarmPool`): long-running workers, started by a
+substrate, load a backend's model once and run job after job. `Plan.run` takes a `PoolSession` its caller owns and
+closes, whose workers and models stay resident from one run to the next; the session default is set with
+`senselab.use(pool=..., store=...)`. With none, runs and calls use the process's default session for their profile
+and store, opened on first use and closed when the process exits, so a model loaded by one call stays resident for the
+next one through the profile's idle window (`pool.idle_polls` polls of `pool.poll_s`; five minutes on `laptop`).
+A profile's `local` substrate starts workers as processes on this host; a `slurm` one submits one `sbatch` per
+worker, with typed GPUs and never a QOS.
 
-| Executor | Runs jobs | Workers |
-|---|---|---|
-| `InProcess` | in this process, before `submit` returns | this process's own worker set |
-| `Pool` | on queues in the run directory | pool workers that a substrate starts: `Local` processes or `Slurm` jobs |
-
-## `Executor`
-
-{_api.doc(Executor)}
-
-{_api.members(Executor, ("admit", "release", "fragment_size", "submit", "status", "cancel", "poll", "bind_epoch"))}
-{_api.entry("InProcess", InProcess, level=2)}
-{_api.entry("Pool", Pool, level=2)}
-## Substrates
-
-{_api.doc(Substrate)}
-
-{_api.members(Substrate, ("start", "live", "running", "stop"))}
-{_api.entry("Local", Local, level=3)}
-{_api.entry("Slurm", Slurm, level=3)}
-{_api.entry("substrate_of", substrate_of, level=3)}
+{_api.entry("PoolSession", PoolSession, level=2)}
+{_api.entry("worker_classes", worker_classes, level=3)}
+{_api.entry("substrate_of", pool_substrate, level=3)}
 ## Site placement
 
 senselab holds no site scheduling policy. A group that runs on a scheduler writes its policy as a placement hook;
@@ -266,7 +252,7 @@ def profiles_page() -> str:
     ]
     return f"""{BADGES["2x"]}
 
-An execution profile (`execution-profile@5`) says where and how a plan runs: devices, resource classes, the substrate
+An execution profile (`execution-profile@6`) says where and how a plan runs: devices, resource classes, the substrate
 that starts workers, the pool, calibration, leases and fault budgets. It is recorded with each result and never
 reaches a key, so a plan has one hash under every profile. The packaged profiles are
 {", ".join(f"`{p}`" for p in packaged_profiles())}. `ExecutionProfile.load(name_or_path)` reads one; a mapping or file
@@ -283,10 +269,14 @@ a site profile: every `<fill: ...>` in it is yours to set, and it refuses to loa
 - Placement reads no scheduler. A QOS limit on submitted jobs or GPUs is invisible to it, and a run's coordinators are
   jobs too, so they count against a per-user submit limit that no placement request shows. The site's placement hook,
   a `module:callable` named in `substrate.placement_hook`, is where a group accounts for such limits: it receives a
-  `PlacementRequest` and answers a `PlacementAnswer`.
-- A group calibrates its own resource with `benchmarks/scale/ladder.py run SUITE --execution PROFILE --measures-root
-  PATH`, then lists that shared measures root in `calibration.measures_roots`. A unit measured there is read on an
-  identity match, so one calibration serves every member of the group.
+  `PlacementRequest` and answers a `PlacementAnswer`, once per class when a run starts. Its values, over a run's
+  explicit `placement` values, are the partition, time, worker cap and excluded nodes of the worker classes the run's
+  pool session opens; a session opened by hand takes them as `PoolSession(..., placements=...)`. A process holds one
+  default session, so a hook whose answer changes from one run to the next closes it and opens another, and the
+  models it held are loaded again.
+- A group shares what its runs measure by listing a shared measures root first in `calibration.measures_roots`: the
+  pool's calibration (memory samples and the classes a backend ran out of memory on) is kept under the first writable
+  root, so a run on any member's session places a backend from what earlier runs measured.
 - There is no packaged resource table: figures for a resource come from measures made on it.
 
 ## Keys

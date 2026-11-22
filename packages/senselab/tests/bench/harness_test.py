@@ -88,7 +88,7 @@ def _registry() -> Registry:
     return registry
 
 
-def _this_interpreter(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
+def _this_interpreter(backend: BackendSpec, profile: ExecutionProfile, device: str) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
     return EnvHandle(
         python=sys.executable,
         python_version=platform.python_version(),

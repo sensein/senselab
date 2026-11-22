@@ -13,11 +13,9 @@ from senselab._api.facade import PlanKwargs, session
 from senselab_core.kernel._base import FrozenMapping
 from senselab_core.kernel.dataset import Record
 from senselab_core.runtime.execution.executor import FaultRecord
-from senselab_core.runtime.execution.in_process import InProcess
 from senselab_core.runtime.execution.run import InputsUnavailable, NotRun, Output, ResultSet, Run
 from senselab_core.runtime.planner import Plan
 from senselab_core.runtime.profiles import ExecutionProfile
-from senselab_core.runtime.store import ResultStore
 
 import senselab as sl
 
@@ -37,7 +35,7 @@ def session_restored() -> Iterator[None]:
     """Leave the session defaults as they were."""
     before = session()
     yield
-    sl.use(execution=before.execution, config=before.config, executor=before.executor, store=before.store)
+    sl.use(execution=before.execution, config=before.config, pool=before.pool, store=before.store)
 
 
 @pytest.mark.contract
@@ -87,14 +85,12 @@ def test_facade_plan_run_and_resume_agree_with_map() -> None:
 @pytest.mark.contract
 @needs_runner
 @pytest.mark.usefixtures("fake_stack")
-def test_a_session_executor_runs_over_its_own_store(tmp_path: Path) -> None:
-    """`sl.run` and `sl.resume` read the results from the store the session's executor writes, not the default one."""
+def test_a_session_store_is_where_runs_write_and_read(tmp_path: Path) -> None:
+    """`sl.run` and `sl.resume` write and read the results in the session's store, not the default one."""
     echo = _echo_namespace()["Echo"](salt="s")
     dataset = sl.Dataset.from_records(_records(2))
-    elsewhere = ResultStore(tmp_path / "elsewhere")
-    with pytest.raises(ValueError, match="store"):
-        sl.use(executor=InProcess(store=elsewhere))
-    with sl.use(executor=InProcess(store=elsewhere), store=elsewhere):
+    elsewhere = tmp_path / "elsewhere"
+    with sl.use(store=elsewhere):
         ran = sl.run(echo, dataset)
         resumed = sl.resume(sl.plan(echo, dataset))
     expected = [echo({"v": i}).outputs["value"] for i in range(2)]

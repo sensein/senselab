@@ -7,7 +7,7 @@ import pytest
 from pool_stack_fixture import host_env, registry, scoring
 from senselab_core.kernel.identity import Attestation
 from senselab_core.runtime import request_reports
-from senselab_core.runtime.execution.workers import WorkerSet, host_model_key
+from senselab_core.runtime.execution.workers import host_model_key, server_worker
 from senselab_core.runtime.host_worker import HostWorker
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.worker_client import WorkerClient
@@ -59,7 +59,7 @@ def test_a_second_model_less_unit_on_cpu_reports_a_load() -> None:
     """Two model-less units on cpu have keys of their own, so the second one's first request reports a load."""
     task, profile = scoring("host_reports_test.score"), ExecutionProfile.load("laptop")
     specs = [registry(task, name=name).backends(task.name)[0] for name in ("dsp", "other")]
-    keys = [host_model_key(spec, host_env(spec, profile), None, "cpu") for spec in specs]
+    keys = [host_model_key(spec, host_env(spec, profile, "cpu"), None, "cpu") for spec in specs]
     assert keys[0] != keys[1]
     cache = ModelCache(10)
     workers = [HostWorker(COUNTING, init={}, key=k, cache=cache, size_of=_size) for k in keys]
@@ -100,7 +100,7 @@ def _consume(server: _Server) -> list[tuple[int | None, bool]]:
     task = scoring("host_reports_test.served")
     spec = registry(task, worker="backends.served_backend_fixture").backends(task.name)[0]
     init = {"device": "cpu", "dtype": "default", "model": {"source": "hf", "id": "org/m", "identity": "c" * 40}}
-    return _asks(WorkerSet.server_worker(spec, init, server))
+    return _asks(server_worker(spec, init, server))
 
 
 @pytest.mark.logic

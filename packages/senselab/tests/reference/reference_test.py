@@ -281,7 +281,6 @@ def test_profiles_page_states_the_site_profile_rules() -> None:
         "generic profiles only",
         "invisible",
         "placement hook",
-        "--measures-root",
         "calibration.measures_roots",
     ):
         assert phrase in page
@@ -323,9 +322,9 @@ def test_status_page_lists_the_executors_and_exit_scenarios_of_the_checkout() ->
     assert root is not None
     assert [r[0] for r in _render.scenario_rows(root)] == ["`resample`", "`stt`"]
     rows = {(r[0], r[1]): r for r in _render.executor_rows(root)}
-    assert rows[("`InProcess`", "this process")][2:] == ("`laptop`", "yes")
-    assert rows[("`Pool`", "`Slurm`")][2:] == ("`slurm`", "yes")
-    assert rows[("`Pool`", "`Local`")][2] == "-"
+    assert rows[("`WarmPool` (the run's own)", "`LocalSubstrate`")][2:] == ("`laptop`", "yes")
+    assert rows[("`WarmPool` (the run's own)", "`SlurmSubstrate`")][2:] == ("`slurm`", "yes")
+    assert rows[("`PoolSession`", "`LocalSubstrate`")][2] == "-"
     assert _render.executor_rows(None)[0][3] == "-"
 
 

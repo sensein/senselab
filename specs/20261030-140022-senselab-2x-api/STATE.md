@@ -134,6 +134,15 @@ match what was built), plus **fix round 1** (`b76681a9`): a holder is identified
 
 ## Log
 
+- **2026-11-21 (route-B S1b):** senselab runs on pydra's warm pool. Pinned to pydra `integration/senselab`
+  @`3046e31e` (RFC 0005 W12, O4). A run's jobs go to a `WarmPool` through a caller-owned `PoolSession`
+  (`runtime/execution/warm.py`); models are pydra providers (`senselab-worker@3` owns a process, `senselab-host@3` loads
+  in the pool worker); results go to a fresh `PortableStore` with senselab's identity, reuse rule and provenance hook
+  (`runtime/execution/portable.py`); `MeasuredFit` over the pool's calibration places jobs at submit. Deleted: the
+  pool, claim loop, queue, run epoch, substrates, online probe, `WorkerSet` checkout, `fit.py`, the bisection engine,
+  the `Executor` protocol and `InProcess`, the scale ladder, the batch invariance probe and the queue cross-node probe.
+  `execution.md` and ADR-001 carry the amendment. The ORCD runs (CPU tier, GPU and model tier, a `SlurmSubstrate` pool
+  run on typed H100 workers, the one-load scale case `benchmarks/scale/one_load.py`) are the owner's to submit.
 - **2026-11-14 (Phase 3 done):** Task 24 fixed what the exit adversarial round and the Task 21 reruns found, in twelve tasks, each merged `--no-ff` onto the phase head with CI green and reviewed by a different model:
   - **T24-1** `7b56922d`: every run-state write goes through `StorageDir` (`write_atomically`, `publish`), event appends loop and truncate, readers quarantine a torn line, an AST lint refuses a hand-rolled write (R-290, R-285).
   - **T24-3** `88eeb813`: a fault class survives every wrapper; one `FaultRecord` constructor pair and one server-fault mapper; a load-time fault is the environment's, never split (R-287, R-289, R-292, R-257; `run-event@2.2`).

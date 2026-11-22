@@ -432,7 +432,7 @@ def _started(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, committed: int)
     monkeypatch.setattr(interrupt_resume, "run_dir_of", lambda plan_hash: tmp_path / "events")
     monkeypatch.setattr(exitlib, "build_tree", lambda step, work: work)
     monkeypatch.setattr(exitlib, "planned", lambda step, root, profile: placed)
-    monkeypatch.setattr(exitlib, "slurm_prefix", lambda profile, run_dir, plan_hash: "senselab-x-")
+    monkeypatch.setattr(exitlib, "slurm_prefix", lambda run_dir: "pydra-x-")
     listings = iter([["77", "78"], []])
     monkeypatch.setattr(exitlib, "slurm_job_ids", lambda prefix, timeout_s, run: next(listings, []))
     monkeypatch.setattr(interrupt_resume, "scancel", lambda jobs: None)
@@ -454,11 +454,11 @@ def test_interrupt_cancels_the_prefix_kills_the_process_then_sweeps_what_it_subm
     listings = iter([["1", "2"], ["3"], []])
 
     def jobs(prefix: str, timeout_s: float) -> list[str]:
-        assert prefix == "senselab-x-" and timeout_s == 5.0
+        assert prefix == "pydra-x-" and timeout_s == 5.0
         return next(listings)
 
     cancelled = interrupt_resume.interrupt(
-        "senselab-x-",
+        "pydra-x-",
         99,
         5.0,
         0.0,

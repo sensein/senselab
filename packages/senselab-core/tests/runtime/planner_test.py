@@ -30,8 +30,6 @@ from senselab_core.runtime.call import packaged as packaged_now
 from senselab_core.runtime.catalogue import Catalogue
 from senselab_core.runtime.datasets import from_records
 from senselab_core.runtime.envs import EnvHandle
-from senselab_core.runtime.execution.in_process import InProcess
-from senselab_core.runtime.execution.workers import WorkerSet
 from senselab_core.runtime.hardware import GpuInfo, HardwareInfo
 from senselab_core.runtime.keys import MissingProfileSlice
 from senselab_core.runtime.licenses import LicensePolicy, LicenseRefused, license_record
@@ -40,7 +38,6 @@ from senselab_core.runtime.placement import BackendParamsMismatch
 from senselab_core.runtime.planner import CALL_NODE, InvalidGraph, RecordBinding, UnmappedOutput, plan, resolve
 from senselab_core.runtime.profiles import ExecutionProfile, NoDevice
 from senselab_core.runtime.revision import PROCESS_RESOLVER, Resolver
-from senselab_core.runtime.store import ResultStore
 from senselab_core.testing.calibration_samples import UNIT, observation
 
 CLUSTER = (
@@ -128,7 +125,7 @@ entries:
 )
 
 
-def _no_env(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
+def _no_env(backend: BackendSpec, profile: ExecutionProfile, device: str) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
     raise AssertionError("resolving a plan opens no env")
 
 
@@ -533,12 +530,12 @@ def test_explain_lists_every_placement_field() -> None:
 @pytest.mark.logic
 def test_env_builds_announced() -> None:
     """An isolated env not yet built is announced, and a built one is not; a host env never is."""
-    _use(env_built=lambda backend, profile: False)
+    _use(env_built=lambda backend, profile, device: False)
     announced = _plan(_call(ISOLATED), _records("x"))
     assert announced.placement.env_builds == ("isolated:boxed",)
     assert "envs to build: isolated:boxed" in announced.explain()
     assert _plan(_call(), _records("x")).placement.env_builds == ()
-    _use(env_built=lambda backend, profile: True)
+    _use(env_built=lambda backend, profile, device: True)
     assert _plan(_call(ISOLATED), _records("x")).placement.env_builds == ()
 
 
@@ -712,26 +709,6 @@ def _sized(batched_s: float = 0.1) -> tuple[MeasureSource, ExecutionProfile]:
     )
     profile = ExecutionProfile.load("laptop", {"resource_classes": {"cpu": {"mem_bytes": 10_000}}})
     return MeasureSource([_Reads()], estimate=lambda unit, observed: estimate), profile
-
-
-@pytest.mark.logic
-def test_a_measured_unit_batches_in_process(tmp_path: Path) -> None:
-    """The executor sizes a node's fragment from `size` over its estimate: many jobs where it batches, else one."""
-    source, profile = _sized()
-    placed = _plan(_call(), _records("x", "y"), execution=profile)
-    assert placed.placement.nodes[CALL_NODE].batch_size == 1
-    executor = InProcess(
-        store=ResultStore(tmp_path / "a"), profile=profile, workers=WorkerSet(1), measures=source, units=_unit
-    )
-    assert executor.fragment_size(placed, CALL_NODE) == profile.pool.quantum_items
-    slower, _ = _sized(batched_s=0.2)
-    unbatched = _plan(_call(), _records("x"), execution=profile)
-    assert (
-        InProcess(
-            store=ResultStore(tmp_path / "b"), profile=profile, workers=WorkerSet(1), measures=slower, units=_unit
-        ).fragment_size(unbatched, CALL_NODE)
-        == 1
-    )
 
 
 def _unit(call: Any, placement: Any, decoder: Any) -> MeasureUnit:  # noqa: ANN401, ARG001 - a UnitOf

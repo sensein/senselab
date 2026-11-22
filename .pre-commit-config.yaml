@@ -38,7 +38,7 @@ repos:
     name: mypy --strict (packages, harness, 2.x scripts, locked)
     entry: uv run --frozen --no-sync mypy --strict --platform linux --ignore-missing-imports --extra-checks
     language: system
-    files: ^(packages/.*|benchmarks/(exit|scale)/.*|scripts/(check_(brief|config_derivations|fixed_parameters|fixture_budget|host_identity|licenses|local_paths|pr_models|pr_template|size_budgets|source_digests|spec_ids)|env_grouping|generate_(graph_schema|task_api)|limits_scope|lock_envs|probe_(lease|measures|queue)_cross_node|regenerate_equivalence|release_gate|run_calls))\.py$
+    files: ^(packages/.*|benchmarks/(exit|scale)/.*|scripts/(check_(brief|config_derivations|fixed_parameters|fixture_budget|host_identity|licenses|local_paths|pr_models|pr_template|size_budgets|source_digests|spec_ids)|env_grouping|generate_(graph_schema|task_api)|limits_scope|lock_envs|probe_(lease|measures)_cross_node|regenerate_equivalence|release_gate|run_calls))\.py$
     exclude: ^packages/(.*/)?conftest\.py$
     require_serial: true
 - repo: https://github.com/pre-commit/mirrors-mypy

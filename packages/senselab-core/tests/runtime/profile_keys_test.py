@@ -22,7 +22,6 @@ from senselab_core.runtime import envs, hardware, storage
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution import supervisor as supervisor_module
 from senselab_core.runtime.execution.run import Run
-from senselab_core.runtime.execution.substrates import Local
 from senselab_core.runtime.execution_settings import JobLease, LeaseBoundError
 from senselab_core.runtime.locks import Lease, LeaseTimeout
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -34,8 +33,7 @@ PACKAGED = Path(senselab_core.__file__).parent / "runtime" / "data" / "profiles"
 PROFILE = ExecutionProfile.packaged()
 KEYS = {
     "lease": ["missed_beats", "wait_s", "poll_s", "remove_attempts", "record_attempts", "dir_mode"],
-    "pool": ["idle_polls", "cancel_check_s", "event_poll_s"],
-    "substrate": ["stop_grace_s"],
+    "pool": ["idle_polls", "cancel_check_s", "event_poll_s", "no_progress_s"],
     "supervisor": ["reap_poll_s", "exit_bound_s"],
     "timeouts": ["fetch_s"],
     "store": ["commit_attempts", "probe_bound_s", "probe_poll_s", "clock_tolerance_s"],
@@ -146,30 +144,6 @@ def test_run_wait_polls_every_event_poll_s(tmp_path: Path, lease_clock: Callable
     clock = lease_clock()
     assert not Run(tmp_path, profile=PROFILE.model_copy(update={"pool": pool}), clock=clock).wait(7.0).done
     assert clock.slept == [2.0, 2.0, 2.0, 1.0]
-
-
-@pytest.mark.logic
-def test_a_local_worker_is_given_stop_grace_s_after_sigterm() -> None:
-    """`Local.stop` waits `stop_grace_s` for a terminated worker before it kills it."""
-    waited: list[float] = []
-
-    class Proc:
-        pid = 1
-
-        def poll(self) -> None:
-            return None
-
-        def terminate(self) -> None:
-            pass
-
-        def wait(self, timeout: float | None = None) -> int:
-            waited.append(timeout or 0.0)
-            return 0
-
-    local = Local(1, command=["x"], stop_grace_s=7.5)
-    local._procs["1"] = SimpleNamespace(proc=Proc(), supervisor=SimpleNamespace(released=lambda pid: None))  # type: ignore[assignment]
-    local.stop([SimpleNamespace(id="1")])  # type: ignore[list-item]
-    assert waited == [7.5]
 
 
 @pytest.mark.logic

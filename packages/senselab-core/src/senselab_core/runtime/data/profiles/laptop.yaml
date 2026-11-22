@@ -1,6 +1,6 @@
 # Derivations: specs/20261030-140022-senselab-2x-api/config-derivations.md, by profile and key.
 # The profile's format.
-format: execution-profile@5.0
+format: execution-profile@6.1
 # The packaged profile's name.
 name: laptop
 # Per task, its stacks best first; empty lets each task's declared backend order decide.
@@ -36,26 +36,24 @@ resource_classes:
   gpu:
     device: cuda
     max_workers: 1
-# What starts pool workers; the first and longest wait after a failed start; the site's placement hook and the seconds it may take.
+# What starts pool workers; the site's placement hook and the seconds it may take.
 substrate:
   kind: local
-  start_backoff_first_s: 0.05
-  start_backoff_max_s: 30
   placement_hook:
   placement_hook_s: 0.05
-  stop_grace_s: 30
-# The quantum ceilings, how pool workers poll and roll index segments, how often a coordinator first reads an outcome, and how long a worker reuses its read of its peers, its device and its probe queues.
+# The quantum ceilings, how pool workers poll and how long they stay idle, the threads that ask the store which jobs it
+# would serve, how often a following coordinator checks a cancel, how often `Run.wait` reads another process's run, and
+# how long a run with jobs in the pool waits with no outcome, no ready or starting worker and no claim heartbeat
+# before it fails naming the classes still waiting.
 pool:
   quantum_items: 100
   quantum_s: 300
-  poll_s: 30
-  first_poll_s: 0.05
-  presence_refresh_s: 1
-  segment_items: 512
+  poll_s: 1
   admit_threads: 8
-  idle_polls: 3
+  idle_polls: 300
   cancel_check_s: 0.05
   event_poll_s: 0.5
+  no_progress_s: 1800
 # The fractions and targets each unit's batch, quantum and worker count are derived from: the load's largest share of a
 # quantum, the share of a worker's memory a batch fills, the wall time a queue's work aims to end in, and the one-job
 # items a unit without a measure runs first, the workers its queue is given for them, and the seconds a worker's read

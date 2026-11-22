@@ -170,18 +170,18 @@ class Result:
     reused: ReusePolicy | None
 
 
-EnvOpener = Callable[[BackendSpec, ExecutionProfile], EnvHandle]
-"""Open the env a backend declares under a profile, building it if needed."""
-EnvProbe = Callable[[BackendSpec, ExecutionProfile], bool]
-"""Whether the env a backend declares is built under a profile, building nothing."""
+EnvOpener = Callable[[BackendSpec, ExecutionProfile, str], EnvHandle]
+"""Open the env a backend declares under a profile for workers on a device, building it if needed."""
+EnvProbe = Callable[[BackendSpec, ExecutionProfile, str], bool]
+"""Whether the env a backend declares is built under a profile for a device, building nothing."""
 
 
 class EnvUnreadable(Exception):  # noqa: N818 - a state, not an error of the caller
     """The env a backend declares cannot be read without building it; the message says why."""
 
 
-EnvRead = Callable[[BackendSpec, ExecutionProfile], EnvHandle | None]
-"""The handle of the env a backend declares if it is built under a profile, else None; builds and locks nothing.
+EnvRead = Callable[[BackendSpec, ExecutionProfile, str], EnvHandle | None]
+"""The handle of the env a backend declares if it is built under a profile for a device, else None; builds nothing.
 
 Raises `EnvUnreadable` for any cause it cannot read it.
 """
@@ -189,11 +189,11 @@ EnvLock = Callable[[BackendSpec], Path]
 """The lock file the isolated or server env a backend declares is built from, reading nothing."""
 
 
-def _unbuilt(backend: BackendSpec, profile: ExecutionProfile) -> bool:  # noqa: ARG001 - an EnvProbe
+def _unbuilt(backend: BackendSpec, profile: ExecutionProfile, device: str) -> bool:  # noqa: ARG001 - an EnvProbe
     return False
 
 
-def _unread(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle | None:  # noqa: ARG001 - an EnvRead
+def _unread(backend: BackendSpec, profile: ExecutionProfile, device: str) -> EnvHandle | None:  # noqa: ARG001 - an EnvRead
     return None
 
 
@@ -241,7 +241,7 @@ def _derived_license(records: LockRecords, backend: BackendSpec) -> License:
     return backend_license(backend, records(backend))
 
 
-def _no_env(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
+def _no_env(backend: BackendSpec, profile: ExecutionProfile, device: str) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
     raise LookupError(f"no package has said how to open env {backend.env.kind!r} of backend {backend.name!r}")
 
 

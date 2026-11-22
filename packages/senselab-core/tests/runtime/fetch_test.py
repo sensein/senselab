@@ -15,7 +15,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import IO, Any, BinaryIO
 
 import pytest
 import yaml
@@ -400,6 +400,43 @@ def test_size_mode_skips_rehash_and_full_mode_catches_same_size_corruption(
         paths = fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}), verify="full")
     assert paths["a/voice.wav"].read_bytes() == PAYLOAD
     assert _rehashed(caplog)
+
+
+class _MovedAtClose:
+    """A downloaded blob's file object whose close first moves the file's mtime, as an NFS server can at close."""
+
+    def __init__(self, handle: IO[bytes]) -> None:
+        self._handle = handle
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._handle, name)
+
+    def __enter__(self) -> "_MovedAtClose":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        st = os.fstat(self._handle.fileno())
+        os.utime(self._handle.fileno(), ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+        self._handle.close()
+
+
+@pytest.mark.logic
+def test_a_blob_is_stamped_after_its_file_is_closed(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The recorded stamp is the blob's metadata after close, so a change made at close is not a later re-hash."""
+    real = os.fdopen
+
+    def fdopen(fd: int, mode: str = "r", *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401 - os.fdopen's shape
+        handle = real(fd, mode, *args, **kwargs)
+        return _MovedAtClose(handle) if mode == "w+b" else handle
+
+    monkeypatch.setattr(os, "fdopen", fdopen)
+    fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
+    monkeypatch.undo()
+    with caplog.at_level("DEBUG", logger="senselab"):
+        fetch(_manifest(), cache_root=tmp_path, opener=_opener({}))
+    assert _rehashed(caplog) == []
 
 
 @pytest.mark.contract
@@ -1055,6 +1092,25 @@ def test_repaired_blob_is_trusted_again_by_size(tmp_path: Path, caplog: pytest.L
 def test_complete_read_only_cache_still_serves(tmp_path: Path) -> None:
     """A completed cache whose directories are no longer writable still serves its dataset offline."""
     paths = fetch(_manifest(), cache_root=tmp_path / "c", opener=_opener({"https://x/a.wav": PAYLOAD}))
+    dirs = [p for p in [tmp_path / "c", *(tmp_path / "c").rglob("*")] if p.is_dir() and not p.is_symlink()]
+    for d in dirs:
+        d.chmod(0o555)
+    try:
+        again = fetch(_manifest(), cache_root=tmp_path / "c", opener=_opener({}))
+    finally:
+        for d in dirs:
+            d.chmod(0o770)
+    assert again == paths and again["a/voice.wav"].read_bytes() == PAYLOAD
+
+
+@pytest.mark.logic
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes whatever the mode")
+def test_read_only_cache_whose_blob_stamp_moved_still_serves(tmp_path: Path) -> None:
+    """A read-only completed cache whose blob stamp no longer matches its marker re-hashes the blob and serves it."""
+    paths = fetch(_manifest(), cache_root=tmp_path / "c", opener=_opener({"https://x/a.wav": PAYLOAD}))
+    blob = tmp_path / "c" / "blobs" / SHA
+    st = blob.stat()
+    os.utime(blob, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
     dirs = [p for p in [tmp_path / "c", *(tmp_path / "c").rglob("*")] if p.is_dir() and not p.is_symlink()]
     for d in dirs:
         d.chmod(0o555)

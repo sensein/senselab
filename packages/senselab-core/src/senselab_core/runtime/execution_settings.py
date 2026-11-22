@@ -79,22 +79,16 @@ class SubstrateSpec(Frozen):
     """What starts pool workers: `local` processes, or `slurm` jobs within a QOS CPU cap, never on excluded nodes.
 
     Attributes:
-        start_backoff_first_s: Seconds a class, or the substrate itself, waits after its first failure in a row.
-        start_backoff_max_s: Most seconds that wait doubles to.
         placement_hook: The `module:callable` of the site's placement hook; None for none.
         placement_hook_s: Seconds the hook may take per call, past which it has failed.
-        stop_grace_s: Seconds a local worker is given after SIGTERM before it is killed.
         commands: How each Slurm command is run; required for `slurm`.
     """
 
     kind: Literal["local", "slurm"]
     qos_cpu_cap: PositiveInt | None = None
     exclude_nodes: tuple[NonEmptyStr, ...] = ()
-    start_backoff_first_s: PositiveSeconds
-    start_backoff_max_s: PositiveSeconds
     placement_hook: Annotated[str, StringConstraints(pattern=r"^[\w.]+:[\w.]+$")] | None = None
     placement_hook_s: PositiveSeconds
-    stop_grace_s: PositiveSeconds
     commands: SlurmCommands | None = None
 
     @model_validator(mode="after")
@@ -107,27 +101,25 @@ class SubstrateSpec(Frozen):
 
 
 class PoolSettings(Frozen):
-    """How pool workers claim and yield, and how a coordinator polls: the quantum ceilings, the polls and the segment.
+    """How pool workers claim and yield, and how a coordinator polls: the quantum ceilings and the polls.
 
     `quantum_items` and `quantum_s` bound the quantum `size` derives; a worker stays on a class for at most that many
-    jobs or seconds. `poll_s` is a worker's empty-queue poll and the longest wait between a coordinator's reads of an
-    outcome, which start at `first_poll_s` and double. `presence_refresh_s` is the longest a worker reuses what it read
-    of the workers on its host, the processes on its device and the probe queues of its run. `admit_threads` bounds the
+    jobs or seconds. `poll_s` is a worker's empty-queue poll and the pool coordinator's poll. `admit_threads` bounds the
     threads that ask the result store which jobs it would serve, for a plan's counts. A worker exits once its queues
     stayed empty for `idle_polls` polls of `poll_s`; a following coordinator checks its cancel event every
-    `cancel_check_s`; `Run.wait` reads the event log of a run another process drives every `event_poll_s`.
+    `cancel_check_s`; `Run.wait` reads the event log of a run another process drives every `event_poll_s`. A run with
+    jobs in the pool fails with `NoProgress` once no outcome has come back, no job was sent and no worker of theirs was
+    ready, starting or beating its claim for `no_progress_s`.
     """
 
     quantum_items: PositiveInt
     quantum_s: PositiveSeconds
     poll_s: PositiveSeconds
-    first_poll_s: PositiveSeconds
-    presence_refresh_s: PositiveSeconds
-    segment_items: PositiveInt
     admit_threads: PositiveInt
     idle_polls: PositiveInt
     cancel_check_s: PositiveSeconds
     event_poll_s: PositiveSeconds
+    no_progress_s: PositiveSeconds
 
 
 class SizingSettings(Frozen):

@@ -45,6 +45,7 @@ def test_envs_crisperwhisper_lock_builds_and_round_trips_every_wire_type(tmp_pat
         tmp_path / "envs",
         settings=Envs(server_start_margin_s=60),
         lease=ExecutionProfile.load().lease,
+        device="cpu",
         uv=Uv.find(),
     )
     assert handle.python_version and handle.lock_sha and handle.wheel_set

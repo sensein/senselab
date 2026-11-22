@@ -1,20 +1,17 @@
 """`ResultStore.admits`: the one servable predicate, shared by `execute`'s serving and by probing."""
 
-import tempfile
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
-from hypothesis import given, settings
 from hypothesis import strategies as st
 from planted_objects_fixture import entry_dir, rewrite_json, store_context, store_key, unseal
 from senselab_core.kernel.declare import BackendSpec, Env, TaskSpec
 from senselab_core.kernel.identity import ReusePolicy, member_key
-from senselab_core.kernel.license import License
 from senselab_core.runtime.call import RunConfig
 from senselab_core.runtime.execution.executor import JobRef
-from senselab_core.runtime.execution.job import Job, _serve
+from senselab_core.runtime.execution.job import Job
 from senselab_core.runtime.fake_backend import EchoParams
 from senselab_core.runtime.keys import Call, Placement
 from senselab_core.runtime.licenses import LicensePolicy, license_record
@@ -211,56 +208,3 @@ def _outcome(call: Any, fingerprint: Any) -> Any:  # noqa: ANN401
 
 POOL = tuple((p, d) for p in ("linux", "macos") for d in ("cpu", "mps"))
 LICENCES = st.sampled_from([None, MIT, NC])
-
-
-@pytest.mark.logic
-@settings(max_examples=60, deadline=None)
-@given(
-    stored=st.dictionaries(st.sampled_from(POOL), LICENCES, max_size=len(POOL)),
-    current=st.tuples(st.sampled_from(POOL), LICENCES),
-    members=st.sets(st.sampled_from(POOL)),
-    fault=st.sampled_from(["none", "context_missing", "result_corrupt", "retired_context", "retired_result"]),
-    victim=st.integers(min_value=0, max_value=len(POOL) - 1),
-    policy=st.sampled_from(list(ReusePolicy)),
-    verify=st.sampled_from([0.0, 0.5, 1.0]),
-    licenses=st.sampled_from(POLICIES),
-)
-def test_admits_agrees_with_serve(  # noqa: PLR0913
-    stored: dict[tuple[str, str], License | None],
-    current: tuple[tuple[str, str], License | None],
-    members: set[tuple[str, str]],
-    fault: str,
-    victim: int,
-    policy: ReusePolicy,
-    verify: float,
-    licenses: Any,  # noqa: ANN401
-) -> None:
-    """`admits` selects the entry `_serve` serves, or both refuse, or both raise, over every store state.
-
-    An integrity failure of a result member no read has found yet is the one exception: it is admitted until
-    served once.
-    """
-    with tempfile.TemporaryDirectory() as root:
-        contexts = {k: _ctx(*k, licence) for k, licence in stored.items()}
-        numerics = [_ctx(*k) for k in members]
-        table = {"hf": {"c": frozenset(member_key(c.numerics, c.env_lock) for c in numerics)}} if members else {}
-        store, key = ResultStore(Path(root), equivalence=table), store_key()
-        for c in contexts.values():
-            store.put(key, {"v": 1}, c)
-        if contexts and fault != "none":
-            _plant(Path(root), list(contexts.values())[victim % len(contexts)], fault)
-        run = RunConfig(reuse=policy, verify=verify, licenses=licenses)
-        context = _ctx(*current[0], current[1])
-
-        def probe() -> Any:  # noqa: ANN401
-            return _outcome(lambda: store.admits(key.digest(), context, run, backend="hf"), lambda e: e.fingerprint)
-
-        def serve() -> Any:  # noqa: ANN401
-            return _outcome(
-                lambda: _serve(store, key, context, run, JOB, PLACEMENT)[0], lambda r: r.context.fingerprint()
-            )
-
-        before, first = probe(), serve()
-        if fault not in {"result_corrupt", "retired_result"}:
-            assert before == first
-        assert probe() == serve()

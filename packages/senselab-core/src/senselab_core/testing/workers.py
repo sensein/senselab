@@ -9,7 +9,7 @@ from senselab_core.kernel.declare import BackendSpec
 from senselab_core.kernel.identity import ModelRef, ResolvedModel
 from senselab_core.kernel.license import License
 from senselab_core.runtime.call import packaged
-from senselab_core.runtime.execution.workers import PRECISION, WorkerSet, expected_of
+from senselab_core.runtime.execution.workers import PRECISION, Server, expected_of, server_worker, start_vllm
 from senselab_core.runtime.hardware import probe_hardware
 from senselab_core.runtime.host_worker import HostWorker
 from senselab_core.runtime.licenses import license_record
@@ -58,7 +58,7 @@ class RealWorkers:
         self.profile = profile
         self.device = device or ("cuda" if probe_hardware().gpus else "cpu")
         self.started: list[WorkerClient] = []
-        self.servers = WorkerSet(1)
+        self.servers: list[Server] = []
 
     def __call__(self, task: str, name: str) -> WorkerClient | HostWorker:
         """Stop the workers started before, then return a started worker of backend `name` of `task`.
@@ -78,15 +78,19 @@ class RealWorkers:
         entry = packaged().catalogue.backend_entry(backend)
         if entry is not None:
             init["model"] = {"source": "hf", "id": entry.id, "identity": entry.revision}
-        env = packaged().open_env(backend, self.profile)
+        env = packaged().open_env(backend, self.profile, self.device)
         if backend.env.kind == "server":
             if entry is None:
                 raise ValueError(f"backend {name!r} serves a model through a server, and none is catalogued for it")
             model = ResolvedModel(
                 ref=ModelRef.parse(f"{entry.id}@{entry.revision}"), identity=entry.revision, license=entry.license
             )
-            server = self.servers.server(backend, env, model, self.profile, expected_of(backend, env.lock, model))
-            return self.servers.server_worker(backend, init, server)
+            expected = expected_of(backend, env.lock, model)
+            server = start_vllm(backend, env, model, self.profile)
+            self.servers.append(server)
+            if server.attestation != expected:
+                raise ValueError(f"the server of {server.label} attests other than its lock declares")
+            return server_worker(backend, init, server)
         worker = WorkerClient(env.python, backend.worker, init=init)
         self.started.append(worker)
         return worker
@@ -96,4 +100,6 @@ class RealWorkers:
         for worker in self.started:
             worker.close()
         self.started.clear()
-        self.servers.close()
+        servers, self.servers = self.servers, []
+        for server in servers:
+            server.stop()

@@ -469,8 +469,9 @@ def _ensure_blob(  # noqa: PLR0913 - the per-file step of _fetch_into, passed th
 ) -> tuple[Path, BlobStamp | None]:
     """Return `blobs/<sha256>` holding the file's bytes, and the stamp of the inode this call verified there.
 
-    A download is written and hashed through one descriptor in a private staging directory and linked from
-    there. The stamp is None when the name no longer holds the verified inode, so no marker trusts it.
+    A download is written, fsynced and hashed through one descriptor in a private staging directory and linked
+    from there. The stamp is read from `blobs/<sha256>` after that descriptor is closed and the staged name removed;
+    it is None when the name no longer holds the verified inode, so no marker trusts it.
     """
     blob = blobs.path / file.sha256
     stamp = _verified_stamp(blobs, file.sha256, recorded, verify)
@@ -500,9 +501,9 @@ def _ensure_blob(  # noqa: PLR0913 - the per-file step of _fetch_into, passed th
                         return blob, kept[-1]
                     private.remove_owned(STAGED_BLOB, pattern=STAGED_NAME)
                     written = os.fstat(out.fileno())
-                    now = blobs.lstat(file.sha256)
+                now = blobs.lstat(file.sha256)
             same = now is not None and (now.st_dev, now.st_ino) == (written.st_dev, written.st_ino)
-            return blob, _stamp(written) if same else None
+            return blob, _stamp(now) if now is not None and same else None
         except _SourceError as err:
             tried.append(f"{url} ({err})")
     raise FetchError(
@@ -736,6 +737,10 @@ def fetch(  # noqa: PLR0913 - the manifest, then keyword-only cache, source, ver
         raise storage_fault(err, root) from err
 
 
+_READ_ONLY_ERRNOS = frozenset({errno.EACCES, errno.EPERM, errno.EROFS})
+"""The errors of a cache that can be read but not written; a valid dataset in one is served with its marker kept."""
+
+
 def _fetch_into(  # noqa: PLR0913 - fetch's arguments plus the two directories it opened
     manifest: DataManifest,
     top: StorageDir,
@@ -791,16 +796,21 @@ def _fetch_into(  # noqa: PLR0913 - fetch's arguments plus the two directories i
                     for sha, st in stamps.items()
                 },
             }
-            with Staging(tmp, mode=PRIVATE_DIR_MODE) as private:
-                private.write_new(STAGED_MARKER, jcs_dumps(record), file_mode, grammar=STAGED_NAME)
-                _commit(
-                    private,
-                    STAGED_MARKER,
-                    ds,
-                    COMPLETE_MARKER,
-                    replace=marker_state != "absent",
-                    keeps=lambda: _read_marker(ds, manifest, tmp)[1] == "valid",
-                )
+            try:
+                with Staging(tmp, mode=PRIVATE_DIR_MODE) as private:
+                    private.write_new(STAGED_MARKER, jcs_dumps(record), file_mode, grammar=STAGED_NAME)
+                    _commit(
+                        private,
+                        STAGED_MARKER,
+                        ds,
+                        COMPLETE_MARKER,
+                        replace=marker_state != "absent",
+                        keeps=lambda: _read_marker(ds, manifest, tmp)[1] == "valid",
+                    )
+            except OSError as err:
+                if marker_state != "valid" or err.errno not in _READ_ONLY_ERRNOS:
+                    raise
+                logger.warning("cannot refresh the marker of the read-only dataset %s: %s", ds.path, err)
         for name in replaced:
             try:
                 moved = datasets.set_aside(name, tmp)

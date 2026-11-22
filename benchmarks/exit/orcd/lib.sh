@@ -5,10 +5,12 @@
 # scratch copy of this directory), PROFILE_SRC (the group's site profile file, copied to scratch; never committed),
 # CPU_PARTITION and GPU_PARTITION (the partitions to run on, from the site's own planning).
 # Optional: CHECKOUT_SRC (the campaign checkout, itself cloned from GitHub and pinned at SHA; default GitHub), FFMPEG_LIB,
-# HF_TOKEN, WORKER_TIME_S (see below), SYNC_ARGS, STALL_S (the no-progress bound of orcd_watched, default 1800).
+# HF_TOKEN, WORKER_TIME_S (see below), SYNC_ARGS, STALL_S (the no-progress bound of orcd_watched, default 1800),
+# NO_PROGRESS_S (the copy's pool.no_progress_s, for a tier whose tests must fail inside their own budget).
 #
-# orcd_setup NAME CHECKED_CLASSES: strict mode, a fresh clone pinned to SHA, `uv sync`, the site profile copied to
-# $WORK/profile.yaml after a time fit against each checked class's partition (`sinfo`), and an EXIT trap that always
+# orcd_setup NAME CHECKED_CLASSES [local]: strict mode, a fresh clone pinned to SHA, `uv sync`, the site profile copied
+# to $WORK/profile.yaml after a time fit against each checked class's partition (`sinfo`), its substrate made local
+# when the third argument is `local` (the pool's workers are then processes of this job), and an EXIT trap that always
 # prints one JSON verdict line and copies $OUT to $RESULTS. A script puts its files in $OUT and writes
 # $WORK/verdict.json through the driver (benchmarks/exit/orcd_driver.py, from the checkout at SHA); if it dies before
 # that, the trap writes a failing verdict.
@@ -37,9 +39,9 @@ orcd_exit() {
   exit "$rc"
 }
 
-# orcd_setup NAME CHECKED_CLASSES (comma-separated class names whose time_s is fitted to its partition; empty: all).
+# orcd_setup NAME CHECKED_CLASSES [local] (classes: comma-separated names whose time_s is fitted; empty: all).
 orcd_setup() {
-  local name="$1" classes="${2:-}"
+  local name="$1" classes="${2:-}" substrate="${3:-}"
   orcd_need SHA WORK_ROOT SCRIPTS_DIR PROFILE_SRC CPU_PARTITION GPU_PARTITION
   [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "SHA is not a 40-hex commit" >&2; exit 2; }
   [ -f "$PROFILE_SRC" ] || { echo "PROFILE_SRC is not a file" >&2; exit 2; }
@@ -62,7 +64,8 @@ orcd_setup() {
   # WORKER_TIME_S caps every class's time_s in the job's copy of the profile (the group's file is not changed); the
   # time fit refuses, before anything is submitted, a checked class that still asks more than its partition allows.
   uv run --no-sync python "$WORK/checkout/benchmarks/exit/orcd_driver.py" profile --src "$PROFILE_SRC" --out "$PROFILE" \
-    ${classes:+--classes "$classes"} ${WORKER_TIME_S:+--worker-time-s "$WORKER_TIME_S"}
+    ${classes:+--classes "$classes"} ${WORKER_TIME_S:+--worker-time-s "$WORKER_TIME_S"} \
+    ${substrate:+--substrate "$substrate"} ${NO_PROGRESS_S:+--no-progress-s "$NO_PROGRESS_S"}
   export SENSELAB_TEST_PROFILE="$PROFILE"
   # The nfs parametrisation of the lock and work-pool tests runs on this directory (scratch is NFS4); unset, it skips.
   export SENSELAB_WORK_POOL_NFS_DIR="${SENSELAB_WORK_POOL_NFS_DIR:-$WORK/nfs-probe}"
@@ -81,7 +84,7 @@ orcd_driver() {
 # queued or running. A `squeue` that fails is not read as "no job". SELECTOR names the run's jobs: `prefix:P` (jobs named
 # P*, when the run's hash is known) or `runs:GLOB` (the run directories COMMAND creates; from the moment one exists
 # the watchdog counts only the jobs `exitlib.slurm_prefix` gives it, another run's jobs under the same login do not
-# count; until then any `senselab-` job does). Otherwise it returns COMMAND's status.
+# count; until then any `pydra-` job does). Otherwise it returns COMMAND's status.
 orcd_watched() {
   local log="$1" selector="$2" rc=0 where=()
   shift 2

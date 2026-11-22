@@ -60,96 +60,6 @@ BASELINE: dict[str, dict[str, str]] = {
         "senselab_worker.ownership.UUID_HEX": ("stays in senselab-worker (route-b.md Summary)"),
         "senselab_worker.ownership.remove_owned": ("stays in senselab-worker (route-b.md Summary)"),
     },
-    "execution/queue.py": {
-        "senselab_core.runtime.calibration.HardwareClass": (
-            "item weight and placement hook of the pool (route-b.md Summary)"
-        ),
-        "senselab_core.runtime.clock.Clock": (
-            "time seam; pydra takes a clock through its settings (route-b.md Summary)"
-        ),
-        "senselab_core.runtime.clock.SystemClock": ("default of the Clock seam (route-b.md Summary)"),
-        "senselab_core.runtime.execution.epoch.Epoch": (
-            "same move group: epoch.py moves with this module (route-b.md section 4)"
-        ),
-        "senselab_core.runtime.execution.epoch.run_lease": (
-            "same move group: epoch.py moves with this module (route-b.md section 4)"
-        ),
-        "senselab_core.runtime.execution.executor.CorruptItem": (
-            "queue item and fault types; opaque payload at the move (route-b.md Summary)"
-        ),
-        "senselab_core.runtime.execution.executor.FaultRecord": (
-            "queue item and fault types; opaque payload at the move (route-b.md Summary)"
-        ),
-        "senselab_core.runtime.execution.executor.MissingItem": (
-            "queue item and fault types; opaque payload at the move (route-b.md Summary)"
-        ),
-        "senselab_core.runtime.execution.executor.PlanFragment": (
-            "queue item and fault types; opaque payload at the move (route-b.md Summary)"
-        ),
-        "senselab_core.runtime.execution_settings.JobLease": (
-            "lease timing; becomes pydra LeaseSettings (route-b.md Summary)"
-        ),
-        "senselab_core.runtime.locks.BrokenLease": (
-            "same move group: locks.py moves with this module (route-b.md section 4)"
-        ),
-        "senselab_core.runtime.locks.Lease": (
-            "same move group: locks.py moves with this module (route-b.md section 4)"
-        ),
-        "senselab_core.runtime.locks.LeaseState": (
-            "same move group: locks.py moves with this module (route-b.md section 4)"
-        ),
-        "senselab_core.runtime.locks.LeaseTimeout": (
-            "same move group: locks.py moves with this module (route-b.md section 4)"
-        ),
-        "senselab_core.runtime.profiles.ExecutionProfile": (
-            "policy carrier; passed as hooks when the module moves (route-b.md Summary)"
-        ),
-        "senselab_core.runtime.storage.STAGING_DIR_MODE": (
-            "same move group: storage.py moves with this module (route-b.md section 4)"
-        ),
-        "senselab_core.runtime.storage.STAGING_FILE_MODE": (
-            "same move group: storage.py moves with this module (route-b.md section 4)"
-        ),
-        "senselab_core.runtime.storage.StorageDir": (
-            "same move group: storage.py moves with this module (route-b.md section 4)"
-        ),
-        "senselab_core.runtime.storage.TEMPORARY_NAME": (
-            "same move group: storage.py moves with this module (route-b.md section 4)"
-        ),
-        "senselab_core.runtime.storage.WrongKindError": (
-            "same move group: storage.py moves with this module (route-b.md section 4)"
-        ),
-        "senselab_core.runtime.storage.temporary_name": (
-            "same move group: storage.py moves with this module (route-b.md section 4)"
-        ),
-        "senselab_worker.canonical.jcs_dumps": ("stays in senselab-worker (route-b.md Summary)"),
-        "senselab_worker.canonical.jcs_loads": ("stays in senselab-worker (route-b.md Summary)"),
-        "senselab_worker.digest.identity_digest": ("stays in senselab-worker (route-b.md Summary)"),
-    },
-    "execution/epoch.py": {
-        "senselab_core.runtime.clock.Clock": (
-            "time seam; pydra takes a clock through its settings (route-b.md Summary)"
-        ),
-        "senselab_core.runtime.clock.SystemClock": ("default of the Clock seam (route-b.md Summary)"),
-        "senselab_core.runtime.execution_settings.JobLease": (
-            "lease timing; becomes pydra LeaseSettings (route-b.md Summary)"
-        ),
-        "senselab_core.runtime.locks.Lease": (
-            "same move group: locks.py moves with this module (route-b.md section 4)"
-        ),
-        "senselab_core.runtime.locks.LeaseState": (
-            "same move group: locks.py moves with this module (route-b.md section 4)"
-        ),
-        "senselab_core.runtime.profiles.ExecutionProfile": (
-            "policy carrier; passed as hooks when the module moves (route-b.md Summary)"
-        ),
-        "senselab_core.runtime.storage.StorageDir": (
-            "same move group: storage.py moves with this module (route-b.md section 4)"
-        ),
-        "senselab_core.runtime.storage.publish": (
-            "same move group: storage.py moves with this module (route-b.md section 4)"
-        ),
-    },
     "execution/supervisor.py": {
         "senselab_core.runtime.clock.Clock": (
             "time seam; pydra takes a clock through its settings (route-b.md Summary)"
@@ -242,8 +152,8 @@ def test_planted_import_in_real_source_is_new(module: str) -> None:
     ("planted", "module", "expected"),
     [
         ("from . import x\n", "locks.py", {"senselab_core.runtime.x"}),
-        ("from ..store import X\n", "execution/queue.py", {"senselab_core.runtime.store.X"}),
-        ("from .sub import Y\n", "execution/epoch.py", {"senselab_core.runtime.execution.sub.Y"}),
+        ("from ..store import X\n", "execution/supervisor.py", {"senselab_core.runtime.store.X"}),
+        ("from .sub import Y\n", "execution/supervisor.py", {"senselab_core.runtime.execution.sub.Y"}),
         ("from ..store import X\n", "storage.py", {"senselab_core.store.X"}),
         ("from .clock import Clock\n", "worker_pipes.py", set()),
     ],

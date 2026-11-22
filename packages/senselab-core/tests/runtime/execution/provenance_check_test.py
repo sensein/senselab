@@ -1,21 +1,22 @@
 """`check_provenance`: a run's committed keys each have an execution or a Reuse, and none has two executions."""
 
 import json
-import shutil
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from lease_clock_fixture import ManualClock
-from pool_run_fixture import ONE_ITEM_CLAIMS, TASK, Run
-from pool_stack_fixture import packaged, registry
+from pool_stack_fixture import packaged, planned, registry, scoring
 from senselab_core.cli import main as cli_main
 from senselab_core.runtime.execution.provenance_check import ProvenanceIncomplete, check_provenance, committed_keys
-from senselab_core.runtime.execution.queue import RUN_QUEUES
+from senselab_core.runtime.execution.run import Run, start
 from senselab_core.runtime.provenance import PROV_DIR
+from senselab_core.testing.pools import POOL_PROFILE, served
 from senselab_worker.canonical import jcs_dumps
 
 pytestmark = pytest.mark.contract
+
+
+TASK = scoring("provenance_check_test.score")
 
 
 @pytest.fixture(autouse=True)
@@ -25,9 +26,15 @@ def stack(tmp_path: Path) -> Iterator[None]:
         yield
 
 
-def _served(tmp_path: Path, clock: ManualClock, name: str = "run", texts: tuple[str, ...] = ("a", "b", "c")) -> Run:
-    run = Run(tmp_path, name, list(texts), profile=ONE_ITEM_CLAIMS)
-    run.serve(run.worker_store(), clock)
+def _served(tmp_path: Path, name: str = "run", texts: tuple[str, ...] = ("a", "b", "c")) -> Run:
+    """Run one job per text on a pool served here; the store is shared by every run under `tmp_path`.
+
+    `name` is only distinguishing: a plan's run directory is named by its hash, so a plan repeated is a new attempt.
+    """
+    placed, values = planned(TASK, POOL_PROFILE, list(texts))
+    with served(tmp_path / f"pool-{name}", store=tmp_path / "store") as (session, _):
+        run = start(placed, session, values=values)
+        assert run.wait(timeout=120).done
     return run
 
 
@@ -36,16 +43,16 @@ def _documents(run: Run) -> list[Path]:
     return [d for d in sorted((run.run_dir / PROV_DIR).iterdir()) if '"senselab:logicalKey"' in d.read_text()]
 
 
-def test_a_run_whose_items_each_have_an_execution_is_complete(tmp_path: Path, clock: ManualClock) -> None:
+def test_a_run_whose_items_each_have_an_execution_is_complete(tmp_path: Path) -> None:
     """Three committed keys, three executions, no Reuse."""
-    report = check_provenance(_served(tmp_path, clock).run_dir, reuses=0)
+    report = check_provenance(_served(tmp_path).run_dir, reuses=0)
     assert (report.committed, report.executions, report.reuses, report.problems) == (3, 3, 0, ())
     report.require()
 
 
-def test_a_committed_key_whose_activity_was_never_written_is_named(tmp_path: Path, clock: ManualClock) -> None:
+def test_a_committed_key_whose_activity_was_never_written_is_named(tmp_path: Path) -> None:
     """An outcome on disk and its execution not, as T24-10 left a worker killed after its commit."""
-    run = _served(tmp_path, clock)
+    run = _served(tmp_path)
     _documents(run)[0].unlink()
     report = check_provenance(run.run_dir)
     assert report.executions == 2 and [p.endswith("has no execution and no Reuse") for p in report.problems] == [True]
@@ -53,56 +60,48 @@ def test_a_committed_key_whose_activity_was_never_written_is_named(tmp_path: Pat
         report.require()
 
 
-def test_several_executions_of_one_key_are_allowed(tmp_path: Path, clock: ManualClock) -> None:
-    """ADR-010: one key can carry several executions; two workers whose stores did not share it execute it twice."""
-    first, second = _served(tmp_path / "x", clock), _served(tmp_path / "y", clock)
-    for document in _documents(second):
-        shutil.copy(document, first.run_dir / PROV_DIR / document.name)
+def test_several_executions_of_one_key_are_allowed(tmp_path: Path) -> None:
+    """ADR-010: one key can carry several executions: two attempts on two stores execute each key twice."""
+    first, second = _served(tmp_path / "x"), _served(tmp_path / "y")
+    assert first.run_dir == second.run_dir
     report = check_provenance(first.run_dir)
     assert report.executions == 6 and report.complete
 
 
-def test_a_writer_records_at_most_one_reuse_per_item_per_attempt(tmp_path: Path, clock: ManualClock) -> None:
+def test_a_writer_records_at_most_one_reuse_per_item_per_attempt(tmp_path: Path) -> None:
     """A writer's document holding two Reuse of the one job with that key and node is named; one is not."""
-    _served(tmp_path, clock, "first", ("a",))
-    one, two = _served(tmp_path, clock, "one", ("a",)), _served(tmp_path, clock, "two", ("a",))
+    _served(tmp_path, "first", ("a", "b"))
+    one = _served(tmp_path, "one", ("a",))
     assert check_provenance(one.run_dir, reuses=1).complete
-    [kept] = _documents(one)
-    [extra] = _documents(two)
-    merged = json.loads(kept.read_text())
-    merged["@graph"] += [n for n in json.loads(extra.read_text())["@graph"] if "senselab:Reuse" in n["@type"]]
-    kept.write_bytes(jcs_dumps(merged))
+    [reused] = [d for d in _documents(one) if "senselab:Reuse" in d.read_text()]
+    merged = json.loads(reused.read_text())
+    merged["@graph"] += [n for n in merged["@graph"] if "senselab:Reuse" in n["@type"]]
+    reused.write_bytes(jcs_dumps(merged))
     report = check_provenance(one.run_dir)
     assert len(report.problems) == 1 and "records 2 Reuse of key" in report.problems[0]
 
 
-def test_the_reuse_count_must_be_the_one_the_resume_reported(tmp_path: Path, clock: ManualClock) -> None:
+def test_the_reuse_count_must_be_the_one_the_resume_reported(tmp_path: Path) -> None:
     """A rerun serves every item from the store: three Reuse; a count of two (or none) is a problem."""
-    _served(tmp_path, clock, "first")
-    again = _served(tmp_path, clock, "again")
+    _served(tmp_path, "first")
+    again = _served(tmp_path, "again")
     assert check_provenance(again.run_dir, reuses=3).complete
     assert check_provenance(again.run_dir, reuses=2).problems == ("3 Reuse activities, the resume reported 2",)
     assert check_provenance(again.run_dir).complete
 
 
-def test_a_failed_job_and_a_dead_item_are_not_committed_keys(tmp_path: Path, clock: ManualClock) -> None:
-    """A job that failed stored nothing and a dead item has no jobs: neither needs an activity."""
-    run = _served(tmp_path, clock)
-    [outcome] = sorted((run.run_dir / RUN_QUEUES).glob("*/outcome/*"))[:1]
-    record = json.loads(outcome.read_bytes())
-    ok = committed_keys(run.run_dir)
-    record["jobs"][0]["failure"] = {"fault": "content"}
-    outcome.write_bytes(json.dumps(record).encode())
-    assert len(committed_keys(run.run_dir)) == len(ok) - 1
-    outcome.write_bytes(json.dumps({"outcome": "dead"}).encode())
-    assert len(committed_keys(run.run_dir)) <= len(ok) - 1
+def test_a_failed_job_is_not_a_committed_key(tmp_path: Path) -> None:
+    """A job that failed stored nothing: it needs no activity."""
+    run = _served(tmp_path, texts=("a", "b"))
+    failing = _served(tmp_path, "failing", ("a", "fail"))
+    assert committed_keys(failing.run_dir) <= committed_keys(run.run_dir) and len(committed_keys(failing.run_dir)) == 1
 
 
 def test_status_check_provenance_exits_zero_for_a_complete_run_and_one_otherwise(
-    tmp_path: Path, clock: ManualClock, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """`senselab status --check-provenance` prints the counts and the problems, and says so in its exit status."""
-    run = _served(tmp_path, clock)
+    run = _served(tmp_path)
     assert cli_main(["status", str(run.run_dir), "--check-provenance"]) == 0
     assert "provenance: 3 committed keys, 3 executions, 0 reuses: complete" in capsys.readouterr().out
     _documents(run)[0].unlink()

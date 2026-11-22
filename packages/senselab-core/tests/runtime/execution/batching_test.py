@@ -24,17 +24,14 @@ from senselab_core.runtime.datasets import RecordSet
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.batching import (
     BucketGrid,
-    LengthUnrecorded,
     form_batches,
     formation,
     job_length_ns,
     job_text_chars,
-    keyed_formation,
 )
-from senselab_core.runtime.execution.executor import JobRef, UpstreamRef
-from senselab_core.runtime.execution.in_process import job_key, plan_keys, result_ref
-from senselab_core.runtime.execution.job import Completed, Failed, Job, Upstream, execute
-from senselab_core.runtime.execution.workers import WorkerSet
+from senselab_core.runtime.execution.executor import JobRef
+from senselab_core.runtime.execution.fragments import job_key, plan_keys
+from senselab_core.runtime.execution.job import Job
 from senselab_core.runtime.fake_backend import EchoParams
 from senselab_core.runtime.keys import MIXED, SINGLE, Call, Placement, build_key, request_components
 from senselab_core.runtime.planner import plan
@@ -79,7 +76,7 @@ for _spec in (INVARIANT, BUCKETED, UNKEYED, TEXT_BUCKETED, PASS):
     REGISTRY.add_backend(_spec)
 
 
-def _this_interpreter(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
+def _this_interpreter(backend: BackendSpec, profile: ExecutionProfile, device: str) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
     return EnvHandle(source_tree_python(), platform.python_version(), "1" * 64, "2" * 64, None)
 
 
@@ -122,57 +119,7 @@ def _text_jobs(*texts: str) -> list[Job]:
     return jobs
 
 
-def _execute(jobs: list[Job], backend: BackendSpec, store: ResultStore, batch_size: int) -> list[Completed]:
-    placement = Placement(backend=backend, backend_params=backend.params(), device="cpu", batch_size=batch_size)
-    workers = WorkerSet(1)
-    try:
-        outcomes = execute(
-            jobs, placement, store=store, run=RunConfig(), profile=ExecutionProfile.load(), workers=workers
-        )
-    finally:
-        workers.close()
-    assert all(isinstance(o, Completed) for o in outcomes), outcomes
-    return [o for o in outcomes if isinstance(o, Completed)]
-
-
 SHORT, LONG = GRID.edges_ns[0] // 2, GRID.edges_ns[-1]
-
-
-@pytest.mark.logic
-def test_noninvariant_backend_batches_by_keyed_bucket_or_single(tmp_path: Path, sizes: list[int]) -> None:
-    """A backend keying its batch formation is batched and keyed per length bucket, and a job's key is that sent alone.
-
-    Any other non-invariant backend, or a job with no recording, is sent alone as `single`.
-    """
-    outcomes = _execute(_jobs([SHORT, LONG, SHORT, SHORT]), BUCKETED, ResultStore(tmp_path / "a"), batch_size=2)
-    assert sizes == [2, 1, 1]
-    expected = [GRID.formation(n) for n in (SHORT, LONG, SHORT, SHORT)]
-    assert [o.result.key.batch_formation for o in outcomes] == expected
-    alone = _execute(_jobs([SHORT, LONG, SHORT, SHORT])[:1], BUCKETED, ResultStore(tmp_path / "b"), batch_size=2)
-    assert (alone[0].result.key.digest(), alone[0].result.outputs) == (
-        outcomes[0].result.key.digest(),
-        outcomes[0].result.outputs,
-    )
-    sizes.clear()
-    unkeyed = _execute(_jobs([SHORT, SHORT]), UNKEYED, ResultStore(tmp_path / "c"), batch_size=2)
-    assert sizes == [1, 1]
-    assert [(o.result.placement.batch_formation, o.result.key.batch_formation) for o in unkeyed] == [(SINGLE, None)] * 2
-    sizes.clear()
-    texts = _execute(_text_jobs("a", "b"), TEXT_BUCKETED, ResultStore(tmp_path / "d"), batch_size=2)
-    assert sizes == [1, 1]
-    assert {o.result.key.batch_formation for o in texts} == {SINGLE}
-
-
-@pytest.mark.logic
-def test_invariant_backend_formation_not_in_key(tmp_path: Path, sizes: list[int]) -> None:
-    """A batch-invariant backend takes any jobs up to the batch size as `mixed`, which no key holds."""
-    lengths = [SHORT, LONG, SHORT, LONG]
-    batched = _execute(_jobs(lengths), INVARIANT, ResultStore(tmp_path / "a"), batch_size=3)
-    assert sizes == [3, 1]
-    assert {o.result.placement.batch_formation for o in batched} == {MIXED}
-    assert {o.result.key.batch_formation for o in batched} == {None}
-    alone = _execute(_jobs(lengths), INVARIANT, ResultStore(tmp_path / "b"), batch_size=1)
-    assert [o.result.key.digest() for o in alone] == [o.result.key.digest() for o in batched]
 
 
 class _CountingStore(ResultStore):
@@ -184,66 +131,6 @@ class _CountingStore(ResultStore):
         """Count the read, then read."""
         self.reads += 1
         return super().outputs_of(key_digest, identity)
-
-
-@pytest.mark.logic
-def test_upstream_length_is_its_refs_never_a_stored_read(tmp_path: Path, sizes: list[int]) -> None:
-    """A job reading audio from upstream is keyed by the length its upstream result recorded, reading no stored value.
-
-    Sending it reads each upstream value once, to run it, and keys it as before it was sent.
-    """
-    store = _CountingStore(tmp_path)
-    upstream = _execute(_jobs([SHORT, LONG], task=PASS_TASK), PASS, store, batch_size=2)
-    given = [result_ref(u) for u in upstream]
-    assert [r.lengths_ns for r in given] == [{"audio": SHORT}, {"audio": LONG}]
-    refs = [
-        UpstreamRef(key_digest=r.key_digest, outputs=r.output_identity, port="audio", length_ns=r.lengths_ns["audio"])
-        for r in given
-    ]
-    jobs = [
-        Job(
-            JobRef(plan_hash="0" * 64, node="b", element=(i,)),
-            Call(AUDIO_TASK, EchoParams(), {"audio": ref.identity()}),
-            {},
-            upstream={"audio": Upstream((ref,), PASS_TASK.name, "Audio")},
-        )
-        for i, ref in enumerate(refs)
-    ]
-    expected = [GRID.formation(SHORT), GRID.formation(LONG)]
-    before = store.reads
-    assert [formation(j, BUCKETED, GRID) for j in jobs] == expected
-    assert store.reads == before
-    sizes.clear()
-    assert [o.result.key.batch_formation for o in _execute(jobs, BUCKETED, store, batch_size=2)] == expected
-    assert (sizes, store.reads - before) == ([1, 1], len(jobs))
-
-
-@pytest.mark.logic
-def test_upstream_recording_without_recorded_length_is_a_gap(tmp_path: Path, sizes: list[int]) -> None:
-    """An upstream audio input whose ref records no length fails as an uncharged gap, never sent nor keyed `single`."""
-    store = ResultStore(tmp_path)
-    [upstream] = _execute(_jobs([SHORT], task=PASS_TASK), PASS, store, batch_size=1)
-    ref = UpstreamRef(key_digest=upstream.result.key.digest(), outputs=upstream.result.output_identity, port="audio")
-    job = Job(
-        JobRef(plan_hash="0" * 64, node="b", element=(0,)),
-        Call(AUDIO_TASK, EchoParams(), {"audio": ref.identity()}),
-        {},
-        upstream={"audio": Upstream((ref,), PASS_TASK.name, "Audio")},
-    )
-    with pytest.raises(LengthUnrecorded):
-        formation(job, BUCKETED, GRID)
-    assert keyed_formation(job, BUCKETED, GRID)[0] == GRID.unindexed
-    sizes.clear()
-    placement = Placement(backend=BUCKETED, backend_params=BUCKETED.params(), device="cpu", batch_size=2)
-    workers = WorkerSet(1)
-    try:
-        [failed] = execute(
-            [job], placement, store=store, run=RunConfig(), profile=ExecutionProfile.load(), workers=workers
-        )
-    finally:
-        workers.close()
-    assert isinstance(failed, Failed) and sizes == []
-    assert (failed.failure.type, failed.failure.gap, failed.failure.charged) == ("LengthUnrecorded", True, False)
 
 
 @pytest.mark.logic

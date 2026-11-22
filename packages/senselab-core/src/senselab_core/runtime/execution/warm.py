@@ -1,0 +1,586 @@
+"""senselab on pydra's warm pool: its pool tasks, its profile as worker classes and budgets, and `PoolSession`.
+
+A pool job is one senselab job: `HostCall` or `WorkerCall` with the backend's model worker as its provided field and
+the `JobDoc` as its input, its checksum the job's key digest. Its one output is the job's stored outputs.
+`PoolSession` owns a `WarmPool` and the `Submitter(worker=pool)` its jobs are made under; whoever made it closes it,
+so its workers and their models stay resident from one run to the next, and several runs may use it at once.
+"""
+
+import atexit
+import contextlib
+import json
+import logging
+import os
+import re
+import secrets
+import tempfile
+import threading
+from collections.abc import Iterable, Iterator, Mapping
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from pydra.compose import python
+from pydra.engine.job import Job as PydraJob
+from pydra.engine.lease import LeaseSettings
+from pydra.engine.resident import Provided
+from pydra.engine.submitter import Submitter
+from pydra.utils.resources import ComputeResources
+from pydra.workers.pool.calibration import DirectoryCalibration
+from pydra.workers.pool.classes import WorkerClass
+from pydra.workers.pool.faults import FaultBudgets
+from pydra.workers.pool.faults import FaultRecord as PoolFault
+from pydra.workers.pool.fit import MeasuredFit
+from pydra.workers.pool.pool import WarmPool, _newest_mtime
+from pydra.workers.pool.settings import PoolSettings
+from pydra.workers.pool.substrate import LocalSubstrate, SlurmSubstrate, Substrate
+from senselab_worker.device_check import DeviceUnusable
+from senselab_worker.faults import FaultClass, ProtocolError, classification
+
+from senselab_core.runtime.execution.executor import FaultRecord
+from senselab_core.runtime.execution.outputs import as_stored, as_wire
+from senselab_core.runtime.execution.portable import OUTPUTS, JobDoc, open_store, ran
+from senselab_core.runtime.execution.providers import HOST, WORKER, Loader, Model, SenselabHost, SenselabWorker
+from senselab_core.runtime.execution.workers import WorkerLoadFailed
+from senselab_core.runtime.execution_settings import ResourceClass
+from senselab_core.runtime.licenses import LicenseRefused
+from senselab_core.runtime.measures import resolve_roots
+from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.revision import cache_root
+from senselab_core.runtime.site_placement import ClassPlacement
+from senselab_core.runtime.store import output_identity
+from senselab_core.runtime.worker_client import WorkerFatal, WorkerLost
+
+FAULT_MARK = "senselab-fault@1 "
+"""The prefix of an `ItemFailed` message: the item's fault record follows as JSON."""
+logger = logging.getLogger("senselab")
+
+CALIBRATION_DIR = "pydra-directory-calibration@1"
+"""Under a measures root, the directory the pool's `DirectoryCalibration` keeps its samples and unfit records in."""
+POOLS_DIR = "2x/pools"
+"""Under the cache root, the directory each process's default sessions are opened in (`default_session`)."""
+TEMPORARY_ROOTS = ("/tmp", "/var/tmp")  # noqa: S108 - named to be refused, not written to
+"""The FHS temporary directories, beside the interpreter's own (`tempfile.gettempdir`); each is node-local."""
+MEMORY_FILESYSTEMS = frozenset({"tmpfs", "ramfs"})
+"""The filesystem types (`/proc/self/mounts`) that hold a node's memory, seen by no other node."""
+_GRES = re.compile(r"^gpu:(?:(?P<type>[\w.-]+):)?(?P<count>[0-9]+)$")
+
+
+class ItemFailed(RuntimeError):
+    """The backend failed the job's item; `failure` is its record, with its fault class."""
+
+    def __init__(self, failure: FaultRecord) -> None:
+        """Hold the failure and carry it in the message."""
+        super().__init__(FAULT_MARK + json.dumps(failure.model_dump(mode="json"), sort_keys=True))
+        self.failure = failure
+
+    def __reduce__(self) -> tuple[type["ItemFailed"], tuple[FaultRecord]]:
+        """Pickle by the record."""
+        return (type(self), (self.failure,))
+
+
+def _call(worker: Model, job: JobDoc) -> dict[str, object]:
+    """Send `job`'s one item to its model worker and return its outputs as the store holds them.
+
+    Raises:
+        ItemFailed: the backend failed the item.
+    """
+    started = datetime.now(timezone.utc)
+    call = job.job.call
+    params = {
+        **call.params.model_dump(mode="json"),
+        "backend_params": job.placement.backend_params.model_dump(mode="json"),
+    }
+    values = job.job.values
+    [result] = worker.run([{"id": "0", "inputs": dict(values) if job.host else as_wire(values)}], params)
+    if "error" in result:
+        raise ItemFailed(FaultRecord.of(result["error"]))
+    _, outputs = as_stored(call.task, as_wire(result["outputs"]), job.job.anchors)
+    ran(job.key.digest(), started, output_identity(outputs))
+    return outputs
+
+
+def _key_digest(task: object, inputs: Mapping[str, Any]) -> str:  # noqa: ARG001 - the key is in the job
+    doc = inputs["job"]
+    assert isinstance(doc, JobDoc)
+    return doc.key.digest()
+
+
+def _host_call(worker: Provided[object, HOST], job: object) -> object:
+    assert isinstance(job, JobDoc)
+    return _call(worker, job)
+
+
+def _worker_call(worker: Provided[object, WORKER], job: object) -> object:
+    assert isinstance(job, JobDoc)
+    return _call(worker, job)
+
+
+HostCall = python.define(_host_call, outputs={OUTPUTS: object}, name="HostCall", checksum=_key_digest)
+"""A senselab job of a host backend, its model loaded in the pool worker's process (`senselab-host@3`)."""
+WorkerCall = python.define(_worker_call, outputs={OUTPUTS: object}, name="WorkerCall", checksum=_key_digest)
+"""A senselab job of an isolated or server backend, over its worker process or server (`senselab-worker@3`)."""
+
+
+def classify(exc: BaseException, phase: str) -> PoolFault:
+    """Senselab's fault classifier for the pool: an item's own record, the worker's verdicts, then the fault table.
+
+    A worker whose env cannot use its device (`DeviceUnusable`, carried in a load's chain) is a resource fault of no
+    memory, so the job moves up its ladder or fails `Unplaceable` and no unfit load is recorded. Every exception the
+    table does not classify is an infrastructure fault (a gap), never the job's own.
+    """
+    name = type(exc).__name__
+    message = str(exc)[:2000]
+    if isinstance(exc, ItemFailed):
+        return _of(exc.failure.fault_class, exc.failure.gap, name, exc.failure.message, phase)
+    if isinstance(exc, LicenseRefused):
+        return PoolFault("policy", name, message, phase)
+    if isinstance(exc, WorkerLoadFailed) or (isinstance(exc, WorkerFatal) and exc.from_load):
+        return _at_load(exc, name, message)
+    if isinstance(exc, (WorkerLost, ProtocolError, WorkerFatal)):
+        return PoolFault("infrastructure", name, message, phase, reason="crash")
+    return _of(*classification(exc), name, message, phase)
+
+
+def _at_load(exc: WorkerLoadFailed | WorkerFatal, name: str, message: str) -> PoolFault:
+    if _device_unusable(exc):
+        return PoolFault("resource", name, message, "load")
+    return _of(*exc.carried_class, name, message, "load")
+
+
+def _device_unusable(exc: BaseException) -> bool:
+    """Whether `exc` or what it was raised from is a `DeviceUnusable`, raised here or reported by a worker."""
+    link: BaseException | None = exc
+    while link is not None:
+        if isinstance(link, DeviceUnusable) or (
+            isinstance(link, WorkerFatal) and link.error.get("type") == DeviceUnusable.__name__
+        ):
+            return True
+        link = link.__cause__
+    return False
+
+
+def _of(fault: FaultClass, gap: bool, name: str, message: str, phase: str) -> PoolFault:
+    if fault is FaultClass.RESOURCE:
+        return PoolFault("resource", name, message, phase, reason="oom")
+    if fault is FaultClass.CONTENT and phase == "call":
+        return PoolFault("content", name, message, phase)
+    return PoolFault("infrastructure", name, message, phase, gap=gap)
+
+
+def _gpus(resource: ResourceClass) -> tuple[int, str | None]:
+    """Return a class's GPUs and GPU type: from its `gres` when it names one, its `gpu_type` otherwise; an `mps` one.
+
+    Raises:
+        ValueError: `gres` is not `gpu:[<type>:]<n>`, or names another type than `gpu_type`.
+    """
+    if resource.device == "mps":
+        return 1, None
+    if resource.device != "cuda":
+        return 0, None
+    if resource.gres is None:
+        return 1, resource.gpu_type
+    found = _GRES.match(resource.gres)
+    if found is None:
+        raise ValueError(f"gres {resource.gres!r} is not gpu:[<type>:]<count>")
+    kind = found["type"] or resource.gpu_type
+    if resource.gpu_type is not None and kind != resource.gpu_type:
+        raise ValueError(f"gres {resource.gres!r} names another GPU type than gpu_type {resource.gpu_type!r}")
+    return int(found["count"]), kind
+
+
+def worker_classes(
+    profile: ExecutionProfile, placements: Mapping[str, ClassPlacement] | None = None
+) -> list[WorkerClass]:
+    """Return the profile's resource classes as pydra worker classes: devices, typed GPUs, memory, time, partition.
+
+    A class in `placements` takes its placed partition, time, worker cap and excluded nodes (`ClassPlacement.grant`);
+    any other its profile's values and the profile's excluded nodes. A class names its partition and excluded nodes
+    as substrate arguments; nothing names a QOS. Each is tagged with its device, so a job is placed on classes of its
+    own device alone.
+    """
+    found = []
+    placed = placements or {}
+    for name, given in profile.resource_classes.items():
+        resource = placed[name].grant(given) if name in placed else given
+        exclude = placed[name].exclude if name in placed else profile.substrate.exclude_nodes
+        gpus, gpu_type = _gpus(resource)
+        args = {"partition": resource.partition} if resource.partition else {}
+        if exclude:
+            args["exclude"] = ",".join(exclude)
+        found.append(
+            WorkerClass(
+                name=name,
+                device=resource.device,
+                gpus=gpus,
+                gpu_type=gpu_type,
+                cpus=resource.cpus,
+                mem=resource.mem_bytes,
+                time=None if resource.time_s is None else int(resource.time_s),
+                max_workers=resource.max_workers,
+                substrate_args=args,
+                tags=frozenset({resource.device}),
+                quantum_jobs=profile.pool.quantum_items,
+                quantum_s=profile.pool.quantum_s,
+            )
+        )
+    return found
+
+
+def request(profile: ExecutionProfile, resource_class: str) -> ComputeResources:
+    """Return what a job placed on `resource_class` asks: its device, GPUs and type, and its memory; never less."""
+    resource = profile.resource_classes[resource_class]
+    gpus, gpu_type = _gpus(resource)
+    mem = None if resource.mem_bytes is None else f"{max(1, resource.mem_bytes // 1024)}K"
+    return ComputeResources(gpus=gpus or None, gpu_type=gpu_type if gpus else None, mem=mem, tags=(resource.device,))
+
+
+def budgets(profile: ExecutionProfile) -> FaultBudgets:
+    """Return the profile's fault budgets as the pool's: a failed start counts against the infrastructure budget."""
+    faults = profile.faults
+    infrastructure = max(1, faults.infrastructure_replacements)
+    return FaultBudgets(
+        content_attempts=faults.content_attempts,
+        resource_moves=faults.resource_replacements,
+        infrastructure_replacements=infrastructure,
+        crashes_charged=faults.crashes_charged,
+        start_failures=infrastructure,
+    )
+
+
+def settings(profile: ExecutionProfile) -> PoolSettings:
+    """Return the profile's pool settings: its lease, polls, wall target and unmeasured workers; no re-check."""
+    lease = profile.lease
+    timeout = max(lease.wait_s, lease.stale_after_s + lease.attribute_delay_s)
+    return PoolSettings(
+        lease=LeaseSettings(
+            stale_after=lease.stale_after_s,
+            renew_fraction=lease.renew_fraction,
+            attribute_delay=lease.attribute_delay_s,
+            timeout=timeout,
+        ),
+        poll_s=profile.pool.poll_s,
+        idle_polls=profile.pool.idle_polls,
+        call_timeout=profile.timeouts.request_s,
+        target_wall_s=profile.sizing.target_wall_s,
+        unmeasured_workers=profile.calibration.unmeasured_workers,
+        recheck_fraction=0.0,
+    )
+
+
+def substrate_of(profile: ExecutionProfile) -> Substrate:
+    """Return the substrate that starts the profile's workers: processes on this host, or one Slurm job each."""
+    if profile.substrate.kind == "local":
+        return LocalSubstrate()
+    commands = profile.substrate.commands
+    timeouts = {} if commands is None else {"submit_timeout": commands.timeout_s, "squeue_timeout": commands.timeout_s}
+    return SlurmSubstrate(per_user_cpu_cap=profile.substrate.qos_cpu_cap, **timeouts)
+
+
+def calibration_root(profile: ExecutionProfile) -> Path | None:
+    """Return where every session of the profile keeps the pool's calibration: under its first writable measures root.
+
+    The roots are the profile's `calibration.measures_roots` (`resolve_roots`), so a later session, over any pool
+    root, reads the samples and unfit records an earlier one wrote. Under `calibration.trust: own` the directory is
+    the reader's own (named by its uid), so another user's records never steer its placement; under `group` it is
+    shared. None (logged) when no root is writable.
+    """
+    own = profile.calibration.trust == "own"
+    for root in resolve_roots(profile.calibration.measures_roots, cache_root()):
+        found = root / CALIBRATION_DIR / str(os.geteuid()) if own else root / CALIBRATION_DIR
+        try:
+            found.parent.mkdir(parents=True, exist_ok=True)
+            found.mkdir(mode=0o700 if own else 0o777, exist_ok=True)
+        except OSError as err:
+            logger.info("measures root %s takes no pool calibration: %s", root, err)
+            continue
+        if os.access(found, os.W_OK):
+            return found
+    logger.warning("no measures root is writable; the pool's calibration is kept under its session root")
+    return None
+
+
+class NodeLocalRoot(ValueError):
+    """A pool root on storage only this node sees, opened for a substrate that starts workers on other nodes."""
+
+
+def _mount_type(path: Path) -> str | None:
+    """Return the filesystem type of the mount holding `path` from `/proc/self/mounts`; None where there is none."""
+    try:
+        lines = Path("/proc/self/mounts").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    found: tuple[int, str] | None = None
+    for line in lines:
+        fields = line.split()
+        if len(fields) < 3:  # noqa: PLR2004 - device, mount point, type
+            continue
+        point = Path(re.sub(r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), fields[1]))
+        if (path == point or point in path.parents) and (found is None or len(point.parts) > found[0]):
+            found = (len(point.parts), fields[2])
+    return None if found is None else found[1]
+
+
+def node_local(path: Path) -> str | None:
+    """Return why `path` is on storage only this node sees, or None.
+
+    It is node-local under a temporary directory (`TEMPORARY_ROOTS`, `tempfile.gettempdir`) or on a memory
+    filesystem (`MEMORY_FILESYSTEMS`).
+    """
+    resolved = Path(path).absolute().resolve()
+    for temporary in sorted({Path(tempfile.gettempdir()).resolve(), *(Path(t).resolve() for t in TEMPORARY_ROOTS)}):
+        if resolved == temporary or temporary in resolved.parents:
+            return f"it is under the temporary directory {temporary}"
+    kind = _mount_type(resolved)
+    if kind in MEMORY_FILESYSTEMS:
+        return f"it is on a {kind} filesystem"
+    return None
+
+
+class PoolSession:
+    """A warm pool whoever makes it closes: its `WarmPool`, its store and the submitter its jobs are made under.
+
+    `root` holds the pool (`<root>/pool`) and the jobs' work directories (`<root>/private/work`), on storage every
+    node sees; `store` is the result store's root. The pool's calibration is shared by every session of the profile
+    (`calibration_root`). The pool's workers and their models stay resident until `close`, whatever runs use it, one
+    after another or at once.
+    """
+
+    def __init__(  # noqa: PLR0913 - the profile and two roots, then keyword-only pool parts
+        self,
+        profile: ExecutionProfile,
+        root: Path,
+        store: Path,
+        *,
+        substrate: Substrate | None = None,
+        pool_settings: PoolSettings | None = None,
+        placements: Mapping[str, ClassPlacement] | None = None,
+        here: bool | None = None,
+    ) -> None:
+        """Open the pool at `root` over the store at `store`, its workers started by `substrate` (the profile's).
+
+        Its worker classes are the profile's, each class in `placements` placed with those values (`worker_classes`).
+        `here` says the workers run on this host; when None, whether the substrate is a `LocalSubstrate`.
+
+        Raises:
+            NodeLocalRoot: the substrate is a `SlurmSubstrate` and `root` is on node-local storage (`node_local`).
+        """
+        chosen = substrate if substrate is not None else substrate_of(profile)
+        if isinstance(chosen, SlurmSubstrate):
+            local = node_local(Path(root))
+            if local is not None:
+                raise NodeLocalRoot(
+                    f"pool root {root} is on storage only this node sees ({local}), and a Slurm substrate starts its"
+                    " workers on other nodes: open the pool on storage every node reaches"
+                )
+        self.here = isinstance(chosen, LocalSubstrate) if here is None else here
+        self.profile = profile
+        self.classes = worker_classes(profile, placements)
+        self.root = Path(root).absolute()
+        work = self.root / "private" / "work"
+        work.mkdir(parents=True, exist_ok=True, mode=0o700)
+        (self.root / "private").chmod(0o700)
+        self.store = open_store(Path(store), work)
+        calibration = DirectoryCalibration(calibration_root(profile) or self.root / "pool" / "calibration")
+        self.calibration = calibration
+        self.providers = (SenselabWorker(), SenselabHost())
+        self.pool = WarmPool(
+            self.root / "pool",
+            self.classes,
+            chosen,
+            store=self.store,
+            fit=MeasuredFit(calibration, headroom=profile.sizing.memory_headroom),
+            calibration=calibration,
+            faults=budgets(profile),
+            classify=classify,
+            settings=pool_settings if pool_settings is not None else settings(profile),
+        )
+        self.submitter = Submitter(worker=self.pool, providers=list(self.providers), telemetry=False)
+        self._beats: dict[tuple[str, str], float] = {}
+
+    @property
+    def epoch(self) -> int:
+        """The pool's coordinator epoch."""
+        assert self.pool.epoch is not None
+        return int(self.pool.epoch)
+
+    def working(self, jobs: Iterable[object], classes: Iterable[str]) -> bool:
+        """Whether the pool is at work for `jobs` (pool jobs of this session) since this was last asked.
+
+        It is when a worker of one of `classes`, or of the class a job's ticket is queued on, is ready or starting
+        (a submitted Slurm job still queued is starting), or when the claim lease of a ticket holding one of `jobs`
+        has beaten: its newest mtime differs from the one seen at the last call, or it is seen for the first time.
+        These are read from the pool's own state, which pydra does not yet expose.
+        """
+        pool: Any = self.pool
+        with pool._lock:  # noqa: SLF001 - pydra exposes no reader of its open jobs and started workers yet
+            held = [pool._open.get(job) for job in jobs]  # noqa: SLF001
+            tickets = {(j.ticket.queue, j.ticket.digest) for j in held if j is not None and j.ticket is not None}
+            started = {h.worker_class for h in pool._started.values()}  # noqa: SLF001
+        if started & ({*classes} | {queue.split("#", 1)[0] for queue, _ in tickets}):
+            return True
+        beat = False
+        for queue, digest in tickets:
+            newest = _newest_mtime(pool.pool.queue(queue).path / "claims" / f"{digest}.lease")
+            if newest is not None and self._beats.get((queue, digest)) != newest:
+                self._beats[(queue, digest)] = newest
+                beat = True
+        return beat
+
+    def job(self, doc: JobDoc, loader: Loader, name: str) -> PydraJob:
+        """Return the pool job of `doc`, its model worker loaded by `loader`, asking for its plan class's resources."""
+        task = (WorkerCall if loader.provider == WORKER else HostCall)(worker=loader.spec, job=doc)
+        resources = request(self.profile, doc.placement.resource_class)
+        return PydraJob(task, submitter=self.submitter, name=name, resources=resources)
+
+    def close(self) -> None:
+        """Close the pool, stopping the workers it started."""
+        with contextlib.suppress(Exception):
+            self.submitter.close()
+        self.pool.close()
+
+    def __enter__(self) -> "PoolSession":
+        """Return the session, closed when the block ends."""
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        """Close the session."""
+        self.close()
+
+
+_DEFAULTS: dict[tuple[str, str, str], PoolSession] = {}
+_RETIRED: list[PoolSession] = []
+"""Default sessions a key change replaced while runs were live on them; each is closed when its last run ends."""
+_LIVE: dict[int, int] = {}
+"""The live runs on each default session, by `id` of the session."""
+_DEFAULTS_LOCK = threading.Lock()
+_OPENER: list[int] = []
+"""The pid of the process that opened the default sessions; another process never closes them."""
+
+
+def _forget_defaults() -> None:
+    """In a forked child: drop the parent's default sessions without closing them, so the child opens its own."""
+    global _DEFAULTS_LOCK  # noqa: PLW0603 - a forked child's lock may be held by a parent thread that is gone
+    _DEFAULTS_LOCK = threading.Lock()
+    _DEFAULTS.clear()
+    _RETIRED.clear()
+    _LIVE.clear()
+    _OPENER.clear()
+
+
+os.register_at_fork(after_in_child=_forget_defaults)
+
+
+def default_session(
+    profile: ExecutionProfile, store: Path, placements: Mapping[str, ClassPlacement] | None = None
+) -> PoolSession:
+    """Return this process's default session for `profile` over `store`, its classes placed by `placements`.
+
+    It counts one more live run on it; the run hands it back with `release_default`. Its root is a directory of its
+    own under `<cache root>/2x/pools`; it is closed at exit by the process that opened it, and a forked child opens
+    its own. Every run started without a session, and every call, uses it, so a model stays resident from one to the
+    next for the profile's idle window. A process holds one current session: a run of another profile, store or
+    worker classes retires it (no new run goes to it), and a retired session is closed once its last live run ends.
+    Callers that ask at once for a key with no session wait for the one that opens it.
+    """
+    key = (profile.canonical_digest(), str(Path(store).absolute()), repr(worker_classes(profile, placements)))
+    idle: list[PoolSession] = []
+    try:
+        with _DEFAULTS_LOCK:
+            found = _DEFAULTS.get(key)
+            if found is None:
+                for held in _DEFAULTS.values():
+                    (_RETIRED if _LIVE.get(id(held), 0) else idle).append(held)
+                _DEFAULTS.clear()
+                root = cache_root() / POOLS_DIR / f"{os.getpid()}-{secrets.token_hex(4)}"
+                found = PoolSession(profile, root, Path(store), placements=placements)
+                if not _OPENER:
+                    atexit.unregister(close_default_sessions)
+                    atexit.register(close_default_sessions)
+                _OPENER[:] = [os.getpid()]
+                _DEFAULTS[key] = found
+            _LIVE[id(found)] = _LIVE.get(id(found), 0) + 1
+    finally:
+        for held in idle:
+            _close(held)
+    return found
+
+
+def release_default(found: PoolSession) -> None:
+    """Hand back one live run of the default session `found`; a retired session is closed when its last run ends."""
+    with _DEFAULTS_LOCK:
+        left = _LIVE.get(id(found), 0) - 1
+        if left > 0:
+            _LIVE[id(found)] = left
+            return
+        _LIVE.pop(id(found), None)
+        retired = any(held is found for held in _RETIRED)
+        if retired:
+            _RETIRED[:] = [held for held in _RETIRED if held is not found]
+    if retired:
+        _close(found)
+
+
+def _close(found: PoolSession) -> None:
+    try:
+        found.close()
+    except Exception as err:  # noqa: BLE001 - a failed close must not keep the next session from opening
+        logger.warning("closing the default pool session at %s failed: %s", found.root, err)
+
+
+def close_default_sessions() -> None:
+    """Close the default sessions this process opened, current and retired, stopping their workers; elsewhere none."""
+    with _DEFAULTS_LOCK:
+        if _OPENER != [os.getpid()]:
+            return
+        opened = [*_DEFAULTS.values(), *_RETIRED]
+        _DEFAULTS.clear()
+        _RETIRED.clear()
+        _LIVE.clear()
+        _OPENER.clear()
+    for found in opened:
+        _close(found)
+
+
+@contextlib.contextmanager
+def session(profile: ExecutionProfile, root: Path, store: Path) -> Iterator[PoolSession]:
+    """Open a `PoolSession` for the block and close it after."""
+    opened = PoolSession(profile, root, store)
+    try:
+        yield opened
+    finally:
+        opened.close()
+
+
+def item_failure(text: str) -> FaultRecord | None:
+    """Return the fault record an `ItemFailed` carried in `text` (an error message or traceback), or None."""
+    at = text.rfind(FAULT_MARK)
+    if at < 0:
+        return None
+    line = text[at + len(FAULT_MARK) :].splitlines()[0]
+    try:
+        return FaultRecord.model_validate(json.loads(line))
+    except ValueError:
+        return None
+
+
+def coordinator_live(root: Path) -> bool:
+    """Whether the newest coordinator of the pool at `root` is live: not ended, its lease held and not stale."""
+    from pydra.engine.lease import LeaseTimeout  # noqa: PLC0415 - read only here
+    from pydra.workers.pool.pool import _open_existing  # noqa: PLC0415 - the pool's own reader of its header
+
+    if not (Path(root) / "pool.json").is_file():
+        return False
+    with _open_existing(root) as pool:
+        epochs = pool.epochs()
+        if not epochs or (Path(root) / "coordinator" / str(epochs[-1]) / "ended").exists():
+            return False
+        lease = pool.coordinator_lease(epochs[-1], beat="external")
+        try:
+            wait = lease.try_take()
+        except LeaseTimeout:
+            return True
+        if wait is None:
+            lease.__exit__(None, None, None)
+            return False
+        return True

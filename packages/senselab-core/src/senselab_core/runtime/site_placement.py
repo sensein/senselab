@@ -357,7 +357,6 @@ class Placer:
         request: Builds the run's request; called once per epoch, when the first class of it needs the hook.
         clock: Times the hook's bound.
         record: Told of each resolution; set before the first `for_class`.
-        inert: Said in each recorded note when the substrate applies only the worker cap.
     """
 
     def __init__(  # noqa: PLR0913 - the profile and layers, then keyword-only call settings
@@ -369,7 +368,6 @@ class Placer:
         request: Callable[[], PlacementRequest],
         clock: Clock = SystemClock(),  # noqa: B008 - stateless
         record: Callable[[int, str, ClassNeeds | None, HookRef | None, ClassPlacement], None] | None = None,
-        inert: str | None = None,
     ) -> None:
         """Resolve placements under `profile`; nothing is called until `for_class`.
 
@@ -385,7 +383,7 @@ class Placer:
         self._ref = None if chosen is None else hook_ref(chosen)
         self._request = request
         self._built: dict[int, PlacementRequest] = {}
-        self.hook_s, self._clock, self.record, self._inert = profile.substrate.placement_hook_s, clock, record, inert
+        self.hook_s, self._clock, self.record = profile.substrate.placement_hook_s, clock, record
         self._done: dict[tuple[int, str], ClassPlacement] = {}
         self._lock = threading.Lock()
 
@@ -415,8 +413,6 @@ class Placer:
                         update={"names": {**placed.names, **site_names([needs.current.partition])}}
                     )
                 placed, refusal = self._asked(self._hook, name, request, placed)
-            if self._inert is not None:
-                placed = placed.model_copy(update={"note": "; ".join(n for n in (placed.note, self._inert) if n)})
             if self.record is not None:
                 self.record(epoch, name, needs, self._ref, placed)
             if refusal is not None:

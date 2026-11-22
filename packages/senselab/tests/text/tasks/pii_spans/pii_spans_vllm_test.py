@@ -22,12 +22,13 @@ from senselab_core.kernel.identity import ModelRef, ResolvedModel
 from senselab_core.kernel.results import TextSpans
 from senselab_core.runtime.call import Packaged, Result, TaskCall, use_packaged
 from senselab_core.runtime.envs import EnvHandle
-from senselab_core.runtime.execution.in_process import CallFailed, InProcess
-from senselab_core.runtime.execution.workers import WorkerLoadFailed, WorkerSet
+from senselab_core.runtime.execution.calls import CallFailed, call
+from senselab_core.runtime.execution.providers import Loader, server_of
+from senselab_core.runtime.execution.warm import PoolSession
+from senselab_core.runtime.execution.workers import WorkerLoadFailed, service_of, start_vllm
 from senselab_core.runtime.hardware import GpuInfo, HardwareInfo
 from senselab_core.runtime.licenses import packaged_lock_records
 from senselab_core.runtime.profiles import ExecutionProfile, resolve_execution
-from senselab_core.runtime.store import ResultStore
 from senselab_core.runtime.vllm_server import AttestationMismatch, VllmServer, config_digest, server_args
 from senselab_core.testing.contracts import contract_cases
 from senselab_core.testing.processes import group_gone
@@ -50,19 +51,12 @@ ANSWER = '{"spans": [{"quote": "555-0100", "category": "CONTACT", "score": 0.9}]
 TEXT = "Call me on 555-0100 today."
 
 
-WORKERS = WorkerSet(4)
 """The worker set, and so the servers, every call of this module runs on."""
 
 
-@pytest.fixture(autouse=True)
-def _stop_workers() -> Iterator[None]:
-    """Stop every worker and server a test started."""
-    yield
-    WORKERS.close()
-
-
-def _run(call: TaskCall, *, execution: ExecutionProfile, store: ResultStore) -> Result:
-    return InProcess(store=store, profile=execution, workers=WORKERS).call(call)
+def _run(task: TaskCall, *, execution: ExecutionProfile, store: Path) -> Result:
+    with PoolSession(execution, store.parent / "pool", store) as session:
+        return call(task, profile=execution, session=session)
 
 
 def _profile(tmp_path: Path, *stacks: str, name: str = "laptop") -> ExecutionProfile:
@@ -129,7 +123,9 @@ def served(fake_env: EnvHandle) -> Iterator[Registry]:
         registry.add_backend(backend.model_copy(update={"devices": ("cpu",)}) if backend.name == "vllm" else backend)
     opened = [fake_env]
     previous = use_packaged(
-        Packaged(CATALOGUE, lambda _b, _p: opened[-1], registry, LOCK_RECORDS, env_lock=lambda _b: _lock(opened[-1]))
+        Packaged(
+            CATALOGUE, lambda _b, _p, _d: opened[-1], registry, LOCK_RECORDS, env_lock=lambda _b: _lock(opened[-1])
+        )
     )
     registry.opened = opened  # type: ignore[attr-defined]
     yield registry
@@ -188,7 +184,7 @@ def test_call_serves_spans_through_the_server_and_records_its_attestation(
 ) -> None:
     """A `vllm` call returns the answer's spans, and its context carries what an identical server attests."""
     profile = _profile(tmp_path, "vllm")
-    first = _run(_call(), execution=profile, store=ResultStore(tmp_path / "results"))
+    first = _run(_call(), execution=profile, store=tmp_path / "results")
     spans = _spans(first.outputs)
     assert [TEXT[a:b] for a, b in zip(spans.start, spans.end, strict=True)] == ["555-0100"]
     assert spans.label.tolist() == ["CONTACT"] and spans.score is not None and numpy.allclose(spans.score, [0.9])
@@ -198,8 +194,30 @@ def test_call_serves_spans_through_the_server_and_records_its_attestation(
         assert first.context.driver == server.context_fields()["driver"]
         assert server.attestation.config_digest == config_digest(CONFIG.settings)
     assert first.context.driver["model_identity"] == ENTRY.revision and first.context.driver["engine"] == "vllm"
-    second = _run(_call(), execution=profile, store=ResultStore(tmp_path / "results"))
+    second = _run(_call(), execution=profile, store=tmp_path / "results")
     assert second.reused is not None and second.context == first.context
+
+
+@pytest.mark.logic
+def test_a_store_hit_starts_no_server_and_a_mismatching_attestation_refuses(
+    served: Registry, fake_env: EnvHandle, tmp_path: Path
+) -> None:
+    """A store hit is served by the coordinator, so no server starts; a started one must attest the lock."""
+    profile, store = _profile(tmp_path, "vllm"), tmp_path / "results"
+    first = _run(_call(), execution=profile, store=store)
+    assert _starts(tmp_path) == 1
+    (tmp_path / "fake2").mkdir()
+    _knob(tmp_path, FAKE_VLLM_DIR=str(tmp_path / "fake2"))
+    served.opened.append(_make_env(tmp_path, "env2"))  # type: ignore[attr-defined]
+    assert _run(_call(), execution=profile, store=store).reused is not None
+    assert not list((tmp_path / "fake2").glob("*.json"))
+    _knob(tmp_path, FAKE_VLLM_VERSION="9.9.9")
+    backend = first.placement.backend
+    model = ResolvedModel(ref=ModelRef.parse(f"{ENTRY.id}@{ENTRY.revision}"), identity=ENTRY.revision)
+    loader = Loader(backend, _make_env(tmp_path, "env3"), model, "cpu", profile, service_of(backend, model))
+    with pytest.raises(WorkerLoadFailed) as refused:
+        server_of(loader, start_vllm)
+    assert isinstance(refused.value.__cause__, AttestationMismatch) and "9.9.9" in str(refused.value.__cause__)
 
 
 @pytest.mark.logic
@@ -211,7 +229,7 @@ def test_call_fails_the_item_when_the_answer_is_not_spans(
     """A server answer that is not the span object asked for is the item's content fault."""
     _knob(tmp_path, FAKE_VLLM_CONTENT="I cannot help with that.")
     with pytest.raises(CallFailed) as raised:
-        _run(_call(), execution=_profile(tmp_path, "vllm"), store=ResultStore(tmp_path / "results"))
+        _run(_call(), execution=_profile(tmp_path, "vllm"), store=tmp_path / "results")
     assert raised.value.failure.fault_class is FaultClass.CONTENT
 
 
@@ -253,21 +271,18 @@ def test_contract(case: Any) -> None:  # noqa: ANN401 - a no-argument contract c
 def test_pii_spans_vllm_on_the_h100_finds_spans_and_bounds_edge_inputs(
     tmp_path: Path, site_profile: Callable[..., ExecutionProfile]
 ) -> None:
-    """On `InProcess` under the site profile the served pinned model covers a name and a number, attested.
+    """On a warm pool under the site profile the served pinned model covers a name and a number, attested.
 
     Empty, non-BMP and long texts each give spans inside the text or a typed fault.
     """
     profile = site_profile({"stack_preferences": {"pii_spans": ["vllm"]}})
-    store = ResultStore(tmp_path / "results")
+    store = tmp_path / "results"
 
     def run(text: str) -> Any:  # noqa: ANN401
         return _run(_call_of(text), execution=profile, store=store)
 
     text = "My name is Margaret Hollis and you can reach me on 617-555-0142."
-    try:
-        _served_spans_and_edges(run, text)
-    finally:
-        WORKERS.close()
+    _served_spans_and_edges(run, text)
 
 
 def _served_spans_and_edges(run: Any, text: str) -> None:  # noqa: ANN401
@@ -291,15 +306,14 @@ def _call_of(text: str) -> TaskCall:
 
 
 @pytest.mark.logic
-def test_closing_the_worker_set_stops_the_server_it_started(
+def test_closing_the_session_stops_the_server_its_worker_started(
     served: Registry,  # noqa: ARG001 - the fixture's effect
     tmp_path: Path,
 ) -> None:
-    """Closing the worker set stops the server's process group, so the card is free for the next server."""
-    _run(_call(), execution=_profile(tmp_path, "vllm"), store=ResultStore(tmp_path / "results"))
+    """Closing the pool session stops the server's process group, so the card is free for the next server."""
+    _run(_call(), execution=_profile(tmp_path, "vllm"), store=tmp_path / "results")
     (record,) = [json.loads(p.read_text()) for p in (tmp_path / "fake").glob("*.json")]
-    WORKERS.close()
-    assert group_gone(record["pgid"], 5), "the server's process group outlived closing the worker set"
+    assert group_gone(record["pgid"], 5), "the server's process group outlived closing the session"
 
 
 @pytest.mark.logic
@@ -321,26 +335,6 @@ def test_real_workers_close_and_the_next_start_stop_the_server(
             pass
         assert group_gone(pgid, 5), "the server outlived the stop"
     workers.close()
-
-
-@pytest.mark.logic
-def test_a_store_hit_starts_no_server_and_a_mismatching_attestation_refuses(
-    served: Registry, fake_env: EnvHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The context holds the declared attestation, so a hit needs no server; a started server must attest it."""
-    profile, store = _profile(tmp_path, "vllm"), ResultStore(tmp_path / "results")
-    _run(_call(), execution=profile, store=store)
-    assert _starts(tmp_path) == 1
-    (tmp_path / "fake2").mkdir()
-    _knob(tmp_path, FAKE_VLLM_DIR=str(tmp_path / "fake2"))
-    served.opened.append(_make_env(tmp_path, "env2"))  # type: ignore[attr-defined]
-    assert _run(_call(), execution=profile, store=store).reused is not None
-    assert not list((tmp_path / "fake2").glob("*.json"))
-    _knob(tmp_path, FAKE_VLLM_VERSION="9.9.9")
-    served.opened.append(_make_env(tmp_path, "env3"))  # type: ignore[attr-defined]
-    with pytest.raises(WorkerLoadFailed, match="9.9.9") as refused:
-        _run(_call_of("Call 555-0199."), execution=profile, store=store)
-    assert isinstance(refused.value.__cause__, AttestationMismatch)
 
 
 @pytest.mark.logic

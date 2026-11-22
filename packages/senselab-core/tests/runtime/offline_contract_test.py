@@ -14,7 +14,7 @@ _CHILD = """
 import hashlib, json, sys
 from pathlib import Path
 from senselab_core.kernel.declare import Env
-from senselab_core.runtime.envs import HostCuda, Uv, ensure_env
+from senselab_core.runtime.envs import Uv, ensure_env
 from senselab_core.runtime.fetch import DataManifest, fetch
 from senselab_core.runtime.network import Offline
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -35,7 +35,7 @@ steps = {
     "resolve": lambda: Resolver(cache_dir=tmp / "hf", network=profile.network).lookup("org/model", "main"),
     "fetch": lambda: fetch(manifest, cache_root=tmp / "data", network=profile.network),
     "build": lambda: ensure_env(Env.isolated("demo"), lock, tmp / "envs", settings=profile.envs, lease=profile.lease,
-        uv=Uv((sys.executable, str(fake_uv))), host_cuda=HostCuda(None, "none"), network=profile.network),
+        uv=Uv((sys.executable, str(fake_uv))), device="cuda", network=profile.network),
 }
 refused = {}
 for name, step in steps.items():

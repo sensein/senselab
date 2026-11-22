@@ -1,4 +1,4 @@
-"""The base of every generated task class and the error envelope; a configured task runs on `InProcess`."""
+"""The base of every generated task class and the error envelope; a configured task runs on a warm pool (`call`)."""
 
 import difflib
 from collections.abc import Iterable, Mapping
@@ -22,7 +22,8 @@ from senselab_core.kernel.identity import ModelRef
 from senselab_core.kernel.license import LicenseConflict
 from senselab_core.kernel.wire import WireFormatRetired
 from senselab_core.runtime.call import Result, TaskCall
-from senselab_core.runtime.execution.in_process import CallFailed, InProcess
+from senselab_core.runtime.execution.calls import CallFailed
+from senselab_core.runtime.execution.calls import call as run_call
 from senselab_core.runtime.execution.outputs import AmbiguousClock, OutputTypeMismatch
 from senselab_core.runtime.execution.run import ResultSet
 from senselab_core.runtime.execution.workers import WorkerLoadFailed
@@ -106,7 +107,7 @@ ERROR_CODES: tuple[tuple[type[Exception], str, str], ...] = (
     ),
     (ValueError, "invalid_call", "see the message for the value to correct"),
 )
-"""Each error `InProcess.call` documents, with its envelope code and fix; the first row an instance matches wins."""
+"""Each error `calls.call` documents, with its envelope code and fix; the first row an instance matches wins."""
 
 _FAULT_FIX = {
     FaultClass.CONTENT: "the backend rejected the input; correct or replace it",
@@ -116,7 +117,7 @@ _FAULT_FIX = {
 
 
 def api_error(error: Exception) -> ApiError | None:
-    """Return the `ApiError` for an error `InProcess.call` documents, or None when it documents none such.
+    """Return the `ApiError` for an error `calls.call` documents, or None when it documents none such.
 
     A `WorkerLoadFailed` is `worker_load_failed` with its cause's type and message, or the envelope of its cause
     when that is a server that did not start (`server_start_failed`) or attests another model (`attestation_mismatch`).
@@ -255,9 +256,12 @@ class ConfiguredTask:
         return type(self)(self._model, **merged, backend_params=self._backend_params)
 
     def _run(self, inputs: Mapping[str, Any]) -> Result:
-        call = self._call(inputs)
+        task = self._call(inputs)
         try:
-            return InProcess().call(call)
+            from senselab._api.facade import session  # noqa: PLC0415 - the facade imports this module
+
+            current = session()
+            return run_call(task, config=current.config, profile=current.execution, session=current.pool)
         except Exception as error:
             reraise(error)
 

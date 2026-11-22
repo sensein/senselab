@@ -1,17 +1,15 @@
 """A run's lifecycle and its results: `start` a plan, follow it as a `Run`, read its `ResultSet`.
 
 A run lives in `<cache root>/2x/runs/<plan hash>/`: `plan.json` (the logical plan and its input manifest, written
-once), `inputs.json` (what each
-record's inputs are read from, merged across attempts), `manifest.json` (the plan hash and the latest attempt's
-result store),
-`placements/<attempt>.json` (one per attempt, never overwritten), `attempts/<n>` (the attempt id claimed `n`-th),
-`events/<writer>.jsonl` (`EventLog`), `prov/` (the
-provenance documents), and `dead/`, `queues/` and `epoch/` for the pool. A `Run` over a directory derives its status
-and its results from the events and the result store, and binds its input values from `inputs.json`, so it works from
-a run another process started, unless an input was held in memory by the process that planned it.
+once), `inputs.json` (what each record's inputs are read from, merged across attempts), `manifest.json` (the plan hash,
+the result store and the pool the latest attempt used), `placements/<attempt>.json` (one per attempt, never
+overwritten), `attempts/<n>` (the attempt id claimed `n`-th), `events/<writer>.jsonl` (`EventLog`) and `prov/` (the
+provenance documents). A run given no session runs on the process's default one, under `<cache root>/2x/pools/`.
+A `Run` over a directory derives its status and its results from the events and the result store,
+and binds its input values from `inputs.json`, so it works from a run another process started, unless an input was
+held in memory by the process that planned it.
 """
 
-import contextlib
 import dataclasses
 import importlib.util
 import json
@@ -29,13 +27,12 @@ from senselab_worker.canonical import jcs_dumps
 from senselab_core.kernel.dataset import InputManifest, Record
 from senselab_core.kernel.formats import PLACEMENT_FORMAT, RETIRED_PLACEMENT_FORMATS, FormatVerdict, check
 from senselab_core.kernel.graph import Graph, mapped_nodes, order, split
-from senselab_core.kernel.identity import InputIdentity, ReusePolicy
+from senselab_core.kernel.identity import ExecutionContext, InputIdentity, ReusePolicy
 from senselab_core.kernel.placement import PlanPlacement
 from senselab_core.kernel.plan import LogicalPlan
 from senselab_core.kernel.signals import StaleSource
-from senselab_core.runtime.call import InputUnreadable, RunConfig, bind_input
+from senselab_core.runtime.call import InputUnreadable, bind_input
 from senselab_core.runtime.clock import Clock, SystemClock
-from senselab_core.runtime.execution.epoch import EPOCH_DIR, Epoch, StaleCoordinator, run_lease
 from senselab_core.runtime.execution.events import (
     Event,
     EventLog,
@@ -46,8 +43,7 @@ from senselab_core.runtime.execution.events import (
     status_from,
     terminal_events,
 )
-from senselab_core.runtime.execution.executor import Executor, FaultRecord, RunCancelled
-from senselab_core.runtime.execution.queue import RUN_QUEUES, QueueSet
+from senselab_core.runtime.execution.executor import FaultRecord, RunCancelled
 from senselab_core.runtime.execution.records import add_plan_entity
 from senselab_core.runtime.execution.telemetry import Actuals, Placements
 from senselab_core.runtime.execution_settings import JobLease
@@ -59,7 +55,6 @@ from senselab_core.runtime.provenance import ProvStore
 from senselab_core.runtime.revision import cache_root, fresh_attempt_id
 from senselab_core.runtime.site_placement import Placer
 from senselab_core.runtime.storage import PRIVATE_DIR, private_dir, publish, write_atomically
-from senselab_core.runtime.store import ResultStore
 
 PLAN_FILE = "plan.json"
 INPUTS_FILE = f"{PRIVATE_DIR}/inputs.json"
@@ -69,10 +64,10 @@ PYDRA_DIR = f"{PRIVATE_DIR}/pydra"
 """The pydra runner's job and error pickles, which hold the store path and tracebacks."""
 LICENSES_FILE = "licenses.json"
 """The run's license policy, written once at its first start (`run-licenses@1`)."""
-RESULTS_DIR = "results"
-"""The default result store, `<cache root>/results`."""
+RESULTS_DIR = "2x/results"
+"""The default result store, `<cache root>/2x/results`."""
 ATTEMPTS_DIR = "attempts"
-POOL_DIRS = ("dead", "prov", RUN_QUEUES, EPOCH_DIR)
+POOL_DIRS = ("prov",)
 _LIST = re.compile(r"^list\[(.+)\]$")
 
 logger = logging.getLogger("senselab")
@@ -94,7 +89,7 @@ class RunPrivate(PermissionError):
         """Name the run directory and the argument that names its result store."""
         super().__init__(
             f"run {Path(run_dir).name}'s private state belongs to another account; name its result store with "
-            "Run(run_dir, store=<its result store>)"
+            "Run(run_dir, store=<its result store's root>)"
         )
         self.run_dir = Path(run_dir)
 
@@ -435,11 +430,11 @@ def bind_inputs(run_dir: Path) -> dict[InputIdentity, object]:
 class _Reader:
     """Reads the graph outputs of one record, or of the run, from the terminal event of each job."""
 
-    def __init__(self, graph: Graph, events: Sequence[Event], store: ResultStore, epoch: int | None = None) -> None:
+    def __init__(self, graph: Graph, events: Sequence[Event], read: "Reader") -> None:
         self.graph = graph
         self.mapped = mapped_nodes(graph)
-        self.store = store
-        self.latest = terminal_events(events, epoch=epoch)
+        self.read = read
+        self.latest = terminal_events(events)
         self.held: dict[tuple[str, str], Mapping[str, object] | None] = {}
 
     def _because(self, index: int | None) -> FaultRecord | None:
@@ -470,7 +465,7 @@ class _Reader:
         assert event is not None and event.key is not None and event.output is not None
         wanted = (event.key, event.output)
         if wanted not in self.held:
-            self.held[wanted] = self.store.outputs_of(*wanted)
+            self.held[wanted] = self.read(*wanted)
         found = self.held[wanted]
         if found is None or port not in found:
             return FaultRecord.gap_of("MissingOutput", f"output {port!r} of {node!r} is not in the result store")
@@ -506,25 +501,27 @@ class Run:
     """A run of a plan over the directory `run_dir`: its status, its wait, its results and its cancel.
 
     A run `start` made runs in a background thread; one opened over a directory (`Run(run_dir)`) reads what is on
-    disk, written by any process. `store` is where the results are read from, by default the one the manifest names.
-    `epoch` is the epoch of the attempt `start` made, None for a run opened over a directory.
+    disk, written by any process. `store` is the root of the result store the results are read from, by default the
+    one the manifest names. `epoch` is the coordinator epoch of the pool the attempt `start` made runs on, None for a
+    run opened over a directory.
     """
 
     def __init__(
         self,
         run_dir: Path,
         *,
-        store: ResultStore | None = None,
+        store: Path | None = None,
         profile: ExecutionProfile | None = None,
         clock: Clock = SystemClock(),  # noqa: B008 - stateless
     ) -> None:
         """Open the run in `run_dir`; `wait` and its liveness reads are timed on `clock`.
 
-        `profile` is the one the run is under: its `pool.event_poll_s` paces `wait` and its `store` section opens the
-        results store; None reads the packaged profile's.
+        `profile` is the one the run is under: its `pool.event_poll_s` paces `wait`; None reads the packaged
+        profile's.
         """
         self.run_dir = Path(run_dir)
         self._store, self._clock = store, clock
+        self._opened: Any = None
         self._profile = profile if profile is not None else ExecutionProfile.packaged()
         self._pool = self._profile.pool
         self._thread: threading.Thread | None = None
@@ -539,7 +536,7 @@ class Run:
         return load_plan(self.run_dir)
 
     def manifest(self) -> dict[str, Any]:
-        """Return the manifest (plan hash and result store), `{}` if the run has none.
+        """Return the manifest (plan hash, result store and pool), `{}` if the run has none.
 
         Raises:
             RunPrivate: the run is another account's, so its manifest is not readable.
@@ -557,32 +554,17 @@ class Run:
         return read_events(self.run_dir)
 
     def status(self) -> RunStatus:
-        """Return the status derived from the events under the run's epoch, and the lines refused.
-
-        The run's epoch is the one its attempt holds (`epoch`), else the current one. Once a newer epoch is current,
-        the status is of the events of the attempt's epoch and earlier, with `superseded` set.
-        """
-        current = self._epoch()
-        mine = self.epoch if self.epoch is not None else current
+        """Return the status derived from the run's events, and the lines refused; the latest attempt of a job wins."""
         scan = scan_events(self.run_dir)
-        superseded = mine is not None and current is not None and current > mine
-        events = [e for e in scan.events if mine is None or e.epoch <= mine] if superseded else scan.events
-        status = status_from(events, epoch=mine, quarantined=len(scan.quarantined))
-        return dataclasses.replace(status, superseded=True) if superseded else status
-
-    def _epoch(self) -> int | None:
-        """Return the run's current epoch, None where none was taken."""
-        return Epoch(self.run_dir).current() or None
+        return status_from(scan.events, quarantined=len(scan.quarantined))
 
     def wait(self, timeout: float | None = None, *, poll: float | None = None) -> RunStatus:
         """Wait up to `timeout` seconds for the run to be done and return its status.
 
         A run started here is waited on through its thread; any run is then polled, reading the event log every `poll`
         seconds (`pool.event_poll_s` by default), until its events say it is done, so a run another process drives
-        can be waited for. An attempt a newer epoch stopped raises its `StaleCoordinator`. While no thread of
-        this `Run` is alive, a run whose latest coordinator ended or whose lease is past its stale bound
-        (`Epoch.stopped`), with no live claim on any of its queues, is not waited for further: its status is returned
-        with `interrupted` set.
+        can be waited for. While no thread of this `Run` is alive, a run whose pool has no live coordinator
+        (`coordinator_live`) is not waited for further: its status is returned with `interrupted` set.
 
         Raises:
             BaseException: the error that stopped a run started here, other than its cancellation.
@@ -606,11 +588,13 @@ class Run:
         return status
 
     def _stopped(self) -> bool:
-        """Return whether the latest coordinator stopped (`Epoch.stopped`) and no worker holds a live claim."""
-        return (
-            Epoch(self.run_dir, self._clock).stopped()
-            and not QueueSet.for_run(self.run_dir, clock=self._clock).claimed_any()
-        )
+        """Return whether the pool the run's latest attempt opened has no live coordinator; one not open yet has."""
+        pool = self.manifest().get("pool")
+        if not (isinstance(pool, str) and (Path(pool) / "pool.json").is_file()):
+            return False
+        from senselab_core.runtime.execution.warm import coordinator_live  # noqa: PLC0415 - needs pydra
+
+        return not coordinator_live(Path(pool))
 
     @property
     def cancelled(self) -> threading.Event:
@@ -633,26 +617,21 @@ class Run:
         self._ended.set()
 
     def cancel(self) -> None:
-        """Stop releasing jobs: fragments already sent finish or are left to their lease; no other is sent."""
+        """Stop releasing jobs: jobs the pool has not started are withdrawn; no other is sent."""
         self._cancel.set()
 
     def results(self) -> ResultSet:
         """Return what each record gave, read from the result store as each is asked for.
 
-        The events are read now, under the run's epoch (`status`); a record whose job failed, was blocked or cancelled
-        gives that, and an earlier attempt's result is served only under the key the attempt gives its job.
+        The events are read now (`status`); a record whose job failed, was blocked or cancelled gives that, and an
+        earlier attempt's result is served only under the key the attempt gives its job.
 
         Raises:
             FileNotFoundError: the run has no `plan.json`.
-            StaleCoordinator: a newer epoch than this attempt's is current.
         """
         placed = self.plan
         graph = placed.logical.graph
-        current = self._epoch()
-        epoch = self.epoch if self.epoch is not None else current
-        if epoch is not None and current is not None and current > epoch:
-            raise StaleCoordinator(epoch, current)
-        reader = _Reader(graph, self.events(), self._results_store(), epoch)
+        reader = _Reader(graph, self.events(), self._read)
         per_record = [n for n in order(graph) if n in reader.mapped]
         outputs = sorted(graph.outputs)
         mine = [name for name in outputs if split(graph.outputs[name])[0] in per_record]
@@ -663,69 +642,79 @@ class Run:
         shared = {name: _later(reader, [name], None) for name in outputs if name not in mine}
         return ResultSet(entries, shared, run=self)
 
-    def _results_store(self) -> ResultStore:
-        if self._store is not None:
-            return self._store
-        return results_store(self._profile, self.manifest().get("store"))
+    def store(self) -> Any:  # noqa: ANN401 - a PortableStore; pydra is imported only here
+        """Return the result store the run's results are read from, opened once."""
+        from senselab_core.runtime.execution.portable import open_store  # noqa: PLC0415 - needs pydra
+
+        if self._opened is None:
+            root = self._store if self._store is not None else results_root(self.manifest().get("store"))
+            self._opened = open_store(root, private_dir(self.run_dir / PRIVATE_DIR) / "work")
+        return self._opened
+
+    def _read(self, key: str, identity: str) -> Mapping[str, object] | None:
+        """Return the stored outputs of output identity `identity` under key digest `key`, or None."""
+        found = self.entry(key, identity)
+        return None if found is None else found[0]
+
+    def entry(self, key: str, identity: str) -> "tuple[dict[str, object], ExecutionContext] | None":
+        """Return the stored outputs and context of output identity `identity` under key digest `key`, or None."""
+        from senselab_core.runtime.execution.portable import read_entry  # noqa: PLC0415 - needs pydra
+
+        return read_entry(self.store(), key, identity)
+
+    def reused(self, key: str) -> ReusePolicy | None:
+        """Return the policy a stored result of key digest `key` was served under, None when it was computed."""
+        found = [e for e in self.events() if e.key == key and e.kind in {"finished", "cache_hit"}]
+        latest = max(found, key=lambda e: (e.ordinal, e.seq), default=None)
+        return None if latest is None or latest.reuse is None else ReusePolicy(latest.reuse)
 
 
-def results_store(
-    profile: ExecutionProfile | None, named: object = None, provenance: ProvStore | None = None
-) -> ResultStore:
-    """Return the result store at `named` (a manifest's `store`), else the cache's, under `profile`'s `store`."""
-    root = Path(named) if isinstance(named, str) else cache_root() / RESULTS_DIR
-    return ResultStore(root, provenance, settings=None if profile is None else profile.store)
+Reader = Callable[[str, str], "Mapping[str, object] | None"]
+"""Reads stored outputs by key digest and output identity."""
 
 
-def default_executor(placed: Plan, executor: Executor | None, store: ResultStore | None) -> Executor:
-    """Return the executor to run `placed` on: the one given, else `InProcess` (local substrate) or `Pool` (slurm).
+def results_root(named: object = None) -> Path:
+    """Return the root of the result store at `named` (a manifest's `store`), else the cache's (`RESULTS_DIR`)."""
+    return Path(named) if isinstance(named, str) else cache_root() / RESULTS_DIR
 
-    A plan read from disk carries no profile or run config: the packaged default profile is used if its digest is the
-    one the plan was placed under. The `Pool` is over `Slurm` and the run's own queues, bound to the run's epoch by
-    `start`.
+
+Resolved = tuple[int, str, Any, Any, Any]
+"""What a `Placer` hands its recorder: the epoch, the class, its needs, the hook's reference and its placement."""
+
+
+def _placements(placed: Plan, values: Mapping[InputIdentity, object]) -> tuple[dict[str, Any], list[Resolved]]:
+    """Return each class of the plan placed by the profile, the explicit values and the site's hook, and the records.
+
+    The hook is asked once per class. The records are appended to the attempt's log once it is open
+    (`_record_placements`).
 
     Raises:
-        ValueError: the default profile is not the one the plan was placed under.
+        PlacementAnswerRefused: an explicit value or the hook's answer is refused.
     """
-    if executor is not None:
-        return executor
-    profile = placed.execution if placed.execution is not None else ExecutionProfile.load()
-    if profile.canonical_digest() != placed.placement.profile_digest:
-        raise ValueError(f"plan {placed.hash} was placed under another execution profile; give the executor to run on")
-    config = placed.config if placed.config is not None else RunConfig(reuse=ReusePolicy(placed.logical.reuse))
-    if profile.substrate.kind == "local":
-        from senselab_core.runtime.execution.in_process import InProcess  # noqa: PLC0415 - imports the planner
-
-        return InProcess(store=store, profile=profile, run=config)
-    from senselab_core.runtime.execution.pool import Pool  # noqa: PLC0415 - imports the planner
-    from senselab_core.runtime.execution.substrates import substrate_of  # noqa: PLC0415 - as above
-
-    if store is None:
-        raise ValueError("a Pool over Slurm needs the result store it reads")
-    run_dir = run_dir_of(placed.hash)
-    return Pool(
-        run_dir,
-        queues=QueueSet.for_run(run_dir, profile, own=profile.lease),
-        store=store,
-        events=EventLog(run_dir, "a0", 1, epoch=0),
-        profile=profile,
-        substrate=substrate_of(profile, run_dir, placed.hash),
-        epoch=0,
+    execution = placed.execution
+    if execution is None:
+        return {}, []
+    held: list[Resolved] = []
+    placer = Placer(
+        execution,
+        placed.overrides,
+        placed.hook,
+        request=lambda: placed.placement_request(values=values),
+        record=lambda *given: held.append(given),
     )
+    names = sorted({p.resource_class for p in placed.placement.nodes.values()})
+    return {name: placer.for_class(name, 0) for name in names}, held
 
 
 def _record_placements(
-    placed: Plan, executor: Executor, values: Mapping[InputIdentity, object], log: EventLog, epoch: int
+    placed: Plan, values: Mapping[InputIdentity, object], log: EventLog, epoch: int, held: Sequence[Resolved]
 ) -> Callable[[], None]:
-    """Append each class's placement to `log` for an executor that starts no scheduler jobs, as a `Pool` does itself.
+    """Append each class's placement, as the session's worker classes apply it, to `log` under the pool's `epoch`.
 
-    The explicit values and the hook apply to every executor; one with no workers to place records them as given.
-    Return what closes the epoch: it appends each class's record again with the run's wall time beside the request.
+    Return what closes the attempt: it appends each class's record again with the run's wall time beside the request.
     """
-    from senselab_core.runtime.execution.pool import Pool  # noqa: PLC0415 - imports the planner
-
     execution = placed.execution
-    if isinstance(executor, Pool) or execution is None:
+    if execution is None:
         return lambda: None
     actuals = Actuals(SystemClock())
     ledger = Placements(
@@ -734,18 +723,11 @@ def _record_placements(
         actuals,
         lambda name: execution.resource_classes[name].device == "cuda",
     )
-    placer = Placer(
-        execution,
-        placed.overrides,
-        placed.hook,
-        request=lambda: placed.placement_request(values=values),
-        record=ledger.record,
-        inert="this executor starts no scheduler jobs: the values are recorded, not applied",
-    )
-    names = sorted({p.resource_class for p in placed.placement.nodes.values()})
-    for name in names:
-        placer.for_class(name, epoch)
+    names = []
+    for _, name, needs, hook, placement in held:
+        ledger.record(epoch, name, needs, hook, placement)
         actuals.began(name)
+        names.append(name)
 
     def close() -> None:
         for name in names:
@@ -842,8 +824,7 @@ def merged_sources(placed: Plan, run_dir: Path) -> dict[str, Any]:
 def record_sources(placed: Plan, run_dir: Path) -> None:
     """Merge the input sources of `placed` into `run_dir`'s `inputs.json` (`merged_sources`) under its lease.
 
-    The lease, kept alive under the run's lease (`run_lease`, with the plan's profile's `lease` section among its
-    epochs), is proven before the write, so two coordinators
+    The lease, kept alive under the plan's profile's `lease` section, is proven before the write, so two coordinators
     starting one plan merge one after the other and neither loses a durable source. A merge whose proof failed is
     made again, up to `lease.record_attempts` times.
 
@@ -852,7 +833,7 @@ def record_sources(placed: Plan, run_dir: Path) -> None:
         LeaseUnavailable: the merge's lease was lost on every attempt.
         LeaseTimeout: another holder kept the lease for its whole timeout.
     """
-    lease = run_lease(run_dir, own=_lease_of(placed))
+    lease = _lease_of(placed)
     private_dir(run_dir / PRIVATE_DIR)
     for _ in range(lease.record_attempts):
         held = Lease(run_dir / INPUTS_FILE, settings=lease)
@@ -864,12 +845,12 @@ def record_sources(placed: Plan, run_dir: Path) -> None:
     raise LeaseUnavailable(run_dir / INPUTS_FILE, f"the lease on {run_dir / INPUTS_FILE} was lost on every merge")
 
 
-def prepare(placed: Plan, run_dir: Path, store: ResultStore | None) -> tuple[str, int]:
-    """Write the run's plan, input sources, manifest and license policy once, then claim an attempt.
+def prepare(placed: Plan, run_dir: Path, store: Path, pool: Path) -> tuple[str, int]:
+    """Write the run's plan, input sources, manifest (store and pool roots) and license policy; claim an attempt.
 
     The digest of the stored policy is written beside the attempt's placement (`<attempt>.licenses`).
 
-    Nothing here is visible to a reader of the run's epochs or status. Returns the attempt id and its ordinal.
+    Nothing here is visible to a reader of the run's status. Returns the attempt id and its ordinal.
 
     Raises:
         ValueError: `run_dir` holds another plan.
@@ -881,7 +862,7 @@ def prepare(placed: Plan, run_dir: Path, store: ResultStore | None) -> tuple[str
     record_sources(placed, run_dir)
     for name in POOL_DIRS:
         (run_dir / name).mkdir(exist_ok=True)
-    _write(run_dir / MANIFEST_FILE, {"plan_hash": placed.hash, "store": None if store is None else str(store.root)})
+    _write(run_dir / MANIFEST_FILE, {"plan_hash": placed.hash, "store": str(store), "pool": str(pool)})
     digest = record_policy(run_dir, None if placed.config is None else placed.config.licenses)
     attempt, ordinal = _claim_attempt(run_dir, placed.placement)
     publish(run_dir / PLACEMENTS_DIR / f"{attempt}.licenses", digest.encode())
@@ -916,18 +897,16 @@ def record_policy(run_dir: Path, given: LicensePolicy | None) -> str:
     return policy_digest(stored)
 
 
-def checked_lease(run_dir: Path, own: JobLease, attribute_delay_s: float) -> JobLease:
-    """Return the run's lease with `own` among its epochs, refused unless its beats stay below its stale bound.
+def checked_lease(own: JobLease, attribute_delay_s: float) -> JobLease:
+    """Return the run's lease section, refused unless its beats stay below its stale bound at the storage's delay.
 
     `attribute_delay_s` is the delay measured on the run's storage (`check_storage`).
 
     Raises:
-        LeaseBoundError: the composite's bound fails with the larger of its delay and the one measured.
-        RunLeaseUnreadable: a bound epoch's lease section is unreadable.
+        LeaseBoundError: the bound fails with the larger of its delay and the one measured.
     """
-    found = run_lease(run_dir, own)
-    found.model_copy(update={"attribute_delay_s": max(found.attribute_delay_s, attribute_delay_s)}).check_bound()
-    return found
+    own.model_copy(update={"attribute_delay_s": max(own.attribute_delay_s, attribute_delay_s)}).check_bound()
+    return own
 
 
 def _lease_of(placed: Plan) -> JobLease:
@@ -942,134 +921,134 @@ def _plan_document(placed: Plan) -> dict[str, object]:
     }
 
 
-def _check_store(placed: Plan, store: ResultStore | None) -> float:
-    """Refuse a run whose result store lacks a primitive leases need (`check_storage`); return its attribute delay."""
-    profile = placed.execution if placed.execution is not None else ExecutionProfile.load()
-    return profile.lease.attribute_delay_s if store is None else check_storage(profile, store.root)
+def _session_for(
+    session: Any,  # noqa: ANN401 - a PoolSession
+    profile: ExecutionProfile,
+    store: Path,
+    placements: Mapping[str, Any],
+) -> Any:  # noqa: ANN401 - a PoolSession
+    """Return `session`, refused if it places a class of `placements` otherwise; else the process's default session.
+
+    Raises:
+        ValueError: the session's worker class of a placed class differs from the one `placements` give.
+    """
+    from senselab_core.runtime.execution.warm import default_session, worker_classes  # noqa: PLC0415 - needs pydra
+
+    if session is None:
+        return default_session(profile, store, placements)
+    wanted = {c.name: c for c in worker_classes(profile, placements)}
+    if differ := sorted(c.name for c in session.classes if c.name in placements and wanted[c.name] != c):
+        raise ValueError(
+            f"the session's worker classes {differ} were opened with other placement values than the plan's; "
+            "open a session with `placements=` or run without one"
+        )
+    return session
 
 
-def _open(
+def _claimed(
+    placed: Plan,
     run_dir: Path,
-    given: tuple[Plan, Executor, ProvStore],
-    attempt: tuple[str, int],
-    leases: tuple[JobLease, JobLease],
-) -> tuple[contextlib.ExitStack, int, EventLog]:
-    """Take the next epoch (not yet current), hold its coordinator lease, reconcile the queues and bind the executor.
+    store: Path,
+    opened: Any,  # noqa: ANN401 - a PoolSession
+    hand_back: Callable[[], None],
+) -> tuple[str, int]:
+    """Probe the store's storage, claim the run's attempt on `opened` (`prepare`) and check its lease bound.
 
-    `given` is the plan, the executor and the provenance store the plan's entity is added to; `leases` are the plan's
-    own lease section and the run's. Return what releases the epoch, the epoch and its event log; on a failure
-    the epoch is released, marked ended, and the error raised.
+    The probe follows the session's open, which lays out the store, so no probe file stands in a store root that has
+    no layout yet. On a refusal, `hand_back` is called.
     """
-    placed, executor, written = given
-    own, lease = leases
-    epochs, held = Epoch(run_dir), contextlib.ExitStack()
     try:
-        epoch = held.enter_context(epochs.opening(own))
-        held.enter_context(epochs.held(epoch, lease))
-        QueueSet.for_run(run_dir, placed.execution, own=own).reconcile()
-        log = EventLog(run_dir, *attempt, epoch=epoch)
-        executor.bind_epoch(epoch, log)
-        add_plan_entity(written, placed.hash)
+        delay = check_storage(opened.profile, store)
+        claimed = prepare(placed, run_dir, store, opened.pool.root)
+        checked_lease(opened.profile.lease, delay)
     except BaseException:
-        held.close()
+        hand_back()
         raise
-    return held, epoch, log
+    return claimed
 
 
-def _close_owned(executor: Executor, owned: bool, run: "Run", failed: bool) -> None:
-    """Close an executor the run created, so provenance and `Run.fail` still run if the close fails.
+def _hand_back(default: Any) -> Callable[[], None]:  # noqa: ANN401 - a PoolSession
+    """Return what ends a run's use of `default`, a default session (`release_default`); nothing for a caller's."""
+    if default is None:
+        return lambda: None
+    from senselab_core.runtime.execution.warm import release_default  # noqa: PLC0415 - needs pydra
 
-    A close error is logged; it is handed to `run.fail` only when the run had not failed (`failed`) already.
-    """
-    if not (owned and hasattr(executor, "close")):
-        return
-    try:
-        executor.close()
-    except Exception as err:  # noqa: BLE001 - cleanup must not skip the run's bookkeeping
-        logger.error("closing the executor of run %s failed: %s", run.run_dir.name, err)
-        if not failed:
-            run.fail(err)
+    return lambda: release_default(default)
 
 
 def start(
     placed: Plan,
-    executor: Executor | None = None,
+    session: Any = None,  # noqa: ANN401 - a PoolSession; pydra is imported only once a run starts
     *,
-    store: ResultStore | None = None,
+    store: Path | None = None,
     values: Mapping[InputIdentity, object] | None = None,
 ) -> Run:
-    """Start `placed` on `executor` in a background thread, as a new attempt, and return its `Run`.
+    """Start `placed` on a warm pool in a background thread, as a new attempt, and return its `Run`.
 
-    With no executor, `InProcess` runs a plan under a local substrate, and a `Pool` over `Slurm` under a slurm one, over
-    `store` (default: the result store under the cache root) with the plan's own profile and run config. `store` is also
-    where the run's results are read from, so it is given with any other executor that stores results, and it is the
-    store that executor writes: the plan's `senselab:Plan` entity is added to its provenance. The input values are bound
-    (`bind_sources`) before anything is written: from their paths or JSON values, or from the values the plan holds in
-    memory; `values` gives them already bound. The sources are merged into `inputs.json` under its lease
-    (`record_sources`), also before anything else is written. Every item in the run's `queues/` with neither a slot nor
-    an outcome is put again (`QueueSet.reconcile`). The run claims its attempt (`prepare`), then takes the next epoch,
-    holds its coordinator lease until the run ends and hands the epoch to the executor (`bind_epoch`); the epoch is
-    current only once its thread binds it (`Epoch.bind`), the last step before the plan runs.
-
-    A node whose unit does not fit its class runs on the smallest class it fits (`Plan.fit`).
+    `session` is a `PoolSession` its caller owns, whose workers and models stay resident after the run; with none,
+    the run uses this process's default session for the plan's profile and store (`default_session`), opened on first
+    use and closed at exit; its worker classes are placed by the plan's explicit values and the site's hook. A
+    session given must have been opened with the same placement of each class the plan uses. `store` is the root of
+    the result store the run's results go to and are read from: the session's, else the cache's (`results_root`). The
+    input values are bound (`bind_sources`) before anything is written: from their paths or JSON values, or from the
+    values the plan holds in memory; `values` gives them already bound. The sources are merged into `inputs.json`
+    under its lease (`record_sources`), also before anything else is written. The run claims its attempt
+    (`prepare`); its thread then runs the plan.
 
     Raises:
-        Unplaceable: a node's unit fits no class from its own up; nothing is written.
-        ValueError: as `admit`.
+        ValueError: the plan was placed under another profile than the session's or the packaged default's;
+            `store` is not the session's store; or the session places a class of the plan otherwise.
+        PlacementAnswerRefused: an explicit placement value or the site hook's answer is refused.
         InputChanged: an input changed since the plan was made.
         InputsUnavailable: an input held in memory is not held by `placed` (a plan read from disk).
         ConflictingSources: a source the run records reads other content than the plan's.
         LeaseUnavailable, LeaseTimeout: as `record_sources`.
-        LeaseBoundError: the run's lease with this plan's section among its epochs fails the beat bound.
-        RunLeaseUnreadable: a bound epoch's lease section is unreadable.
+        LeaseBoundError: the plan's lease section fails the beat bound on the store's storage.
         MissingExtra: pydra is not installed.
     """
     if importlib.util.find_spec("pydra") is None:
         raise MissingExtra("pydra")
     from senselab_core.runtime.execution.runner import PydraRunner  # noqa: PLC0415 - needs pydra
 
-    placed = placed.fit()
-    provenance = ProvStore()
-    if executor is None and store is None:
-        store = results_store(placed.execution, None, provenance)
-    owned = executor is None
-    executor = default_executor(placed, executor, store)
-    delay = _check_store(placed, store)
-    values = bind_sources(placed) if values is None else values
+    default = session.profile if session is not None else ExecutionProfile.load()
+    profile = placed.execution if placed.execution is not None else default
+    if profile.canonical_digest() != placed.placement.profile_digest:
+        raise ValueError(f"plan {placed.hash} was placed under another execution profile; give the session to run on")
     run_dir = run_dir_of(placed.hash)
-    attempt, ordinal = prepare(placed, run_dir, store)
-    own = _lease_of(placed)
-    lease = checked_lease(run_dir, own, delay)
-    runner = PydraRunner(profile=placed.execution, work_dir=run_dir / PYDRA_DIR)
-    run = Run(run_dir, store=store, profile=placed.execution)
-    written = provenance if store is None else store.provenance
-    epochs = Epoch(run_dir)
-    held, epoch, log = _open(run_dir, (placed, executor, written), (attempt, ordinal), (own, lease))
-    run.epoch = epoch
+    if session is not None:
+        if store is not None and Path(store).absolute() != Path(session.store.path):
+            raise ValueError(f"the session stores its results in {session.store.path}, not {store}")
+        store = Path(session.store.path)
+    store = Path(store) if store is not None else results_root()
+    store.mkdir(parents=True, exist_ok=True)
+    values = bind_sources(placed) if values is None else values
+    placements, held = _placements(placed, values)
+    opened = _session_for(session, profile, store, placements)
+    hand_back = _hand_back(opened if session is None else None)
+    attempt, ordinal = _claimed(placed, run_dir, store, opened, hand_back)
+    runner = PydraRunner(profile=profile, work_dir=run_dir / PYDRA_DIR)
+    run = Run(run_dir, store=store, profile=profile)
+    provenance = ProvStore()
+    add_plan_entity(provenance, placed.hash)
+    log = EventLog(run_dir, attempt, ordinal)
 
     def body() -> None:
-        failed = False
-        close_placements: Callable[[], None] = lambda: None  # noqa: E731 - replaced once the epoch is bound
-        with held:
-            try:
-                epochs.bind(epoch, attempt, ordinal)
-                close_placements = _record_placements(placed, executor, values, log, epoch)
-                runner.run_plan(placed, executor, values=values, events=log, cancel=run.cancelled)
-            except BaseException as err:  # noqa: BLE001 - held for `wait`
-                if not isinstance(err, RunCancelled):
-                    failed = True
-                    run.fail(err)
-            finally:
-                close_placements()
-                _close_owned(executor, owned, run, failed)
-            try:
-                written.write(run_dir)
-            except Exception as err:  # noqa: BLE001 - held for `wait`
+        close_placements: Callable[[], None] = lambda: None  # noqa: E731 - replaced once the placements are recorded
+        try:
+            run.epoch = opened.epoch
+            close_placements = _record_placements(placed, values, log, opened.epoch, held)
+            runner.run_plan(placed, opened, values=values, events=log, cancel=run.cancelled)
+        except BaseException as err:  # noqa: BLE001 - held for `wait`
+            if not isinstance(err, RunCancelled):
                 run.fail(err)
+        finally:
+            close_placements()
+        try:
+            provenance.write(run_dir)
+        except Exception as err:  # noqa: BLE001 - held for `wait`
+            run.fail(err)
+        finally:
+            hand_back()
 
-    try:
-        run.launch(threading.Thread(target=body, name=f"senselab-run-{placed.hash[:8]}", daemon=True))
-    except BaseException:
-        held.close()
-        raise
+    run.launch(threading.Thread(target=body, name=f"senselab-run-{placed.hash[:8]}", daemon=True))
     return run

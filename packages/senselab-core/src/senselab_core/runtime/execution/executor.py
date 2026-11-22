@@ -1,17 +1,12 @@
-"""The `Executor` protocol and the documents it carries: plan fragments in, result references out."""
+"""The documents of a run's jobs: plan fragments of a node's jobs, result references and fault records."""
 
-import contextlib
-import contextvars
 import logging
 import os
 import pwd
 import re
 import socket
-import threading
-from collections.abc import Callable, Iterator, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
-from enum import Enum
-from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, Protocol
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal
 
 from pydantic import (
     AfterValidator,
@@ -38,11 +33,9 @@ from senselab_core.kernel.identity import (
 )
 from senselab_core.kernel.placement import NodePlacement
 from senselab_core.kernel.plan import ReuseName
-from senselab_core.runtime.clock import Clock, SystemClock
-from senselab_core.runtime.planner import Plan
 
 if TYPE_CHECKING:
-    from senselab_core.runtime.execution.events import EventLog
+    pass
 
 logger = logging.getLogger("senselab")
 
@@ -172,6 +165,22 @@ class FaultRecord(Frozen):
     def gap_of(cls, kind: str, message: str) -> "FaultRecord":
         """Return the infrastructure gap `kind` with `message`: a failure no typed fault names, never charged."""
         return cls.of({"type": kind, "message": message, "fault": FaultClass.INFRASTRUCTURE.value, "gap": True})
+
+    @classmethod
+    def from_pool(cls, fault: Mapping[str, Any], name: str) -> "FaultRecord":
+        """Return the record of a pydra pool fault (`kind`, `type`, `message`, `gap`); a `policy` fault is content.
+
+        `name` is the type when the fault names none.
+        """
+        kind = {"content": "content", "resource": "resource", "policy": "content"}.get(str(fault.get("kind")))
+        return cls.of(
+            {
+                "type": fault.get("type") or name,
+                "message": str(fault.get("message", "")),
+                "fault": kind or FaultClass.INFRASTRUCTURE.value,
+                "gap": bool(fault.get("gap", False)),
+            }
+        )
 
     @classmethod
     def of(cls, error: Mapping[str, Any]) -> "FaultRecord":
@@ -308,21 +317,6 @@ class ResultRef(Frozen):
         return self
 
 
-class Handle(Frozen):
-    """A submitted fragment, as the executor that took it names it."""
-
-    id: NonEmptyStr
-
-
-class Status(str, Enum):
-    """Where a submitted fragment is: waiting, running, every job done (completed or failed), or cancelled."""
-
-    PENDING = "pending"
-    RUNNING = "running"
-    DONE = "done"
-    CANCELLED = "cancelled"
-
-
 class QueueHeld(RuntimeError):
     """An executor holds the queue of a fragment's jobs: env `env` failed `failures` times by infrastructure faults.
 
@@ -356,115 +350,24 @@ class WorkersBroken(QueueHeld):
         self.reason = reason
 
 
+class NoProgress(RuntimeError):
+    """A run's pool jobs made no progress for `bound_s` (`pool.no_progress_s`).
+
+    No outcome came back, no job was sent, and no worker of theirs was ready, starting or beating its claim.
+    `classes` are the resource classes of the jobs still waiting; `start_errors` the pool's latest start error of
+    each that has one.
+    """
+
+    def __init__(self, bound_s: float, classes: tuple[str, ...], start_errors: Mapping[str, str]) -> None:
+        """Name the bound, the waiting classes and each one's latest start error."""
+        errors = "; ".join(f"{c}: {e}" for c, e in start_errors.items()) or "the pool reported none"
+        super().__init__(
+            f"no outcome and no ready, starting or beating worker for {bound_s:g} s (pool.no_progress_s) while jobs"
+            " wait on resource classes"
+            f" {', '.join(classes)}; latest start errors: {errors}"
+        )
+        self.bound_s, self.classes, self.start_errors = bound_s, classes, dict(start_errors)
+
+
 class RunCancelled(RuntimeError):
     """The run was cancelled: a job not yet sent to the executor was not sent."""
-
-
-class Executor(Protocol):
-    """Runs plan fragments of admitted plans: `admit` a plan, `submit` its fragments, follow, stop and read them.
-
-    The runner sends each round of ready jobs, the fragments of every node it released, in one `submit_many` call.
-
-    An admission holds the values of the plan's graph inputs by content identity, until it is released; an
-    `output:` input is read from the result store. Two admissions of one plan are independent. `logs_claims` says
-    whether the executor's workers log each job `claimed`, in which case the runner logs no `started` as it sends one.
-    `splits_fragments` says whether the executor splits a fragment into its own units of work, in which case the runner
-    sends the jobs of a node that are ready together as one fragment, not in fragments of the batch size.
-    """
-
-    logs_claims: ClassVar[bool]
-    splits_fragments: ClassVar[bool]
-
-    def bind_epoch(self, epoch: int, events: "EventLog") -> None:
-        """Run what follows as the coordinator of `epoch`, logging to `events` (that epoch's attempt)."""
-
-    def admit(self, plan: Plan, values: Mapping[InputIdentity, object]) -> Admission:
-        """Hold `plan` and the value of each graph-input identity its fragments name, and return the admission."""
-
-    def release(self, admission: Admission) -> None:
-        """Let go of `admission` and its values."""
-
-    def fragment_size(self, plan: Plan, node: str) -> int | None:
-        """Return the most jobs of `node` one fragment holds; None for an executor that splits fragments."""
-
-    def submit(self, fragment: PlanFragment) -> Handle:
-        """Take `fragment` and return its handle."""
-
-    def submit_many(
-        self, fragments: Sequence[PlanFragment], stop: Callable[[], bool] | None = None
-    ) -> list[Handle | Exception]:
-        """Take a round's `fragments`; return, in their order, each one's handle or the exception that refused it.
-
-        A fragment not yet started once `stop()` is true is not submitted: its slot holds `RunCancelled`.
-        """
-
-    def status(self, handle: Handle) -> Status:
-        """Return where the fragment of `handle` is."""
-
-    def cancel(self, handle: Handle) -> None:
-        """Stop the jobs of `handle` not yet run."""
-
-    def poll(self, handle: Handle) -> tuple[list[ResultRef], bool]:
-        """Return the results of `handle` landed and not yet given, and whether every one is given; never wait."""
-
-
-def submit_each(  # noqa: PLR0913 - the executor and round, then keyword-only limits
-    executor: Executor,
-    fragments: Sequence[PlanFragment],
-    *,
-    width: int = 1,
-    stop: Callable[[], bool] | None = None,
-    slots: threading.Semaphore | None = None,
-) -> list[Handle | Exception]:
-    """Submit `fragments` through `executor.submit`, at most `width` at once: each one's handle, or what it raised.
-
-    The results are in the order of `fragments`. Each submission first takes one of `slots`, when given (a bound
-    shared by every round of the executor), then checks `stop`: once it is true, the fragment is not submitted and its
-    slot holds `RunCancelled`. A `BaseException` that is not an `Exception` propagates.
-    """
-    if width <= 1 or len(fragments) <= 1:
-        return [_submitted(executor, f, stop, slots) for f in fragments]
-    with ThreadPoolExecutor(min(width, len(fragments)), thread_name_prefix="senselab-submit") as running:
-        sent = [running.submit(contextvars.copy_context().run, _submitted, executor, f, stop, slots) for f in fragments]
-    return [taken.result() for taken in sent]
-
-
-def _submitted(
-    executor: Executor,
-    fragment: PlanFragment,
-    stop: Callable[[], bool] | None,
-    slots: threading.Semaphore | None,
-) -> Handle | Exception:
-    with slots if slots is not None else contextlib.nullcontext():
-        if stop is not None and stop():
-            return RunCancelled(f"the run was cancelled before node {fragment.node!r} was submitted")
-        try:
-            return executor.submit(fragment)
-        except Exception as refused:  # noqa: BLE001 - the fragment's outcome, returned in its place
-            return refused
-
-
-def follow(
-    executor: Executor,
-    handle: Handle,
-    *,
-    first_s: float = 0.01,
-    max_s: float = 1.0,
-    clock: Clock = SystemClock(),  # noqa: B008 - stateless
-) -> Iterator[ResultRef]:
-    """Yield each result of `handle` as `executor.poll` gives it, until every one is given.
-
-    A poll that gives nothing is followed by a wait of `first_s`, doubling up to `max_s`; one that gives a result
-    resets it; the waits run on `clock`. Errors `poll` raises are raised here, after the results given before them.
-    """
-    pause = first_s
-    while True:
-        given, done = executor.poll(handle)
-        yield from given
-        if done:
-            return
-        if given:
-            pause = first_s
-        else:
-            clock.sleep(pause)
-            pause = min(2 * pause, max_s)

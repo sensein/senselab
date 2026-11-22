@@ -1,4 +1,4 @@
-"""The execution profile (`execution-profile@5`) and `resolve_execution`, which places a task call under it.
+"""The execution profile (`execution-profile@6`) and `resolve_execution`, which places a task call under it.
 
 A profile holds stack preferences per task, device preference, env roots, the torch index override, the model-source
 allowlist, the model-cache budget, the retry policy, the network policy, the resource classes, the substrate, the
@@ -78,14 +78,18 @@ _DROPPED_KEYS: Final = {
     "execution-profile@3": "; drop calibration.probe_items and calibration.resolve_s, which are now derived",
     "execution-profile@4": (
         "; add the keys it lacks: lease.{missed_beats,wait_s,poll_s,remove_attempts,record_attempts,dir_mode},"
-        " pool.{idle_polls,cancel_check_s,event_poll_s}, substrate.stop_grace_s, supervisor.{reap_poll_s,exit_bound_s},"
+        " pool.{idle_polls,cancel_check_s,event_poll_s}, supervisor.{reap_poll_s,exit_bound_s},"
         " timeouts.fetch_s and the store, vllm and worker sections"
+    ),
+    "execution-profile@5": (
+        "; drop substrate.{start_backoff_first_s,start_backoff_max_s,stop_grace_s} and"
+        " pool.{first_poll_s,presence_refresh_s,segment_items}, which nothing reads since the pool is pydra's"
     ),
 }
 
 
 class ProfileFormatRetired(ValueError):
-    """A profile in a retired format; it is rewritten as `execution-profile@5.0`."""
+    """A profile in a retired format; it is rewritten as `execution-profile@6.1`."""
 
     def __init__(self, found: str) -> None:
         """Name the declared format, and the keys a newer major dropped from it."""

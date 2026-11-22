@@ -8,7 +8,7 @@ import pytest
 from planted_objects_fixture import MIRROR_INDEX, identity_leaks, store_context, store_key
 from senselab_core.kernel.declare import Env
 from senselab_core.kernel.identity import ExecutionContext
-from senselab_core.runtime.envs import EnvHandle, HostCuda, Uv, ensure_env, torch_build
+from senselab_core.runtime.envs import EnvHandle, Uv, ensure_env, torch_build
 from senselab_core.runtime.measures import MeasureEnv, MeasureRoots, MeasureUnit, Provenance, env_entry
 from senselab_core.runtime.profiles import Envs
 from senselab_core.runtime.storage import StorePolicy
@@ -43,7 +43,7 @@ def _built(tmp_path: Path, index: str) -> EnvHandle:
         settings=Envs(server_start_margin_s=1.0, torch_index=index),
         lease=LEASE,
         uv=FAKE_UV,
-        host_cuda=HostCuda((12, 8), "nvidia-smi"),
+        device="cuda",
     )
 
 

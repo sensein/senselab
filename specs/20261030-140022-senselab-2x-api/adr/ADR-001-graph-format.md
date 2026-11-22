@@ -110,8 +110,29 @@ Replaces, in the 2026-11-05 amendment, the protocol bullet and the bullet naming
 
 Authority: route-B task S1a, the repin to pydra `integration/senselab` @`0036ca22`.
 
+## Amendment 2026-11-21 (second): jobs run on pydra's `WarmPool`; results on a `PortableStore`
+
+Replaces the protocol bullet of the first 2026-11-21 amendment, and, in the 2026-11-05 amendment, the sentences that
+put results and cross-run reuse with the executor's store and that keep `InProcess` and `Pool` usable without pydra.
+
+- senselab has no `Executor` protocol. `PydraRunner` runs a placed plan on a `PoolSession`: a pydra `WarmPool`
+  (RFC 0005) and the `Submitter(worker=pool)` its jobs are made under, owned and closed by whoever made it, so workers
+  and their models stay resident across runs and several runs may use it at once. Each round of ready jobs becomes
+  pool jobs, one senselab job each, submitted in one `WarmPool.submit`; the pool's follower reports each outcome
+  through the bound callable and a queue to the driver thread, which alone calls the `GraphRunner`.
+- Two stores. The `GraphRunner`'s store stays the run-scoped `SenselabStore`, which serves no hit. A pool job
+  publishes into a `PortableStore` senselab opens (`portable.open_store`): `trust="shared"`, its own identity
+  (`senselab-identity@1`: the checksum is the logical key's digest, the slot the context's `context@5` fingerprint,
+  the `pool` and `senselab` sections recorded only), its reuse rule (the run's policy and measured classes, the license
+  gate, verify sampling), the executed-activity writer as `on_commit`, and work directories on storage every node
+  sees. Cross-run reuse is decided there, in the process that runs the job.
+- A pool job's checksum is supplied (`checksum=`), as a compiled node's is, so pydra hashes no senselab code.
+
+Authority: route-B task S1b, the repin to pydra `integration/senselab` @`3046e31e` and RFC 0005 §10.2.
+
 ## Amendment log
 
 - 2026-11-01: route and loop predicates are any declared task with a `bool` output; no `decide` kind (owner, leakage audit).
 - 2026-11-05: under Route A pydra is the graph runner above the `Executor`s, not an executor; node-supplied checksums, no byte representations; record lists zip per record; nested fan-outs refused by `validate`, a map over a list output not run in Phase 3 (Task 9b, P3-2).
 - 2026-11-21: `PydraRunner` drives pydra's `GraphRunner` by the RFC 0002 §3.5 loop in place of `ExecutorWorker`; the protocol lists `poll`, `fragment_size`, `bind_epoch` and `submit_many(fragments, stop)` (route-B S1a).
+- 2026-11-21: jobs run on pydra's `WarmPool` through a caller-owned `PoolSession`, results on a fresh `PortableStore` under senselab's identity and reuse rule; senselab's `Executor` protocol, `InProcess` and `Pool` are gone (route-B S1b).

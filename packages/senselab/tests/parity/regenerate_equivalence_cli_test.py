@@ -25,7 +25,9 @@ declare = call.use_packaged
 def use_packaged(packaged):
     importlib.import_module("senselab_core.runtime.fake_backend")
     opener = packaged.open_env
-    return declare(dataclasses.replace(packaged, open_env=lambda b, p: host if b.name == "fake" else opener(b, p)))
+    return declare(
+        dataclasses.replace(packaged, open_env=lambda b, p, d: host if b.name == "fake" else opener(b, p, d))
+    )
 
 
 call.use_packaged = use_packaged

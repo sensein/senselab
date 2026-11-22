@@ -670,3 +670,102 @@ are recorded here (R-200).
   item's jobs through `execute` and a `WorkerSet` (`runtime/execution/pool_worker.py:1-4`): `serve_pool` builds one only
   for service classes (`:839-844`), and otherwise the worker takes the process's own set for the profile (`:753`). A
   backend that needs an isolated env is therefore reached by the worker protocol, as a call from `InProcess` is.
+
+## Amendment 2026-11-21 (route-B S1b): senselab runs on pydra's `WarmPool` and `PortableStore`
+
+RFC 0005 §10.2, at pydra `integration/senselab` @`3046e31e`. This replaces §3.1's coordinator, §3.2's queues and
+workers, §3.4's eviction, §3.6's substrates and §6's job engine where they describe senselab's own pool. Their text
+above stays as the record of what was built and measured; the code they name is deleted.
+
+**What maps to what.**
+
+| senselab before | pydra now | Where in senselab |
+|---|---|---|
+| `Pool` controller and scaler, `pool_worker` claim loop, `queue.py`, `epoch.py` | `WarmPool`: tickets, follow index, coordinator epoch and fence, scaling | `warm.PoolSession` |
+| `substrates.Local`, `Slurm`, `Fleet`, `scale` | `LocalSubstrate`, `SlurmSubstrate` | `warm.substrate_of` |
+| resource classes | `WorkerClass` (typed GPUs, tagged by device; partition and excluded nodes as substrate arguments; no QOS) | `warm.worker_classes` |
+| `faults` section | `FaultBudgets` (`resource_replacements` as `resource_moves`; infrastructure, and failed starts, at least 1) | `warm.budgets` |
+| `pool` and `lease` sections | `PoolSettings` (`recheck_fraction` 0) | `warm.settings` |
+| `WorkerSet` checkout and eviction | `ResidentSet` (LRU under a byte budget, busy state never evicted) | none |
+| `WorkerClient` per backend, env and model | process-owning provider `senselab-worker@3` | `providers.SenselabWorker` |
+| host worker over the process `ModelCache` | in-process provider `senselab-host@3` | `providers.SenselabHost` |
+| a server backend's server, registered per host | `senselab-worker@3` starts it private to the pool worker and registers it; a live registration is consumed | `providers.server_of` |
+| `fit.judge`, `choose`, `larger_class`, `Plan.fit` | `MeasuredFit` over the pool's `DirectoryCalibration`, placed at submit | none |
+| bisection engine in `job.py` | pydra's (one item per pool job until RFC 0005 W10's batched calls are adopted) | none |
+| fault classifier | the `classify` hook: an item's own record, the worker's verdicts, then the fault table; unclassified is infrastructure | `warm.classify` |
+| `Executor`, `InProcess`, `admit`, `release`, `fragment_size`, `bind_epoch`, handles, `submit_many` | `WarmPool.bind`, `submit`, `cancel`, `unbind` | `runner._Driver` |
+| `ResultStore` (`store@6`) for executed results | a fresh `PortableStore` with senselab's identity, reuse rule and `on_commit` | `portable.open_store` |
+| `InProcess.call` | a one-node plan run on a session | `calls.call` |
+| `senselab coordinate` and `execute` | `senselab run`; workers are `python -m pydra.workers.pool.worker`, started by the substrate | `cli.run_run` |
+
+**A pool job** is one senselab job: `HostCall` or `WorkerCall`, its provided field the model worker (the spec is the job's
+own `Loader` as JSON: backend, env, model, device, profile and expected attestation, the backend's params class by
+name; fix round 1: the providers hold no loader, so a payload carries its own and no other, rebuilt by `Loader.of`) and its input the `JobDoc` (the job with its upstream inputs read from the store, its
+keyed placement, env, attestation, profile, code license, key, lookup context, run config and the inputs it uses). Its
+checksum is supplied: the key's digest. It sends one item; an item's error becomes `ItemFailed`, whose record the
+classifier and the driver read back.
+
+**The context.** The lookup context is built where the job is submitted, its numerics the device kind and precision alone
+(a coordinator on a CPU node cannot read a GPU it does not have); the reuse rule ranks stored entries against the context
+of running the job in the process that looks up, so a GPU job's exact hit is judged on the GPU. The execute context adds
+the recorded-only `senselab` section (plan, node, element, attempt, the inputs used, when the call ran, its output
+identity, the evidence it verified) and pydra adds `pool`; neither splits a slot.
+
+**Provenance.** The store's `on_commit` writes the executed activity to the run's `prov/` before the entry is renamed
+into place; the reuse rule's `served` writes a `senselab:Reuse` when an entry is served. Both run in the pool worker.
+
+**Lifetime and runs.** `run.start(placed, session)` runs on a caller's session; with none, on the process's default session
+for the plan's profile and store (`warm.default_session`, fix round 1 owner ruling): opened lazily under
+`<cache root>/2x/pools/<pid>-<token>`, closed at exit by the process that opened it. Every call (`calls.call`, the facade)
+takes the same path, so successive calls in one process load a model once; a worker stays for the profile's idle window
+(`idle_polls × poll_s`, 300 s on `laptop`). Fix round 2: a process holds at most one default session; a run of
+another profile, store or worker classes (a changed hook answer, say) retires it and opens another. Fix round 3: each
+run started without a session counts as live on its default session until it ends (`release_default`); a retired
+session takes no new run and is closed when its last live run ends, or at exit. The open happens under the lock, so
+callers that first use a key at once share the one session it opens. The opener's pid is
+recorded: the exit hook closes the session only in that process, and a forked child drops the inherited one without
+closing it (`os.register_at_fork`), so a call in the child opens its own and the child's exit stops none of the
+parent's workers. The manifest names the store and the pool. A
+run's attempts are ordered by their ordinal; the pool's coordinator epoch is the one exclusion (one live coordinator per
+pool root; a second waits), and a fenced coordinator's jobs are `NotRun(held=True)`. A held job leaves the run
+interrupted (`QueueHeld` raised after the loop). `Run.wait` stops waiting once the run's pool has no live coordinator.
+
+**Store hits are served by the coordinator** (fix round 1). Before a round's jobs are submitted, the driver asks the
+store which it would serve (`portable.serving`, the rank and verdict the worker's reuse rule applies) and serves those
+itself, writing their `senselab:Reuse`; only misses and sampled hits (VERIFY) reach the pool, so an all-hit resume
+starts no worker and loads no model. A job's context is measured where it runs, so the coordinator looks up in it only
+where it knows it: when the session's workers run on its host (`PoolSession.here`, true for a `LocalSubstrate`; fix
+round 2 reads the session's substrate, not the profile's), it builds the execute context itself. On any
+other substrate the declared context (device kind and precision) can differ from the worker's measured numerics, which
+`exact` and `equivalent` split on, so there the filter applies only to a `tolerant` policy with `verify` 0; the other
+jobs are looked up by the worker after its load (a pydra follow-up: look up before loading, RFC 0005 §4.3). A job pydra
+settles as the twin of another of its key is served the entry that job committed, exact, wherever it runs.
+
+**Placement.** A run's explicit placement values and the site's hook are resolved once, when the run starts, for each
+class its plan uses (fix round 1). A pydra pool fixes its worker classes when it opens, so the resolved values (partition,
+time, worker cap, excluded nodes) are applied by opening the session with them: the process's default session is keyed by
+its worker classes, and a caller's session opened with other values for a class the plan uses is refused at `start`. Each
+class's placement is then recorded under the pool's epoch, as applied.
+
+**Profile keys.** The keys only the deleted pool read (`substrate.start_backoff_first_s`, `start_backoff_max_s`,
+`stop_grace_s`; `pool.first_poll_s`, `presence_refresh_s`, `segment_items`) are dropped in `execution-profile@6.0` (fix
+round 1). `substrate.placement_hook_s` stays: it bounds the site hook, which a run now applies.
+
+**Calibration.** The pool's `DirectoryCalibration` (memory samples, unfit records) lives under the profile's first
+writable `calibration.measures_roots` entry, in `pydra-directory-calibration@1/` (fix round 1), so every session of the
+profile, over any pool root, reads what earlier ones measured: a backend that ran out of memory on a class is placed above
+it at once by the next run. pydra reads every file under its directory, so under `calibration.trust: own` the
+directory is the user's own, `<root>/pydra-directory-calibration@1/<uid>` (fix round 2), and another user's records
+never steer placement; under `group` it is the shared one. Owner filtering inside `DirectoryCalibration` is a pydra
+follow-up.
+
+**Storage.** The work directories and the pool root are on storage every node sees (RFC 0003 §5.4); pydra needs nothing
+under `cache_root` for a job that has a work directory. **A resume waits out the store's leases:** a job lease a killed
+process held is taken over only once it is 300 s stale (the `PortableStore` lease default) plus the attribute delay.
+`PortableStore` exposes no lease settings yet, so the profile's `lease` section does not shorten it.
+
+**Not carried over, each a follow-up.** The worker-side cold re-check (pydra's runs in the coordinator, so
+`recheck_fraction` stays 0); batched calls (W10); the scale ladder and the batch invariance probe, which measured the
+deleted pool's online probe and the job engine's batched requests, with the r253 step; the calibration probe writing
+`DirectoryCalibration` records; a provider `measure` by process (pydra attributes memory to the
+worker's own processes); `explain`'s fit lines, since the class is chosen at submit.

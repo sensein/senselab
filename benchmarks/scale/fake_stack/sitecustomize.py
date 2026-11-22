@@ -12,7 +12,7 @@ from senselab_core.testing.interpreter import source_tree_python
 from senselab_core.testing.workers import mit_lock_records
 
 
-def _host(backend: BackendSpec, profile: ExecutionProfile) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
+def _host(backend: BackendSpec, profile: ExecutionProfile, device: str) -> EnvHandle:  # noqa: ARG001 - an EnvOpener
     """Return this interpreter as the fake backend's env, under a fixed lock."""
     return EnvHandle(source_tree_python(), platform.python_version(), "3" * 64, "4" * 64, None)
 
