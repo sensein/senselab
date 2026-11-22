@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import tempfile
 import threading
 import time
@@ -240,20 +241,24 @@ def test_a_process_holds_one_default_session_and_closes_the_one_it_replaces(tmp_
 def test_a_failed_open_of_a_new_default_session_closes_the_one_it_replaced(
     tmp_path: Path, planted: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The open of the next default session raises: the session it replaced is closed all the same, and none is held."""
-    two = RESIDENT.model_copy(
-        update={"resource_classes": {"cpu": RESIDENT.resource_classes["cpu"].model_copy(update={"max_workers": 2})}}
-    )
+    """The next default session's open raises (a Slurm pool under the temporary directory): the one it replaced closes.
 
-    def refused(*_: object, **__: object) -> PoolSession:
-        raise NodeLocalRoot("refused for the test")
-
-    with packaged(registry(TASK, worker=BACKEND), tmp_path / "cache"):
-        call(TaskCall.model_validate({"task": TASK.name, "inputs": {"text": "a"}}), profile=RESIDENT)
-        [first] = warm._DEFAULTS.values()
-        monkeypatch.setattr(warm, "PoolSession", refused)
-        with pytest.raises(NodeLocalRoot):
-            call(TaskCall.model_validate({"task": TASK.name, "inputs": {"text": "b"}}), profile=two)
+    No session is held after; the cache of the second call is under the interpreter's temporary directory whatever
+    pytest's own base directory is.
+    """
+    local = Path(tempfile.mkdtemp(prefix="senselab-node-local-"))
+    try:
+        with packaged(registry(TASK, worker=BACKEND), tmp_path / "cache"):
+            call(TaskCall.model_validate({"task": TASK.name, "inputs": {"text": "a"}}), profile=RESIDENT)
+            [first] = warm._DEFAULTS.values()
+            monkeypatch.setenv("SENSELAB_CACHE", str(local))
+            with pytest.raises(NodeLocalRoot):
+                call(
+                    TaskCall.model_validate({"task": TASK.name, "inputs": {"text": "b"}}),
+                    profile=ExecutionProfile.load(CLUSTER),
+                )
+    finally:
+        shutil.rmtree(local, ignore_errors=True)
     assert first.pool._closed and not warm._DEFAULTS and not warm._RETIRED
 
 
