@@ -3,8 +3,8 @@
 # allocation). TIER=cpu, on a CPU node: the logic, contract and limits tests that load no model, at most 120 s per test.
 # TIER=gpu, on a typed H100 node: the gpu and model tests of the execution, pii_spans and api suites, at most 300 s per
 # test, after `orcd_driver envs` builds every shipped env, whose verdict is part of the suite verdict. A test with its
-# own `timeout` mark keeps it: every test that starts a vLLM server (services_gpu_test, vllm_server_gpu_test,
-# pii_spans_vllm_test) carries one of at least vllm.startup_s. NO_PROGRESS_S (gpu default 240) is the copy's pool.no_progress_s, inside the per-test bound. Never `-n`.
+# own bound keeps it: every test that starts a vLLM server carries `vllm_server(starts=n)`, which conftest turns into
+# n * (vllm.startup_s + envs.server_start_margin_s) of the site profile. NO_PROGRESS_S (gpu default 240) is the copy's pool.no_progress_s, inside the per-test bound. Never `-n`.
 # Submit after step-prepare.sh (placeholders, P-28):
 #   sbatch --dependency=afterok:<prepare job> --partition="$CPU_PARTITION" --cpus-per-task=8 --mem=32G --time=03:00:00 \
 #          --job-name=orcd-tier-cpu --output="$WORK_ROOT/orcd-tier-cpu-%j.out" \

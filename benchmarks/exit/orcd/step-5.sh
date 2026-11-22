@@ -9,7 +9,7 @@
 # the job log, so a test that a timeout kills still shows the pool's warnings. Never `-n`: every xdist worker would load
 # the ML stack again. Each test of the logic and contract tiers has at most 120 s; on MODE=gpu each test of the model
 # tiers has at most 300 s, and on MODE=cpu the model tiers keep their tier budgets (tier_budgets.json), because each of
-# their tests loads a model on the CPU inside it. A test with its own `timeout` mark keeps it (the vLLM server tests,
+# their tests loads a model on the CPU inside it. A test with its own bound keeps it (the `vllm_server` tests,
 # which start a cold server). NO_PROGRESS_S (default 240 on gpu, 600 on cpu) is the copy's pool.no_progress_s, inside
 # each model test's bound; it holds because the envs are built before the tiers (with SKIP_ENVS=1 they must already be
 # built at this SHA). Submit after step-prepare.sh, with --dependency=afterok:<prepare job>.

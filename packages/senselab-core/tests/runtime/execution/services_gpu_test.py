@@ -22,7 +22,6 @@ from senselab_core.runtime.vllm_server import StaleAttestation
 pytestmark = [pytest.mark.limits, pytest.mark.gpu, pytest.mark.model, pytest.mark.network]
 
 DATA = Path(__file__).parents[5] / "packages/senselab/src/senselab/data"
-STARTUP_TIMEOUT_S = 1800.0
 CHAT = [{"role": "user", "content": "Say ok."}]
 SAMPLING = {"max_tokens": 8, "temperature": 0}
 
@@ -32,7 +31,7 @@ def _backend(settings: dict[str, object]) -> BackendSpec:
     return fake.FAKE.model_copy(update={"name": "pii-vllm", "env": Env.server("vllm-server"), "server": config})
 
 
-@pytest.mark.timeout(4 * STARTUP_TIMEOUT_S)
+@pytest.mark.vllm_server(starts=2)
 def test_two_plans_share_one_pii_server_and_a_new_config_is_another_service(
     tmp_path: Path, site_profile: Callable[..., ExecutionProfile]
 ) -> None:

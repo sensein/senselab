@@ -139,7 +139,8 @@ markers = [
   "gpu: needs a GPU",
   "network: needs network outside the sandbox",
   "slow: long-running",
-  "large_model: loads a large model"
+  "large_model: loads a large model",
+  "vllm_server(starts): starts a vLLM server `starts` times; its timeout is derived from the test profile"
 ]
 # tests outside packages/; each tier under packages/ takes its budget from packages/senselab/tests/data/tier_budgets.json
 timeout = 900

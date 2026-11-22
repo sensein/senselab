@@ -785,7 +785,8 @@ class Bounds:
             marker = item.get_closest_marker("timeout")
             names = vars(getattr(item, "module", None) or object())
             starts = any(n in names for n in ("start_vllm", "VllmServer", "vllm_backend"))
-            found[item.nodeid] = [marker.args[0] if marker else None, starts]
+            marked = item.get_closest_marker("vllm_server") is not None
+            found[item.nodeid] = [marker.args[0] if marker else None, starts or marked, marked]
         with open(sys.argv[1], "w") as out:
             json.dump(found, out)
 
@@ -810,7 +811,8 @@ def test_the_gpu_tier_selection_collects_the_gpu_tests_and_bounds_each_server_st
     """The GPU tier's selection, collected only, holds the known GPU tests and bounds every vLLM server start.
 
     step-tier.sh's GPU suites, marks and `--timeout` are read from the script. Each test of a module that starts a
-    vLLM server runs under its own bound, at least the cluster profile's `vllm.startup_s`.
+    vLLM server carries `vllm_server`, and the bound conftest derives from it is at least the profile's
+    `vllm.startup_s`.
     """
     tier = "\n".join(_commands(STEPS / "step-tier.sh"))
     block = re.search(r"\bgpu\)(.*?);;", tier, re.S)
@@ -835,8 +837,10 @@ def test_the_gpu_tier_selection_collects_the_gpu_tests_and_bounds_each_server_st
     collected: dict[str, list[Any]] = json.loads(report.read_text())
     assert GPU_TIER_TESTS <= set(collected), GPU_TIER_TESTS - set(collected)
     startup_s = ExecutionProfile.load(CLUSTER).vllm.startup_s
-    unbounded = {n: b for n, (b, starts) in collected.items() if starts and (b is None or b < startup_s)}
-    assert unbounded == {}, f"a vLLM server start needs its own timeout mark of at least {startup_s} s"
+    servers = {n: (bound, marked) for n, (bound, starts, marked) in collected.items() if starts}
+    assert GPU_TIER_TESTS - set(servers) == {n for n in GPU_TIER_TESTS if "transformers" in n}, servers
+    unbounded = {n: b for n, (b, marked) in servers.items() if not marked or b is None or b < startup_s}
+    assert unbounded == {}, f"a vLLM server test needs `vllm_server`, a bound of at least {startup_s} s"
 
 
 @pytest.mark.logic

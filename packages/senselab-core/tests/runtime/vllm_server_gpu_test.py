@@ -14,7 +14,6 @@ from senselab_core.runtime.vllm_server import VllmServer
 pytestmark = [pytest.mark.limits, pytest.mark.gpu, pytest.mark.model, pytest.mark.network]
 
 DATA = Path(__file__).parents[4] / "packages/senselab/src/senselab/data"
-STARTUP_TIMEOUT_S = 1800.0
 SETTINGS = {
     "max_model_len": 4096,
     "max_num_seqs": 2,
@@ -27,7 +26,7 @@ SETTINGS = {
 }
 
 
-@pytest.mark.timeout(3 * STARTUP_TIMEOUT_S)
+@pytest.mark.vllm_server(starts=2)
 def test_vllm_server_attests_the_pii_model_and_a_restart_with_new_config_changes_it(
     site_profile: Callable[..., ExecutionProfile],
 ) -> None:
@@ -51,7 +50,7 @@ def test_vllm_server_attests_the_pii_model_and_a_restart_with_new_config_changes
             model,
             settings,
             start_lock_dir=profile.env_root("server") / "locks",
-            vllm=profile.vllm.model_copy(update={"startup_s": STARTUP_TIMEOUT_S}),
+            vllm=profile.vllm,
             start_margin_s=profile.envs.server_start_margin_s,
             lease=profile.lease,
             log_dir=profile.env_root("server") / "logs",

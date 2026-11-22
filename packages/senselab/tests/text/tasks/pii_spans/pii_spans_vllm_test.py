@@ -49,8 +49,6 @@ GPU_HOST = HardwareInfo(
 )
 ANSWER = '{"spans": [{"quote": "555-0100", "category": "CONTACT", "score": 0.9}]}'
 TEXT = "Call me on 555-0100 today."
-STARTUP_TIMEOUT_S = 1800.0
-"""The site profile's `vllm.startup_s`: each of the GPU test's four calls may start the server cold."""
 
 
 """The worker set, and so the servers, every call of this module runs on."""
@@ -270,22 +268,24 @@ def test_contract(case: Any) -> None:  # noqa: ANN401 - a no-argument contract c
 @pytest.mark.gpu
 @pytest.mark.model
 @pytest.mark.network
-@pytest.mark.timeout(4 * STARTUP_TIMEOUT_S)
+@pytest.mark.vllm_server(starts=1)
 def test_pii_spans_vllm_on_the_h100_finds_spans_and_bounds_edge_inputs(
     tmp_path: Path, site_profile: Callable[..., ExecutionProfile]
 ) -> None:
-    """On a warm pool under the site profile the served pinned model covers a name and a number, attested.
+    """On one warm pool under the site profile the served pinned model covers a name and a number, attested.
 
-    Empty, non-BMP and long texts each give spans inside the text or a typed fault.
+    Empty, non-BMP and long texts each give spans inside the text or a typed fault. Every call runs on the session's
+    one server.
     """
     profile = site_profile({"stack_preferences": {"pii_spans": ["vllm"]}})
     store = tmp_path / "results"
+    with PoolSession(profile, tmp_path / "pool", store) as session:
 
-    def run(text: str) -> Any:  # noqa: ANN401
-        return _run(_call_of(text), execution=profile, store=store)
+        def run(text: str) -> Any:  # noqa: ANN401
+            return call(_call_of(text), profile=profile, session=session)
 
-    text = "My name is Margaret Hollis and you can reach me on 617-555-0142."
-    _served_spans_and_edges(run, text)
+        text = "My name is Margaret Hollis and you can reach me on 617-555-0142."
+        _served_spans_and_edges(run, text)
 
 
 def _served_spans_and_edges(run: Any, text: str) -> None:  # noqa: ANN401
