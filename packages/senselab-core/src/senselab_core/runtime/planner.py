@@ -10,6 +10,7 @@ import importlib.util
 import json
 import os
 import re
+import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -718,6 +719,9 @@ def storage_roots() -> tuple[Path, ...]:
 
 
 _PROBED: dict[Path, StorageCapabilities] = {}
+_PROBE_LOCK = threading.Lock()
+"""Held while a root is probed, so threads probe a root once between them and no probe directory stands in a root
+while another thread lays out a store there."""
 
 
 def check_storage(
@@ -725,10 +729,10 @@ def check_storage(
 ) -> float:
     """Refuse the run unless each of `roots` has the primitives leases need and a delay the lease bound allows.
 
-    Each root is probed (`probe`, by default `probe_capabilities`, once per root in this process). The effective
-    attribute delay is the larger of the profile's `lease.attribute_delay_s`, which is a floor, and the greatest
-    measured one; it is returned. A root is made if missing; one whose nearest existing ancestor cannot be written
-    is not judged.
+    Each root is probed (`probe`, by default `probe_capabilities`, once per root in this process, one thread at a
+    time). The effective attribute delay is the larger of the profile's `lease.attribute_delay_s`, which is a floor,
+    and the greatest measured one; it is returned. A root is made if missing; one whose nearest existing ancestor
+    cannot be written is not judged.
 
     Raises:
         StorageUnsupported: a root lacks a primitive; names it.
@@ -746,7 +750,8 @@ def check_storage(
         if probe is not None:
             found = probe(root)
         else:
-            found = _PROBED.get(root) or _PROBED.setdefault(root, probe_capabilities(root, settings=profile.store))
+            with _PROBE_LOCK:
+                found = _PROBED.get(root) or _PROBED.setdefault(root, probe_capabilities(root, settings=profile.store))
         found.require(root)
         delay = max(delay, found.attribute_delay_s)
     profile.lease.model_copy(update={"attribute_delay_s": delay}).check_bound()
