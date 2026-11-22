@@ -723,6 +723,12 @@ run's attempts are ordered by their ordinal; the pool's coordinator epoch is the
 pool root; a second waits), and a fenced coordinator's jobs are `NotRun(held=True)`. A held job leaves the run
 interrupted (`QueueHeld` raised after the loop). `Run.wait` stops waiting once the run's pool has no live coordinator.
 
+**Placement.** A run's explicit placement values and the site's hook are resolved once, when the run starts, for each
+class its plan uses (fix round 1). A pydra pool fixes its worker classes when it opens, so the resolved values (partition,
+time, worker cap, excluded nodes) are applied by opening the session with them: the process's default session is keyed by
+its worker classes, and a caller's session opened with other values for a class the plan uses is refused at `start`. Each
+class's placement is then recorded under the pool's epoch, as applied.
+
 **Storage.** The work directories and the pool root are on storage every node sees (RFC 0003 §5.4); pydra needs nothing
 under `cache_root` for a job that has a work directory. **A resume waits out the store's leases:** a job lease a killed
 process held is taken over only once it is 300 s stale (the `PortableStore` lease default) plus the attribute delay.
@@ -731,8 +737,7 @@ process held is taken over only once it is 300 s stale (the `PortableStore` leas
 **Not carried over, each a follow-up.** The worker-side cold re-check (pydra's runs in the coordinator, so
 `recheck_fraction` stays 0); batched calls (W10); the scale ladder and the batch invariance probe, which measured the
 deleted pool's online probe and the job engine's batched requests, with the r253 step; the calibration probe writing
-`DirectoryCalibration` records; the site placement hook at worker submission (pydra's substrate takes the class's
-arguments only, so the hook's values are recorded, not applied); profile keys only the deleted pool read
+`DirectoryCalibration` records; profile keys only the deleted pool read
 (`substrate.start_backoff_*`, `stop_grace_s`, `placement_hook_s`, `pool.segment_items`, `presence_refresh_s`,
 `first_poll_s`), whose removal bumps `execution-profile@`; a provider `measure` by process (pydra attributes memory to the
 worker's own processes); `explain`'s fit lines, since the class is chosen at submit.

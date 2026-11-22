@@ -678,13 +678,40 @@ def results_root(named: object = None) -> Path:
     return Path(named) if isinstance(named, str) else cache_root() / RESULTS_DIR
 
 
-def _record_placements(
-    placed: Plan, values: Mapping[InputIdentity, object], log: EventLog, epoch: int
-) -> Callable[[], None]:
-    """Append each class's placement to `log`: the pool starts its workers from its worker classes alone.
+Resolved = tuple[int, str, Any, Any, Any]
+"""What a `Placer` hands its recorder: the epoch, the class, its needs, the hook's reference and its placement."""
 
-    The explicit values and the hook are recorded as given. Return what closes the attempt: it appends each class's
-    record again with the run's wall time beside the request.
+
+def _placements(placed: Plan, values: Mapping[InputIdentity, object]) -> tuple[dict[str, Any], list[Resolved]]:
+    """Return each class of the plan placed by the profile, the explicit values and the site's hook, and the records.
+
+    The hook is asked once per class. The records are appended to the attempt's log once it is open
+    (`_record_placements`).
+
+    Raises:
+        PlacementAnswerRefused: an explicit value or the hook's answer is refused.
+    """
+    execution = placed.execution
+    if execution is None:
+        return {}, []
+    held: list[Resolved] = []
+    placer = Placer(
+        execution,
+        placed.overrides,
+        placed.hook,
+        request=lambda: placed.placement_request(values=values),
+        record=lambda *given: held.append(given),
+    )
+    names = sorted({p.resource_class for p in placed.placement.nodes.values()})
+    return {name: placer.for_class(name, 0) for name in names}, held
+
+
+def _record_placements(
+    placed: Plan, values: Mapping[InputIdentity, object], log: EventLog, epoch: int, held: Sequence[Resolved]
+) -> Callable[[], None]:
+    """Append each class's placement, as the session's worker classes apply it, to `log` under the pool's `epoch`.
+
+    Return what closes the attempt: it appends each class's record again with the run's wall time beside the request.
     """
     execution = placed.execution
     if execution is None:
@@ -696,18 +723,11 @@ def _record_placements(
         actuals,
         lambda name: execution.resource_classes[name].device == "cuda",
     )
-    placer = Placer(
-        execution,
-        placed.overrides,
-        placed.hook,
-        request=lambda: placed.placement_request(values=values),
-        record=ledger.record,
-        inert="the pool starts its workers from its worker classes: the values are recorded, not applied",
-    )
-    names = sorted({p.resource_class for p in placed.placement.nodes.values()})
-    for name in names:
-        placer.for_class(name, epoch)
+    names = []
+    for _, name, needs, hook, placement in held:
+        ledger.record(epoch, name, needs, hook, placement)
         actuals.began(name)
+        names.append(name)
 
     def close() -> None:
         for name in names:
@@ -901,6 +921,30 @@ def _plan_document(placed: Plan) -> dict[str, object]:
     }
 
 
+def _session_for(
+    session: Any,  # noqa: ANN401 - a PoolSession
+    profile: ExecutionProfile,
+    store: Path,
+    placements: Mapping[str, Any],
+) -> Any:  # noqa: ANN401 - a PoolSession
+    """Return `session`, refused if it places a class of `placements` otherwise; else the process's default session.
+
+    Raises:
+        ValueError: the session's worker class of a placed class differs from the one `placements` give.
+    """
+    from senselab_core.runtime.execution.warm import default_session, worker_classes  # noqa: PLC0415 - needs pydra
+
+    if session is None:
+        return default_session(profile, store, placements)
+    wanted = {c.name: c for c in worker_classes(profile, placements)}
+    if differ := sorted(c.name for c in session.classes if c.name in placements and wanted[c.name] != c):
+        raise ValueError(
+            f"the session's worker classes {differ} were opened with other placement values than the plan's; "
+            "open a session with `placements=` or run without one"
+        )
+    return session
+
+
 def start(
     placed: Plan,
     session: Any = None,  # noqa: ANN401 - a PoolSession; pydra is imported only once a run starts
@@ -912,16 +956,18 @@ def start(
 
     `session` is a `PoolSession` its caller owns, whose workers and models stay resident after the run; with none,
     the run uses this process's default session for the plan's profile and store (`default_session`), opened on first
-    use and closed at exit. `store` is the root of the result store the run's results go to and are read from: the
-    session's, else the cache's (`results_root`). The input values
-    are bound (`bind_sources`) before anything is written: from their paths or JSON values, or from the values the
-    plan holds in memory; `values` gives them already bound. The sources are merged into `inputs.json` under its
-    lease (`record_sources`), also before anything else is written. The run claims its attempt (`prepare`); its
-    thread then runs the plan.
+    use and closed at exit; its worker classes are placed by the plan's explicit values and the site's hook. A
+    session given must have been opened with the same placement of each class the plan uses. `store` is the root of
+    the result store the run's results go to and are read from: the session's, else the cache's (`results_root`). The
+    input values are bound (`bind_sources`) before anything is written: from their paths or JSON values, or from the
+    values the plan holds in memory; `values` gives them already bound. The sources are merged into `inputs.json`
+    under its lease (`record_sources`), also before anything else is written. The run claims its attempt
+    (`prepare`); its thread then runs the plan.
 
     Raises:
-        ValueError: the plan was placed under another profile than the session's or the packaged default's; or
-            `store` is not the session's store.
+        ValueError: the plan was placed under another profile than the session's or the packaged default's;
+            `store` is not the session's store; or the session places a class of the plan otherwise.
+        PlacementAnswerRefused: an explicit placement value or the site hook's answer is refused.
         InputChanged: an input changed since the plan was made.
         InputsUnavailable: an input held in memory is not held by `placed` (a plan read from disk).
         ConflictingSources: a source the run records reads other content than the plan's.
@@ -932,7 +978,6 @@ def start(
     if importlib.util.find_spec("pydra") is None:
         raise MissingExtra("pydra")
     from senselab_core.runtime.execution.runner import PydraRunner  # noqa: PLC0415 - needs pydra
-    from senselab_core.runtime.execution.warm import default_session  # noqa: PLC0415 - needs pydra
 
     default = session.profile if session is not None else ExecutionProfile.load()
     profile = placed.execution if placed.execution is not None else default
@@ -947,7 +992,8 @@ def start(
     store.mkdir(parents=True, exist_ok=True)
     delay = check_storage(profile, store)
     values = bind_sources(placed) if values is None else values
-    opened = session if session is not None else default_session(profile, store)
+    placements, held = _placements(placed, values)
+    opened = _session_for(session, profile, store, placements)
     attempt, ordinal = prepare(placed, run_dir, store, opened.pool.root)
     checked_lease(profile.lease, delay)
     runner = PydraRunner(profile=profile, work_dir=run_dir / PYDRA_DIR)
@@ -960,7 +1006,7 @@ def start(
         close_placements: Callable[[], None] = lambda: None  # noqa: E731 - replaced once the placements are recorded
         try:
             run.epoch = opened.epoch
-            close_placements = _record_placements(placed, values, log, opened.epoch)
+            close_placements = _record_placements(placed, values, log, opened.epoch, held)
             runner.run_plan(placed, opened, values=values, events=log, cancel=run.cancelled)
         except BaseException as err:  # noqa: BLE001 - held for `wait`
             if not isinstance(err, RunCancelled):

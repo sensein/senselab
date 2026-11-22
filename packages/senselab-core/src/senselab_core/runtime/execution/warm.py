@@ -44,6 +44,7 @@ from senselab_core.runtime.execution_settings import ResourceClass
 from senselab_core.runtime.licenses import LicenseRefused
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.revision import cache_root
+from senselab_core.runtime.site_placement import ClassPlacement
 from senselab_core.runtime.store import output_identity
 from senselab_core.runtime.worker_client import WorkerFatal, WorkerLost
 
@@ -161,18 +162,25 @@ def _gpus(resource: ResourceClass) -> tuple[int, str | None]:
     return int(found["count"]), kind
 
 
-def worker_classes(profile: ExecutionProfile) -> list[WorkerClass]:
+def worker_classes(
+    profile: ExecutionProfile, placements: Mapping[str, ClassPlacement] | None = None
+) -> list[WorkerClass]:
     """Return the profile's resource classes as pydra worker classes: devices, typed GPUs, memory, time, partition.
 
-    A class names its partition and the profile's excluded nodes as substrate arguments; nothing names a QOS. Each is
-    tagged with its device, so a job is placed on classes of its own device alone.
+    A class in `placements` takes its placed partition, time, worker cap and excluded nodes (`ClassPlacement.grant`);
+    any other its profile's values and the profile's excluded nodes. A class names its partition and excluded nodes
+    as substrate arguments; nothing names a QOS. Each is tagged with its device, so a job is placed on classes of its
+    own device alone.
     """
     found = []
-    for name, resource in profile.resource_classes.items():
+    placed = placements or {}
+    for name, given in profile.resource_classes.items():
+        resource = placed[name].grant(given) if name in placed else given
+        exclude = placed[name].exclude if name in placed else profile.substrate.exclude_nodes
         gpus, gpu_type = _gpus(resource)
         args = {"partition": resource.partition} if resource.partition else {}
-        if profile.substrate.exclude_nodes:
-            args["exclude"] = ",".join(profile.substrate.exclude_nodes)
+        if exclude:
+            args["exclude"] = ",".join(exclude)
         found.append(
             WorkerClass(
                 name=name,
@@ -250,7 +258,7 @@ class PoolSession:
     whatever runs use it, one after another or at once.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 - the profile and two roots, then keyword-only pool parts
         self,
         profile: ExecutionProfile,
         root: Path,
@@ -258,9 +266,14 @@ class PoolSession:
         *,
         substrate: Substrate | None = None,
         pool_settings: PoolSettings | None = None,
+        placements: Mapping[str, ClassPlacement] | None = None,
     ) -> None:
-        """Open the pool at `root` over the store at `store`, its workers started by `substrate` (the profile's)."""
+        """Open the pool at `root` over the store at `store`, its workers started by `substrate` (the profile's).
+
+        Its worker classes are the profile's, each class in `placements` placed with those values (`worker_classes`).
+        """
         self.profile = profile
+        self.classes = worker_classes(profile, placements)
         self.root = Path(root).absolute()
         work = self.root / "private" / "work"
         work.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -270,7 +283,7 @@ class PoolSession:
         self.providers = (SenselabWorker(), SenselabHost())
         self.pool = WarmPool(
             self.root / "pool",
-            worker_classes(profile),
+            self.classes,
             substrate if substrate is not None else substrate_of(profile),
             store=self.store,
             fit=MeasuredFit(calibration, headroom=profile.sizing.memory_headroom),
@@ -310,17 +323,20 @@ class PoolSession:
         self.close()
 
 
-_DEFAULTS: dict[tuple[str, str], PoolSession] = {}
+_DEFAULTS: dict[tuple[str, str, str], PoolSession] = {}
 _DEFAULTS_LOCK = threading.Lock()
 
 
-def default_session(profile: ExecutionProfile, store: Path) -> PoolSession:
-    """Return this process's session for `profile` over the store at `store`, opened on first use, closed at exit.
+def default_session(
+    profile: ExecutionProfile, store: Path, placements: Mapping[str, ClassPlacement] | None = None
+) -> PoolSession:
+    """Return this process's session for `profile` over `store`, its classes placed by `placements`, opened once.
 
-    Its root is a directory of its own under `<cache root>/2x/pools`. Every run started without a session, and every
-    call, uses it, so a model stays resident from one to the next for the profile's idle window.
+    Its root is a directory of its own under `<cache root>/2x/pools`; it is closed at exit. Every run started without
+    a session, and every call, uses the one of its profile, store and worker classes, so a model stays resident from
+    one to the next for the profile's idle window.
     """
-    key = (profile.canonical_digest(), str(Path(store).absolute()))
+    key = (profile.canonical_digest(), str(Path(store).absolute()), repr(worker_classes(profile, placements)))
     with _DEFAULTS_LOCK:
         found = _DEFAULTS.get(key)
         if found is None:
@@ -328,7 +344,7 @@ def default_session(profile: ExecutionProfile, store: Path) -> PoolSession:
                 atexit.unregister(close_default_sessions)
                 atexit.register(close_default_sessions)
             root = cache_root() / POOLS_DIR / f"{os.getpid()}-{secrets.token_hex(4)}"
-            found = _DEFAULTS[key] = PoolSession(profile, root, Path(store))
+            found = _DEFAULTS[key] = PoolSession(profile, root, Path(store), placements=placements)
     return found
 
 

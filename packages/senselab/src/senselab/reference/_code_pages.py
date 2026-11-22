@@ -269,7 +269,9 @@ a site profile: every `<fill: ...>` in it is yours to set, and it refuses to loa
 - Placement reads no scheduler. A QOS limit on submitted jobs or GPUs is invisible to it, and a run's coordinators are
   jobs too, so they count against a per-user submit limit that no placement request shows. The site's placement hook,
   a `module:callable` named in `substrate.placement_hook`, is where a group accounts for such limits: it receives a
-  `PlacementRequest` and answers a `PlacementAnswer`.
+  `PlacementRequest` and answers a `PlacementAnswer`, once per class when a run starts. Its values, over a run's
+  explicit `placement` values, are the partition, time, worker cap and excluded nodes of the worker classes the run's
+  pool session opens; a session opened by hand takes them as `PoolSession(..., placements=...)`.
 - A group calibrates its own resource with `benchmarks/scale/ladder.py run SUITE --execution PROFILE --measures-root
   PATH`, then lists that shared measures root in `calibration.measures_roots`. A unit measured there is read on an
   identity match, so one calibration serves every member of the group.

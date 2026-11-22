@@ -17,6 +17,7 @@ from senselab_core.runtime.execution.run import start
 from senselab_core.runtime.execution.warm import PoolSession
 from senselab_core.runtime.licenses import LicensePolicy
 from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.runtime.site_placement import PlacementAnswer, PlacementRequest, PlacementValues, load_overrides
 from senselab_core.testing.pools import POOL_PROFILE as PROFILE
 from senselab_core.testing.pools import served
 
@@ -107,6 +108,31 @@ def test_two_calls_without_a_session_load_the_model_once(tmp_path: Path, planted
         assert len(warm._DEFAULTS) == 1
     assert (first.outputs["value"], second.outputs["value"]) == ("a", "b")
     assert _loads(tmp_path) == 1
+
+
+def test_explicit_values_and_the_site_hook_are_the_worker_classes_a_run_opens(tmp_path: Path, planted: Path) -> None:
+    """A run's explicit time and its hook's worker cap place its default session's class; another session is refused."""
+    two = RESIDENT.model_copy(
+        update={"resource_classes": {"cpu": RESIDENT.resource_classes["cpu"].model_copy(update={"max_workers": 2})}}
+    )
+
+    def hook(request: PlacementRequest) -> PlacementAnswer:  # noqa: ARG001 - answers every request alike
+        return PlacementAnswer(classes={"cpu": PlacementValues(max_workers=1)}, why="one worker")
+
+    with packaged(registry(TASK, worker=BACKEND), tmp_path / "cache"):
+        placed, values = planned(TASK, two, ["a"])
+        placed = replace(placed, overrides=load_overrides({"cpu": {"time_s": 600}}), hook=hook)
+        with PoolSession(two, tmp_path / "session", tmp_path / "cache" / "2x" / "results") as other:
+            with pytest.raises(ValueError, match="other placement values"):
+                start(placed, other, values=values)
+        run = start(placed, values=values)
+        assert run.wait(timeout=180).done
+        [opened] = warm._DEFAULTS.values()
+    [cpu] = opened.classes
+    assert (cpu.time, cpu.max_workers) == (600, 1)
+    [placement, closing] = [e.placement for e in read_events(run.run_dir) if e.kind == "placement"]
+    assert placement is not None and closing is not None
+    assert (placement.used.time_s, placement.used.max_workers, placement.verdict) == (600, 1, "accepted")
 
 
 def test_a_load_out_of_memory_moves_the_job_to_the_larger_class(tmp_path: Path, planted: Path) -> None:
