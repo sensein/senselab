@@ -10,8 +10,6 @@ from pathlib import Path
 
 import pytest
 from pool_stack_fixture import packaged, planned, registry, scoring
-from pydra.workers.pool.classes import WorkerClass
-from pydra.workers.pool.substrate import SubstrateError, WorkerHandle
 from senselab_core.kernel.identity import ReusePolicy
 from senselab_core.runtime.call import RunConfig, TaskCall
 from senselab_core.runtime.execution import warm
@@ -81,16 +79,16 @@ class _Refusing:
     def attach(self, attachment: object) -> None:
         """Nothing to keep."""
 
-    def start(self, cls: WorkerClass, n: int) -> list[WorkerHandle]:
-        raise SubstrateError("sbatch: error: invalid partition specified")
+    def start(self, cls: object, n: int) -> list[object]:
+        raise RuntimeError("sbatch: error: invalid partition specified")
 
-    def live(self) -> list[WorkerHandle]:
+    def live(self) -> list[object]:
         return []
 
     def stop(self, workers: object) -> None:
         """Nothing was started."""
 
-    def can_start(self, cls: WorkerClass) -> bool:
+    def can_start(self, cls: object) -> bool:
         return True
 
 
