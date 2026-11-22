@@ -109,7 +109,9 @@ class PoolSettings(Frozen):
     stayed empty for `idle_polls` polls of `poll_s`; a following coordinator checks its cancel event every
     `cancel_check_s`; `Run.wait` reads the event log of a run another process drives every `event_poll_s`. A run with
     jobs in the pool fails with `NoProgress` once no outcome has come back, no job was sent and no worker of theirs was
-    ready, starting or beating its claim for `no_progress_s`.
+    ready, starting or beating its claim for `no_progress_s`. A worker class whose starts have failed in a row
+    `start_deadline_failures` times, with `start_deadline_s` passed since the first and no worker of it live, is
+    broken by the pool and its jobs are held with the latest start error.
     """
 
     quantum_items: PositiveInt
@@ -120,6 +122,8 @@ class PoolSettings(Frozen):
     cancel_check_s: PositiveSeconds
     event_poll_s: PositiveSeconds
     no_progress_s: PositiveSeconds
+    start_deadline_s: PositiveSeconds
+    start_deadline_failures: PositiveInt
 
 
 class SizingSettings(Frozen):

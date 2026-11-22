@@ -260,6 +260,8 @@ def settings(profile: ExecutionProfile) -> PoolSettings:
         target_wall_s=profile.sizing.target_wall_s,
         unmeasured_workers=profile.calibration.unmeasured_workers,
         recheck_fraction=0.0,
+        start_deadline_s=profile.pool.start_deadline_s,
+        start_deadline_failures=profile.pool.start_deadline_failures,
     )
 
 
@@ -400,9 +402,15 @@ class PoolSession:
         It is when the substrate lists a worker of one of `classes` (ready or starting: a submitted Slurm job still
         queued is starting), or when a claim lease on one of their queues (`claim_leases`) has beaten: its newest
         mtime (`newest_beat`) differs from the one seen at the last call, or it is seen for the first time.
+        A listing that raises (an `squeue` that times out) counts as working, logged.
         """
         wanted = set(classes)
-        if any(h.worker_class in wanted for h in self.pool.substrate.live()):
+        try:
+            listed = self.pool.substrate.live()
+        except Exception as err:  # noqa: BLE001 - an unknown state is not a stall; the next look is a bound later
+            logger.warning("listing the substrate's workers failed; the pool counts as working: %s", err)
+            return True
+        if any(h.worker_class in wanted for h in listed):
             return True
         beat = False
         for lease in claim_leases(self.pool.root, wanted):
@@ -552,11 +560,13 @@ def item_failure(text: str) -> FaultRecord | None:
 def coordinator_live(root: Path) -> bool:
     """Whether the newest coordinator of the pool at `root` is live: not ended, its lease held and not stale."""
     from pydra.engine.lease import LeaseTimeout  # noqa: PLC0415 - read only here
-    from pydra.workers.pool.pool import _open_existing  # noqa: PLC0415 - the pool's own reader of its header
+    from pydra.workers.pool.storage import PoolRoot  # noqa: PLC0415 - read only here
 
-    if not (Path(root) / "pool.json").is_file():
+    header = Path(root) / "pool.json"
+    if not header.is_file():
         return False
-    with _open_existing(root) as pool:
+    settings = LeaseSettings.from_json(json.loads(header.read_bytes())["lease"])
+    with PoolRoot.open(root, settings, create=False, probe=False) as pool:
         epochs = pool.epochs()
         if not epochs or (Path(root) / "coordinator" / str(epochs[-1]) / "ended").exists():
             return False

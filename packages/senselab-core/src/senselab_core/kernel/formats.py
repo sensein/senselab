@@ -76,7 +76,7 @@ WORKER_READY_FORMAT = "worker-ready@1.0"
 SERVICE_ENTRY_FORMAT = "service-entry@1.0"
 """The format of a service's registry entry, `<registry>/svc-<identity digest>.json`: its identity and endpoint."""
 
-EXECUTION_PROFILE_FORMAT = "execution-profile@6.1"
+EXECUTION_PROFILE_FORMAT = "execution-profile@6.2"
 """The format of an execution profile, `runtime/data/profiles/<name>.yaml` or a user's override."""
 RETIRED_EXECUTION_PROFILE_FORMATS = frozenset(
     {"execution-profile@1", "execution-profile@2", "execution-profile@3", "execution-profile@4", "execution-profile@5"}

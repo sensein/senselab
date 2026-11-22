@@ -797,7 +797,7 @@ def place(  # noqa: PLR0913 - the plan, profile, hardware and config, then the e
     )
     profile.check_qos_cap({n: p.resource_class for n, p in placed.items()})
     return PlanPlacement(
-        profile_digest=profile.canonical_digest(),
+        profile_digest=profile.identity_digest(),
         nodes={n: p.record() for n, p in placed.items()},
         env_builds=tuple(builds),
         licenses=licenses,

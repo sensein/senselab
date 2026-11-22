@@ -434,6 +434,9 @@ class _Driver:
     def drive(self, task: Any) -> None:  # noqa: ANN401 - a pydra workflow task
         """Drive `task`'s `GraphRunner` until no job can progress and no pool job is open.
 
+        The pool's holds of the plan's resource classes are released first (`WarmPool.release_hold`): a run is a
+        fresh attempt, so a class an earlier run saw break is started again.
+
         Raises:
             Exception: the first error of the run that is no job's failure, or a cancellation.
             QueueHeld: the pool held jobs of the run; they have no terminal event.
@@ -443,6 +446,8 @@ class _Driver:
             RuntimeError: nothing can progress, but the run is not done.
         """
         pool = self.session.pool
+        for name in sorted({p.resource_class for p in self.placed.placement.nodes.values()}):
+            pool.release_hold(name)
         pool.bind(self._report)
         with Submitter(worker="debug", store=self.store, telemetry=False) as submitter:
             graph = GraphRunner(
@@ -952,7 +957,7 @@ class PydraRunner:
             WorkflowError: pydra errored a job no pool job failed.
             Exception: the first other error forming a node's jobs raised, after the run.
         """
-        if placed.placement.profile_digest != session.profile.canonical_digest():
+        if placed.placement.profile_digest != session.profile.identity_digest():
             raise ValueError(f"plan {placed.hash} was placed under another execution profile than the session's")
         with attempt_scope(events.attempt):
             return self._run_plan(placed, session, values, events, store, cancel)

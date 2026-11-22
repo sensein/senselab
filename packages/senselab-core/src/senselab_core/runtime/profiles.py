@@ -9,6 +9,7 @@ is recorded with each result through `canonical_digest` and never reaches a key.
 
 import difflib
 import functools
+import json
 import os
 import platform
 import re
@@ -17,9 +18,9 @@ from importlib import resources
 from pathlib import Path
 from typing import Annotated, Any, Final, Literal
 
-from pydantic import Field, model_validator
+from pydantic import AfterValidator, Field, PlainSerializer, model_validator
 
-from senselab_core.kernel._base import Frozen, NonEmptyStr
+from senselab_core.kernel._base import Frozen, FrozenMapping, NonEmptyStr
 from senselab_core.kernel.declare import BackendSpec, Registry, TaskSpec
 from senselab_core.kernel.formats import (
     EXECUTION_PROFILE_FORMAT,
@@ -91,7 +92,7 @@ _DROPPED_KEYS: Final = {
 
 
 class ProfileFormatRetired(ValueError):
-    """A profile in a retired format; it is rewritten as `execution-profile@6.1`."""
+    """A profile in a retired format; it is rewritten as `execution-profile@6.2`."""
 
     def __init__(self, found: str) -> None:
         """Name the declared format, and the keys a newer major dropped from it."""
@@ -192,6 +193,8 @@ class ExecutionProfile(Formatted):
         store: How a result store commits and how a storage root's clock is probed.
         vllm: How a `vllm serve` process is started, polled, asked and stopped.
         worker: How a worker client starts and watches its worker subprocess.
+        written: Each value `load` expanded, by its key path (a JSON list of keys), as `(written, expanded)` JSON:
+            what `identity_digest` takes in its place. Never a key of a profile file.
     """
 
     format: FormatTag = EXECUTION_PROFILE_FORMAT
@@ -217,6 +220,9 @@ class ExecutionProfile(Formatted):
     store: StoreSettings
     vllm: VllmSettings
     worker: WorkerSettings
+    written: Annotated[Mapping[str, tuple[str, str]], AfterValidator(FrozenMapping), PlainSerializer(dict)] = (
+        FrozenMapping({})
+    )
 
     @model_validator(mode="after")
     def _check_classes(self) -> "ExecutionProfile":
@@ -274,10 +280,33 @@ class ExecutionProfile(Formatted):
         unfilled = _unfilled(merged)
         if unfilled:
             raise UnfilledProfile(str(merged.get("name", source)), unfilled)
-        _check_keys(merged, cls.model_fields)
-        profile = cls.model_validate(expand_profile(merged))
+        _check_keys(merged, {k: v for k, v in cls.model_fields.items() if k != "written"})
+        expanded = expand_profile(merged)
+        written = {
+            json.dumps(path): (json.dumps(old), json.dumps(new)) for path, old, new in _changed(merged, expanded)
+        }
+        profile = cls.model_validate({**expanded, "written": written})
         profile.lease.check_bound()
         return profile
+
+    def identity_digest(self) -> str:
+        """Return the digest of the profile as written: each value `load` expanded counts as its written form.
+
+        It is the profile's identity in a plan (`PlanPlacement.profile_digest`) and the check a resume makes, so two
+        hosts whose environments expand a profile's variables differently place and resume under one profile. A
+        value changed since `load` (it no longer equals its expansion) counts as it is.
+        """
+        if not self.written:
+            return self.canonical_digest()
+        document = self.model_dump(mode="json", exclude={"written"})
+        for path, (written, expanded) in self.written.items():
+            *above, last = json.loads(path)
+            holder: Any = document
+            for key in above:
+                holder = holder.get(key) if isinstance(holder, dict) else None
+            if isinstance(holder, dict) and holder.get(last) == json.loads(expanded):
+                holder[last] = json.loads(written)
+        return type(self).model_validate(document).canonical_digest()
 
     @property
     def probe_s(self) -> float:
@@ -379,6 +408,13 @@ def expand_profile(node: Any, key: str = "") -> Any:  # noqa: ANN401 - any YAML 
         items = [(item, expand_profile(item, f"{key}[{i}]")) for i, item in enumerate(node)]
         return [new for old, new in items if not (new == "" and isinstance(old, str) and _VARIABLE.search(old))]
     return node
+
+
+def _changed(old: Any, new: Any, path: tuple[str, ...] = ()) -> list[tuple[list[str], Any, Any]]:  # noqa: ANN401
+    """Return the key path, old value and new value of each leaf (a value that is not a mapping) that differs."""
+    if isinstance(old, Mapping) and isinstance(new, Mapping):
+        return [c for k in old if k in new for c in _changed(old[k], new[k], (*path, str(k)))]
+    return [] if old == new else [(list(path), old, new)]
 
 
 def _read(source: Any) -> dict[str, Any]:  # noqa: ANN401 - a Path or a package resource

@@ -285,6 +285,21 @@ def test_every_variable_form_is_expanded_at_load_and_an_optional_item_is_left_ou
 
 
 @pytest.mark.logic
+def test_a_profiles_identity_is_its_values_as_written(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Two environments that expand the fixture differently give one identity; `written` is never a file key."""
+    monkeypatch.setenv("SENSELAB_ENV_ROOT", str(tmp_path / "a"))
+    first = ExecutionProfile.load(CLUSTER)
+    monkeypatch.setenv("SENSELAB_ENV_ROOT", str(tmp_path / "b"))
+    monkeypatch.setenv("SENSELAB_MEASURES_ROOT", str(tmp_path / "group"))
+    second = ExecutionProfile.load(CLUSTER)
+    assert first.canonical_digest() != second.canonical_digest()
+    assert first.identity_digest() == second.identity_digest()
+    assert ExecutionProfile.load(CLUSTER, {"retry": {"attempts": 5}}).identity_digest() != first.identity_digest()
+    with pytest.raises(UnknownProfileKey, match="written"):
+        ExecutionProfile.load(CLUSTER, {"written": {}})
+
+
+@pytest.mark.logic
 def test_retry_block_keeps_its_format_identity() -> None:
     """The profile's `retry` is a `retry-policy@1.0` value whose digest is fixed."""
     retry = ExecutionProfile.load().retry
@@ -297,14 +312,14 @@ def test_profile1_refused(tmp_path: Path) -> None:
     """An `execution-profile@1.0` to `@5.0` override or file is refused as retired, naming both tags."""
     for old in ("1", "2", "3", "4", "5"):
         retired = f"execution-profile@{old}.0"
-        with pytest.raises(ProfileFormatRetired, match=rf"retired format {retired}.*execution-profile@6\.1"):
+        with pytest.raises(ProfileFormatRetired, match=rf"retired format {retired}.*execution-profile@6\.2"):
             ExecutionProfile.load("laptop", {"format": retired})
     path = tmp_path / "site.yaml"
     path.write_text("format: execution-profile@1.0\nnetwork: offline\n")
     with pytest.raises(ProfileFormatRetired, match="retired format execution-profile@1.0"):
         ExecutionProfile.load(CLUSTER, path)
-    assert {ExecutionProfile.load(n).format for n in ("laptop", CLUSTER)} == {"execution-profile@6.1"}
-    assert _packaged("slurm").format == "execution-profile@6.1"
+    assert {ExecutionProfile.load(n).format for n in ("laptop", CLUSTER)} == {"execution-profile@6.2"}
+    assert _packaged("slurm").format == "execution-profile@6.2"
 
 
 @pytest.mark.logic
@@ -394,7 +409,7 @@ def test_senselab_ships_only_generic_profiles() -> None:
 def test_a_partial_file_passed_as_a_profile_says_to_use_an_override(tmp_path: Path) -> None:
     """One clear error, not a list of missing fields, and `load(name, file)` is the layering that works."""
     partial = tmp_path / "partial.yaml"
-    partial.write_text("format: execution-profile@6.1\nretry:\n  attempts: 6\n  first_backoff_s: 1.0\n")
+    partial.write_text("format: execution-profile@6.2\nretry:\n  attempts: 6\n  first_backoff_s: 1.0\n")
     with pytest.raises(IncompleteProfile, match=r"must be complete.*override"):
         ExecutionProfile.load(partial)
     assert ExecutionProfile.load("laptop", partial).retry.attempts == 6
