@@ -13,6 +13,7 @@ import logging
 import os
 import re
 import secrets
+import tempfile
 import threading
 from collections.abc import Iterator, Mapping
 from datetime import datetime, timezone
@@ -57,6 +58,10 @@ CALIBRATION_DIR = "pydra-directory-calibration@1"
 """Under a measures root, the directory the pool's `DirectoryCalibration` keeps its samples and unfit records in."""
 POOLS_DIR = "2x/pools"
 """Under the cache root, the directory each process's default sessions are opened in (`default_session`)."""
+TEMPORARY_ROOTS = ("/tmp", "/var/tmp")  # noqa: S108 - named to be refused, not written to
+"""The FHS temporary directories, beside the interpreter's own (`tempfile.gettempdir`); each is node-local."""
+MEMORY_FILESYSTEMS = frozenset({"tmpfs", "ramfs"})
+"""The filesystem types (`/proc/self/mounts`) that hold a node's memory, seen by no other node."""
 _GRES = re.compile(r"^gpu:(?:(?P<type>[\w.-]+):)?(?P<count>[0-9]+)$")
 
 
@@ -276,6 +281,43 @@ def calibration_root(profile: ExecutionProfile) -> Path | None:
     return None
 
 
+class NodeLocalRoot(ValueError):
+    """A pool root on storage only this node sees, opened for a substrate that starts workers on other nodes."""
+
+
+def _mount_type(path: Path) -> str | None:
+    """Return the filesystem type of the mount holding `path` from `/proc/self/mounts`; None where there is none."""
+    try:
+        lines = Path("/proc/self/mounts").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    found: tuple[int, str] | None = None
+    for line in lines:
+        fields = line.split()
+        if len(fields) < 3:  # noqa: PLR2004 - device, mount point, type
+            continue
+        point = Path(re.sub(r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), fields[1]))
+        if (path == point or point in path.parents) and (found is None or len(point.parts) > found[0]):
+            found = (len(point.parts), fields[2])
+    return None if found is None else found[1]
+
+
+def node_local(path: Path) -> str | None:
+    """Return why `path` is on storage only this node sees, or None.
+
+    It is node-local under a temporary directory (`TEMPORARY_ROOTS`, `tempfile.gettempdir`) or on a memory
+    filesystem (`MEMORY_FILESYSTEMS`).
+    """
+    resolved = Path(path).absolute().resolve()
+    for temporary in sorted({Path(tempfile.gettempdir()).resolve(), *(Path(t).resolve() for t in TEMPORARY_ROOTS)}):
+        if resolved == temporary or temporary in resolved.parents:
+            return f"it is under the temporary directory {temporary}"
+    kind = _mount_type(resolved)
+    if kind in MEMORY_FILESYSTEMS:
+        return f"it is on a {kind} filesystem"
+    return None
+
+
 class PoolSession:
     """A warm pool whoever makes it closes: its `WarmPool`, its store and the submitter its jobs are made under.
 
@@ -300,8 +342,18 @@ class PoolSession:
 
         Its worker classes are the profile's, each class in `placements` placed with those values (`worker_classes`).
         `here` says the workers run on this host; when None, whether the substrate is a `LocalSubstrate`.
+
+        Raises:
+            NodeLocalRoot: the substrate is a `SlurmSubstrate` and `root` is on node-local storage (`node_local`).
         """
         chosen = substrate if substrate is not None else substrate_of(profile)
+        if isinstance(chosen, SlurmSubstrate):
+            local = node_local(Path(root))
+            if local is not None:
+                raise NodeLocalRoot(
+                    f"pool root {root} is on storage only this node sees ({local}), and a Slurm substrate starts its"
+                    " workers on other nodes: open the pool on storage every node reaches"
+                )
         self.here = isinstance(chosen, LocalSubstrate) if here is None else here
         self.profile = profile
         self.classes = worker_classes(profile, placements)

@@ -2,6 +2,7 @@
 
 import json
 import os
+import tempfile
 import threading
 import time
 from dataclasses import replace
@@ -18,7 +19,7 @@ from senselab_core.runtime.execution.calls import call
 from senselab_core.runtime.execution.events import read_events
 from senselab_core.runtime.execution.executor import NoProgress, QueueHeld
 from senselab_core.runtime.execution.run import start
-from senselab_core.runtime.execution.warm import PoolSession
+from senselab_core.runtime.execution.warm import NodeLocalRoot, PoolSession, node_local
 from senselab_core.runtime.licenses import LicensePolicy
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.site_placement import PlacementAnswer, PlacementRequest, PlacementValues, load_overrides
@@ -67,6 +68,11 @@ BOUNDED = ExecutionProfile.load(
     },
 )
 """One CPU class whose runs fail after `BOUND_S` without progress; a refused start never breaks the class first."""
+
+CLUSTER = (
+    next(p for p in Path(__file__).resolve().parents if p.name == "packages")
+    / "senselab-core/tests/data/profiles/cluster.yaml"
+)
 
 
 class _Refusing:
@@ -440,3 +446,19 @@ def test_the_no_progress_error_names_the_pools_latest_start_error(tmp_path: Path
         with pytest.raises(NoProgress, match="invalid partition") as caught:
             run.wait(timeout=60)
     assert "invalid partition" in caught.value.start_errors["cpu"]
+
+
+def test_a_slurm_session_refuses_a_pool_root_on_node_local_storage(tmp_path: Path) -> None:
+    """A Slurm substrate's workers run on other nodes: a root under the temporary directory is refused at open."""
+    profile = ExecutionProfile.load(CLUSTER)
+    root = Path(tempfile.gettempdir()) / f"senselab-node-local-{os.getpid()}" / "session"
+    with pytest.raises(NodeLocalRoot, match="every node"):
+        PoolSession(profile, root, tmp_path / "store")
+    assert not root.exists()
+
+
+def test_node_local_names_temporary_directories_and_not_the_checkout() -> None:
+    """A temporary directory is node-local; the source checkout, on the storage the suite runs from, is not."""
+    assert node_local(Path(tempfile.gettempdir()) / "x") is not None
+    assert node_local(Path("/tmp/x")) is not None
+    assert node_local(Path(__file__).parent) is None
