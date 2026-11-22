@@ -42,6 +42,7 @@ from senselab_core.runtime.execution.providers import HOST, WORKER, Loader, Mode
 from senselab_core.runtime.execution.workers import WorkerLoadFailed
 from senselab_core.runtime.execution_settings import ResourceClass
 from senselab_core.runtime.licenses import LicenseRefused
+from senselab_core.runtime.measures import resolve_roots
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.revision import cache_root
 from senselab_core.runtime.site_placement import ClassPlacement
@@ -52,6 +53,8 @@ FAULT_MARK = "senselab-fault@1 "
 """The prefix of an `ItemFailed` message: the item's fault record follows as JSON."""
 logger = logging.getLogger("senselab")
 
+CALIBRATION_DIR = "pydra-directory-calibration@1"
+"""Under a measures root, the directory the pool's `DirectoryCalibration` keeps its samples and unfit records in."""
 POOLS_DIR = "2x/pools"
 """Under the cache root, the directory each process's default sessions are opened in (`default_session`)."""
 _GRES = re.compile(r"^gpu:(?:(?P<type>[\w.-]+):)?(?P<count>[0-9]+)$")
@@ -250,12 +253,32 @@ def substrate_of(profile: ExecutionProfile) -> Substrate:
     return SlurmSubstrate(per_user_cpu_cap=profile.substrate.qos_cpu_cap, **timeouts)
 
 
+def calibration_root(profile: ExecutionProfile) -> Path | None:
+    """Return where every session of the profile keeps the pool's calibration: under its first writable measures root.
+
+    The roots are the profile's `calibration.measures_roots` (`resolve_roots`), so a later session, over any pool
+    root, reads the samples and unfit records an earlier one wrote. None (logged) when no root is writable.
+    """
+    for root in resolve_roots(profile.calibration.measures_roots, cache_root()):
+        found = root / CALIBRATION_DIR
+        try:
+            found.mkdir(parents=True, exist_ok=True)
+        except OSError as err:
+            logger.info("measures root %s takes no pool calibration: %s", root, err)
+            continue
+        if os.access(found, os.W_OK):
+            return found
+    logger.warning("no measures root is writable; the pool's calibration is kept under its session root")
+    return None
+
+
 class PoolSession:
     """A warm pool whoever makes it closes: its `WarmPool`, its store and the submitter its jobs are made under.
 
     `root` holds the pool (`<root>/pool`) and the jobs' work directories (`<root>/private/work`), on storage every
-    node sees; `store` is the result store's root. The pool's workers and their models stay resident until `close`,
-    whatever runs use it, one after another or at once.
+    node sees; `store` is the result store's root. The pool's calibration is shared by every session of the profile
+    (`calibration_root`). The pool's workers and their models stay resident until `close`, whatever runs use it, one
+    after another or at once.
     """
 
     def __init__(  # noqa: PLR0913 - the profile and two roots, then keyword-only pool parts
@@ -279,7 +302,8 @@ class PoolSession:
         work.mkdir(parents=True, exist_ok=True, mode=0o700)
         (self.root / "private").chmod(0o700)
         self.store = open_store(Path(store), work)
-        calibration = DirectoryCalibration(self.root / "pool" / "calibration")
+        calibration = DirectoryCalibration(calibration_root(profile) or self.root / "pool" / "calibration")
+        self.calibration = calibration
         self.providers = (SenselabWorker(), SenselabHost())
         self.pool = WarmPool(
             self.root / "pool",

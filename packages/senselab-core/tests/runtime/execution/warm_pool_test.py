@@ -151,6 +151,29 @@ def test_a_load_out_of_memory_moves_the_job_to_the_larger_class(tmp_path: Path, 
     assert _loads(tmp_path) == 2
 
 
+def test_a_later_session_reads_an_earlier_ones_unfit_record_and_starts_on_the_larger_class(
+    tmp_path: Path, planted: Path
+) -> None:
+    """A load's unfit record is kept under the measures root: a session over another root starts on the big class."""
+    with packaged(registry(TASK, worker=BACKEND), tmp_path / "cache"):
+        (tmp_path / "oom").write_text("1")
+        with served(tmp_path / "first", TWO_CLASSES, store=tmp_path / "store") as (session, pool):
+            pool.serve("cpu:big")
+            placed, values = planned(TASK, TWO_CLASSES, ["a"])
+            assert start(placed, session, values=values).wait(timeout=180).done
+            first = session.calibration.root
+        with served(tmp_path / "second", TWO_CLASSES, store=tmp_path / "store") as (session, pool):
+            pool.serve("cpu:big")
+            assert session.calibration.root == first and first.is_relative_to(tmp_path / "cache")
+            placed, values = planned(TASK, TWO_CLASSES, ["b"])
+            run = start(placed, session, values=values)
+            assert run.wait(timeout=180).done
+            [(_, given)] = list(run.results())
+            stored = session.store.stored(next(iter(given.keys.values())))  # type: ignore[union-attr]
+    assert [context["pool"]["class"] for _, context, _ in stored] == ["cpu:big"]
+    assert _loads(tmp_path) == 3
+
+
 def test_a_residency_broken_past_its_budget_holds_its_jobs_and_the_run(tmp_path: Path, planted: Path) -> None:
     """A load that fails for no resource reason, past the infrastructure budget, holds the job: no terminal event."""
     (tmp_path / "broken").write_text("")

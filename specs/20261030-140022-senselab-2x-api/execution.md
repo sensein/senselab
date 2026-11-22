@@ -729,6 +729,11 @@ time, worker cap, excluded nodes) are applied by opening the session with them: 
 its worker classes, and a caller's session opened with other values for a class the plan uses is refused at `start`. Each
 class's placement is then recorded under the pool's epoch, as applied.
 
+**Calibration.** The pool's `DirectoryCalibration` (memory samples, unfit records) lives under the profile's first
+writable `calibration.measures_roots` entry, in `pydra-directory-calibration@1/` (fix round 1), so every session of the
+profile, over any pool root, reads what earlier ones measured: a backend that ran out of memory on a class is placed above
+it at once by the next run. pydra reads every file under that root; `calibration.trust: own` does not filter it.
+
 **Storage.** The work directories and the pool root are on storage every node sees (RFC 0003 §5.4); pydra needs nothing
 under `cache_root` for a job that has a work directory. **A resume waits out the store's leases:** a job lease a killed
 process held is taken over only once it is 300 s stale (the `PortableStore` lease default) plus the attribute delay.
