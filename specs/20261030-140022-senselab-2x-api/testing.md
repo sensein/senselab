@@ -195,6 +195,23 @@ set in §4.
   partition named by the test profile.
 - They use typed GPUs, preferring H100. Concurrency is bounded by the QOS cap shared across
   agents. Nothing runs on login or remote-control nodes.
+- The evidence harness is `benchmarks/exit/orcd/` (route-B S1c). A campaign submits `step-prepare.sh` first and every
+  other step with `--dependency=afterok:` on it: the prepare job makes the one `uv sync` that builds the git
+  dependencies into the shared cache (`GROUP_UV_CACHE`, else `$WORK_ROOT/uv-cache`), so the jobs' own syncs read a warm
+  cache; concurrent syncs over a cold cache each wait on uv's cache lock and fail at its 300 s timeout. The prepare
+  job also expands the site profile's variables and fits each class's time to its partition, so a bad profile fails
+  one short job instead of every job of the campaign.
+- Per-test bounds (`--timeout`, which replaces the tier budgets of `tier_budgets.json`; a test's own `timeout` mark
+  wins): 120 s for model-free tests, 300 s for GPU model tests. A model-free test on a CPU node finishes in seconds,
+  and its slowest steps are worker starts and lease waits of a few seconds each, so 120 s ends a hang in two minutes
+  instead of the 700 to 900 s tier budgets. The slowest GPU model test measured on an H100 was 163 s (a vLLM
+  attestation test, `tier_budgets.json`), under 300 s with the envs built and the model cache warm. Two tests keep
+  their own longer marks because each starts a cold vLLM server inside it: `services_gpu_test` and
+  `vllm_server_gpu_test` (multiples of their 1800 s start-up timeout). The CPU-node model tiers of `step-5.sh` keep
+  the tier budgets, since each of their tests loads a model on the CPU (229.67 s measured, `tier_budgets.json`).
+- `pool.no_progress_s` in the job's profile copy is set inside the per-test bound (240 s against 300 s on GPU), so a
+  stalled pool fails with `NoProgress` naming its classes before pytest-timeout kills the test without it. The CPU
+  model tiers keep 600 s inside their 700 s budget.
 
 **Cadence** (the same table drives `benchmarks.md` §5)
 

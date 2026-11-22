@@ -134,6 +134,14 @@ match what was built), plus **fix round 1** (`b76681a9`): a holder is identified
 
 ## Log
 
+- **2026-11-22 (route-B S1c):** repinned to pydra `integration/senselab` @`b98cb8a0` (#988: the pool fails fast). A class
+  whose workers cannot start is held with the start error (`QueueHeld(resource_class, jobs, reason)`); the no-progress
+  check reads only the substrate's `live()` and the documented claim-lease layout (R-307, R-308 closed; R-318 opened for
+  `coordinator_live`); the node-local check is pydra's `check_root` (R-311 closed); profile variables expand at load in
+  every value and an unset one is refused naming key and variable (`UnsetProfileVariable`); the ORCD harness bounds each
+  test (120 s CPU, 300 s GPU), fills one shared uv cache first (`step-prepare.sh`), runs the CPU and GPU tiers as
+  `step-tier.sh` and folds the GPU tier's env builds into its verdict (R-312 closed). `execution.md` carries the
+  amendment, `testing.md` the harness bounds.
 - **2026-11-21 (route-B S1b):** senselab runs on pydra's warm pool. Pinned to pydra `integration/senselab`
   @`3046e31e` (RFC 0005 W12, O4). A run's jobs go to a `WarmPool` through a caller-owned `PoolSession`
   (`runtime/execution/warm.py`); models are pydra providers (`senselab-worker@3` owns a process, `senselab-host@3` loads
