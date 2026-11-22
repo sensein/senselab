@@ -286,7 +286,7 @@ def test_every_variable_form_is_expanded_at_load_and_an_optional_item_is_left_ou
 
 @pytest.mark.logic
 def test_a_profiles_identity_is_its_values_as_written(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Two environments that expand the fixture differently give one identity; `written` is never a file key."""
+    """Two environments that expand the fixture differently give one identity, which a dumped profile keeps."""
     monkeypatch.setenv("SENSELAB_ENV_ROOT", str(tmp_path / "a"))
     first = ExecutionProfile.load(CLUSTER)
     monkeypatch.setenv("SENSELAB_ENV_ROOT", str(tmp_path / "b"))
@@ -295,8 +295,9 @@ def test_a_profiles_identity_is_its_values_as_written(monkeypatch: pytest.Monkey
     assert first.canonical_digest() != second.canonical_digest()
     assert first.identity_digest() == second.identity_digest()
     assert ExecutionProfile.load(CLUSTER, {"retry": {"attempts": 5}}).identity_digest() != first.identity_digest()
-    with pytest.raises(UnknownProfileKey, match="written"):
-        ExecutionProfile.load(CLUSTER, {"written": {}})
+    dumped = tmp_path / "dumped.json"
+    dumped.write_text(second.model_dump_json())
+    assert ExecutionProfile.load(dumped).identity_digest() == first.identity_digest()
 
 
 @pytest.mark.logic

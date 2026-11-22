@@ -194,7 +194,8 @@ class ExecutionProfile(Formatted):
         vllm: How a `vllm serve` process is started, polled, asked and stopped.
         worker: How a worker client starts and watches its worker subprocess.
         written: Each value `load` expanded, by its key path (a JSON list of keys), as `(written, expanded)` JSON:
-            what `identity_digest` takes in its place. Never a key of a profile file.
+            what `identity_digest` takes in its place. A dumped profile keeps it, so reloading the dump keeps the
+            identity.
     """
 
     format: FormatTag = EXECUTION_PROFILE_FORMAT
@@ -280,12 +281,11 @@ class ExecutionProfile(Formatted):
         unfilled = _unfilled(merged)
         if unfilled:
             raise UnfilledProfile(str(merged.get("name", source)), unfilled)
-        _check_keys(merged, {k: v for k, v in cls.model_fields.items() if k != "written"})
+        _check_keys(merged, cls.model_fields)
+        given = merged.pop("written", {})
         expanded = expand_profile(merged)
-        written = {
-            json.dumps(path): (json.dumps(old), json.dumps(new)) for path, old, new in _changed(merged, expanded)
-        }
-        profile = cls.model_validate({**expanded, "written": written})
+        changed = {json.dumps(p): (json.dumps(old), json.dumps(new)) for p, old, new in _changed(merged, expanded)}
+        profile = cls.model_validate({**expanded, "written": {**given, **changed}})
         profile.lease.check_bound()
         return profile
 
