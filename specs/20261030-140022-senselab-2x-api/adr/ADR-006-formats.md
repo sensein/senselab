@@ -740,4 +740,5 @@ Design: [`calibration-probe.md`](../calibration-probe.md) §3.2, §8.
 - 2026-11-22 (route-B S1c fix round 1): `execution-profile@6.2` replaces `@6.1`. It adds the required keys
   `pool.start_deadline_s` and `pool.start_deadline_failures`, pydra's start deadline (config-derivations.md, `pool`). A
   `@6.1` file is still accepted by the format check and fails validation naming the missing keys. The profile's
-  identity digest (`ExecutionProfile.identity_digest`) is taken over its values as written, before variables expand.
+  identity digest (`ExecutionProfile.identity_digest`) is the `value@2` digest of its dumped document with each
+  expanded value in its written form (fix round 2: not validated again).

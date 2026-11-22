@@ -819,3 +819,15 @@ senselab is pinned to pydra `integration/senselab` @`b98cb8a0` (#988, the pool f
 - *Start deadline as profile keys.* `pool.start_deadline_s` (120) and `pool.start_deadline_failures` (3), pydra's
   defaults, are passed to its `PoolSettings` (`execution-profile@6.2`; config-derivations.md, `pool`).
 - `coordinator_live` opens the pool with the public `PoolRoot.open` and `LeaseSettings.from_json` (R-318 closed).
+
+**Fix round 2 (2026-11-22).**
+- `identity_digest` is the `value@2` digest of the dumped profile with each written form in place, not validated
+  again, so a pattern-checked or numeric value written as a variable (`placement_hook: ${HOOK}`, a count from
+  `${N}`) has one identity on every host; `written` records each expansion as validated, so a number compares equal.
+- `written` is the loader's: a profile file or override that holds it is refused (`WrittenFormsGiven`); a loaded
+  profile is written back for `load` with `model_dump_json(exclude={"written"})`, and then names its values as
+  expanded on that host.
+- Releasing holds at run start costs each new run at most one more start deadline per broken class: pydra releases
+  only broken classes, and a run that already received its held outcomes still raises `QueueHeld`.
+- `orcd_driver profile` writes the job's copy of a site profile already expanded, so an ORCD run's profile identity
+  names the job's literal values.
