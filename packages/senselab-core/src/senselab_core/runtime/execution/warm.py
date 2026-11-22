@@ -290,11 +290,15 @@ class PoolSession:
         substrate: Substrate | None = None,
         pool_settings: PoolSettings | None = None,
         placements: Mapping[str, ClassPlacement] | None = None,
+        here: bool | None = None,
     ) -> None:
         """Open the pool at `root` over the store at `store`, its workers started by `substrate` (the profile's).
 
         Its worker classes are the profile's, each class in `placements` placed with those values (`worker_classes`).
+        `here` says the workers run on this host; when None, whether the substrate is a `LocalSubstrate`.
         """
+        chosen = substrate if substrate is not None else substrate_of(profile)
+        self.here = isinstance(chosen, LocalSubstrate) if here is None else here
         self.profile = profile
         self.classes = worker_classes(profile, placements)
         self.root = Path(root).absolute()
@@ -308,7 +312,7 @@ class PoolSession:
         self.pool = WarmPool(
             self.root / "pool",
             self.classes,
-            substrate if substrate is not None else substrate_of(profile),
+            chosen,
             store=self.store,
             fit=MeasuredFit(calibration, headroom=profile.sizing.memory_headroom),
             calibration=calibration,
@@ -347,39 +351,68 @@ class PoolSession:
 
 _DEFAULTS: dict[tuple[str, str, str], PoolSession] = {}
 _DEFAULTS_LOCK = threading.Lock()
+_OPENER: list[int] = []
+"""The pid of the process that opened the default session `_DEFAULTS` holds; another process never closes it."""
+
+
+def _forget_defaults() -> None:
+    """In a forked child: drop the parent's default session without closing it, so the child opens its own."""
+    global _DEFAULTS_LOCK  # noqa: PLW0603 - a forked child's lock may be held by a parent thread that is gone
+    _DEFAULTS_LOCK = threading.Lock()
+    _DEFAULTS.clear()
+    _OPENER.clear()
+
+
+os.register_at_fork(after_in_child=_forget_defaults)
 
 
 def default_session(
     profile: ExecutionProfile, store: Path, placements: Mapping[str, ClassPlacement] | None = None
 ) -> PoolSession:
-    """Return this process's session for `profile` over `store`, its classes placed by `placements`, opened once.
+    """Return this process's one default session for `profile` over `store`, its classes placed by `placements`.
 
-    Its root is a directory of its own under `<cache root>/2x/pools`; it is closed at exit. Every run started without
-    a session, and every call, uses the one of its profile, store and worker classes, so a model stays resident from
-    one to the next for the profile's idle window.
+    Its root is a directory of its own under `<cache root>/2x/pools`; it is closed at exit by the process that opened
+    it, and a forked child opens its own. Every run started without a session, and every call, uses it, so a model
+    stays resident from one to the next for the profile's idle window. A process holds at most one: a run or call of
+    another profile, store or worker classes closes the one it holds and opens another.
     """
     key = (profile.canonical_digest(), str(Path(store).absolute()), repr(worker_classes(profile, placements)))
     with _DEFAULTS_LOCK:
         found = _DEFAULTS.get(key)
-        if found is None:
-            if not _DEFAULTS:
-                atexit.unregister(close_default_sessions)
-                atexit.register(close_default_sessions)
-            root = cache_root() / POOLS_DIR / f"{os.getpid()}-{secrets.token_hex(4)}"
-            found = _DEFAULTS[key] = PoolSession(profile, root, Path(store), placements=placements)
-    return found
+        if found is not None:
+            return found
+        previous = list(_DEFAULTS.values())
+        _DEFAULTS.clear()
+    for held in previous:
+        _close(held)
+    root = cache_root() / POOLS_DIR / f"{os.getpid()}-{secrets.token_hex(4)}"
+    opened = PoolSession(profile, root, Path(store), placements=placements)
+    with _DEFAULTS_LOCK:
+        if not _OPENER:
+            atexit.unregister(close_default_sessions)
+            atexit.register(close_default_sessions)
+        _OPENER[:] = [os.getpid()]
+        _DEFAULTS[key] = opened
+    return opened
+
+
+def _close(found: PoolSession) -> None:
+    try:
+        found.close()
+    except Exception as err:  # noqa: BLE001 - a failed close must not keep the next session from opening
+        logger.warning("closing the default pool session at %s failed: %s", found.root, err)
 
 
 def close_default_sessions() -> None:
-    """Close every default session this process opened (`default_session`), stopping their workers."""
+    """Close the default session this process opened (`default_session`), stopping its workers; in any other, none."""
     with _DEFAULTS_LOCK:
+        if _OPENER != [os.getpid()]:
+            return
         opened = list(_DEFAULTS.values())
         _DEFAULTS.clear()
+        _OPENER.clear()
     for found in opened:
-        try:
-            found.close()
-        except Exception as err:  # noqa: BLE001 - one failed close must not keep the others open
-            logger.warning("closing the default pool session at %s failed: %s", found.root, err)
+        _close(found)
 
 
 @contextlib.contextmanager

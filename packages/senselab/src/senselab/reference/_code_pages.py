@@ -271,7 +271,9 @@ a site profile: every `<fill: ...>` in it is yours to set, and it refuses to loa
   a `module:callable` named in `substrate.placement_hook`, is where a group accounts for such limits: it receives a
   `PlacementRequest` and answers a `PlacementAnswer`, once per class when a run starts. Its values, over a run's
   explicit `placement` values, are the partition, time, worker cap and excluded nodes of the worker classes the run's
-  pool session opens; a session opened by hand takes them as `PoolSession(..., placements=...)`.
+  pool session opens; a session opened by hand takes them as `PoolSession(..., placements=...)`. A process holds one
+  default session, so a hook whose answer changes from one run to the next closes it and opens another, and the
+  models it held are loaded again.
 - A group shares what its runs measure by listing a shared measures root first in `calibration.measures_roots`: the
   pool's calibration (memory samples and the classes a backend ran out of memory on) is kept under the first writable
   root, so a run on any member's session places a backend from what earlier runs measured.

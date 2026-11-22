@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from pool_stack_fixture import packaged, planned, registry, scoring
+from senselab_core.kernel.identity import ReusePolicy
 from senselab_core.runtime.call import RunConfig, TaskCall
 from senselab_core.runtime.execution import warm
 from senselab_core.runtime.execution.calls import call
@@ -149,6 +150,49 @@ def test_explicit_values_and_the_site_hook_are_the_worker_classes_a_run_opens(tm
     assert (placement.used.time_s, placement.used.max_workers, placement.verdict) == (600, 1, "accepted")
 
 
+def test_a_process_holds_one_default_session_and_closes_the_one_it_replaces(tmp_path: Path, planted: Path) -> None:
+    """A call under other worker classes closes the default session the process holds and opens one for them."""
+    two = RESIDENT.model_copy(
+        update={"resource_classes": {"cpu": RESIDENT.resource_classes["cpu"].model_copy(update={"max_workers": 2})}}
+    )
+    with packaged(registry(TASK, worker=BACKEND), tmp_path / "cache"):
+        call(TaskCall.model_validate({"task": TASK.name, "inputs": {"text": "a"}}), profile=RESIDENT)
+        [first] = warm._DEFAULTS.values()
+        call(TaskCall.model_validate({"task": TASK.name, "inputs": {"text": "b"}}), profile=two)
+        [second] = warm._DEFAULTS.values()
+    assert second is not first and first.pool._closed and not second.pool._closed
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="fork is POSIX")
+def test_a_forked_child_opens_its_own_default_session_and_leaves_the_parents_workers(
+    tmp_path: Path, planted: Path
+) -> None:
+    """A call in a forked child runs on a session of its own; the child's exit stops none of the parent's workers."""
+    with packaged(registry(TASK, worker=BACKEND), tmp_path / "cache"):
+        call(TaskCall.model_validate({"task": TASK.name, "inputs": {"text": "a"}}), profile=RESIDENT)
+        [parents] = warm._DEFAULTS.values()
+        pid = os.fork()
+        if pid == 0:  # the child: one call, then what its exit runs
+            code = 1
+            try:
+                given = call(TaskCall.model_validate({"task": TASK.name, "inputs": {"text": "b"}}), profile=RESIDENT)
+                [own] = warm._DEFAULTS.values()
+                code = 0 if given.outputs["value"] == "b" and own is not parents else 2
+                warm.close_default_sessions()
+            finally:
+                os._exit(code)
+        deadline = time.monotonic() + 100
+        while (ended := os.waitpid(pid, os.WNOHANG)) == (0, 0) and time.monotonic() < deadline:
+            time.sleep(0.2)
+        if ended == (0, 0):
+            os.kill(pid, 9)
+            os.waitpid(pid, 0)
+        assert ended[0] == pid and os.waitstatus_to_exitcode(ended[1]) == 0
+        third = call(TaskCall.model_validate({"task": TASK.name, "inputs": {"text": "c"}}), profile=RESIDENT)
+        assert list(warm._DEFAULTS.values()) == [parents] and not parents.pool._closed
+    assert third.outputs["value"] == "c" and _loads(tmp_path) == 2
+
+
 def test_a_load_out_of_memory_moves_the_job_to_the_larger_class(tmp_path: Path, planted: Path) -> None:
     """A load that runs out of memory on the small class is retried on the big one, uncharged, and gives the result."""
     (tmp_path / "oom").write_text("1")
@@ -186,6 +230,28 @@ def test_a_later_session_reads_an_earlier_ones_unfit_record_and_starts_on_the_la
             stored = session.store.stored(next(iter(given.keys.values())))  # type: ignore[union-attr]
     assert [context["pool"]["class"] for _, context, _ in stored] == ["cpu:big"]
     assert _loads(tmp_path) == 3
+
+
+def test_off_host_workers_get_only_tolerant_unsampled_hits_served_by_the_coordinator(
+    tmp_path: Path, planted: Path
+) -> None:
+    """Off-host workers: the coordinator serves a tolerant, unsampled run's hit; an exact run's goes to the pool."""
+    with packaged(registry(TASK, worker=BACKEND), tmp_path / "cache"):
+        with served(tmp_path / "seed", store=tmp_path / "store") as (session, _):
+            placed, values = planned(TASK, PROFILE, ["a"])
+            assert start(placed, session, values=values).wait(timeout=100).done
+        tolerant = RunConfig(ReusePolicy.TOLERANT, 0.0)
+        with served(tmp_path / "remote", store=tmp_path / "store", workers=0, here=False) as (session, _):
+            again, values = planned(TASK, PROFILE, ["a"], tolerant)
+            served_here = start(again, session, values=values)
+            assert served_here.wait(timeout=60).done
+        with served(tmp_path / "exact", store=tmp_path / "store", here=False) as (session, _):
+            exact, values = planned(TASK, PROFILE, ["a"], RunConfig(ReusePolicy.EXACT, 0.0))
+            sent = start(exact, session, values=values)
+            assert sent.wait(timeout=100).done
+    assert [e.kind for e in read_events(served_here.run_dir) if e.kind in {"started", "cache_hit"}] == ["cache_hit"]
+    assert [e.kind for e in read_events(sent.run_dir) if e.kind in {"started", "cache_hit"}] == ["started", "cache_hit"]
+    assert _loads(tmp_path) == 2
 
 
 def test_a_residency_broken_past_its_budget_holds_its_jobs_and_the_run(tmp_path: Path, planted: Path) -> None:

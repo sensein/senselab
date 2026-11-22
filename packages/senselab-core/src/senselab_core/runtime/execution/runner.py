@@ -572,9 +572,9 @@ class _Driver:
         """Return the result the store serves `doc`'s job here, its reuse recorded, or None to send it to the pool.
 
         A twin is served the entry its run's first job of the key committed, exact. Any other job is looked up in the
-        context it would run in, which the coordinator knows on a local substrate (its workers run on this host); on
-        any other substrate only under a `tolerant` policy with no verify sampling, the one rule no measured numerics
-        decide, against the declared context.
+        context it would run in, which the coordinator knows when the session's workers run on this host
+        (`PoolSession.here`); otherwise only under a `tolerant` policy with no verify sampling, the one rule no
+        measured numerics decide, against the declared context.
         """
         store, key = self.session.store, doc.key.digest()
         if twin:
@@ -589,7 +589,7 @@ class _Driver:
             outputs, stored = found
             record_reuse(doc, stored, outputs, ReusePolicy.EXACT, current=stored)
             return served_ref(doc, outputs, ReusePolicy.EXACT.value)
-        if self.session.profile.substrate.kind == "local":
+        if self.session.here:
             here = doc.execute_context()
         elif ReusePolicy(doc.run.reuse) is ReusePolicy.TOLERANT and doc.run.verify == 0:
             here = doc.context

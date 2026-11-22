@@ -718,7 +718,11 @@ into place; the reuse rule's `served` writes a `senselab:Reuse` when an entry is
 for the plan's profile and store (`warm.default_session`, fix round 1 owner ruling): opened lazily under
 `<cache root>/2x/pools/<pid>-<token>`, closed at exit by the process that opened it. Every call (`calls.call`, the facade)
 takes the same path, so successive calls in one process load a model once; a worker stays for the profile's idle window
-(`idle_polls × poll_s`, 300 s on `laptop`). The manifest names the store and the pool. A
+(`idle_polls × poll_s`, 300 s on `laptop`). Fix round 2: a process holds at most one default session; a run of
+another profile, store or worker classes (a changed hook answer, say) closes it and opens another. The opener's pid is
+recorded: the exit hook closes the session only in that process, and a forked child drops the inherited one without
+closing it (`os.register_at_fork`), so a call in the child opens its own and the child's exit stops none of the
+parent's workers. The manifest names the store and the pool. A
 run's attempts are ordered by their ordinal; the pool's coordinator epoch is the one exclusion (one live coordinator per
 pool root; a second waits), and a fenced coordinator's jobs are `NotRun(held=True)`. A held job leaves the run
 interrupted (`QueueHeld` raised after the loop). `Run.wait` stops waiting once the run's pool has no live coordinator.
@@ -727,7 +731,8 @@ interrupted (`QueueHeld` raised after the loop). `Run.wait` stops waiting once t
 store which it would serve (`portable.serving`, the rank and verdict the worker's reuse rule applies) and serves those
 itself, writing their `senselab:Reuse`; only misses and sampled hits (VERIFY) reach the pool, so an all-hit resume
 starts no worker and loads no model. A job's context is measured where it runs, so the coordinator looks up in it only
-where it knows it: on a `local` substrate the workers run on its host, and it builds the execute context itself. On any
+where it knows it: when the session's workers run on its host (`PoolSession.here`, true for a `LocalSubstrate`; fix
+round 2 reads the session's substrate, not the profile's), it builds the execute context itself. On any
 other substrate the declared context (device kind and precision) can differ from the worker's measured numerics, which
 `exact` and `equivalent` split on, so there the filter applies only to a `tolerant` policy with `verify` 0; the other
 jobs are looked up by the worker after its load (a pydra follow-up: look up before loading, RFC 0005 §4.3). A job pydra

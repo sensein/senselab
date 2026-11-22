@@ -59,16 +59,22 @@ class Served:
 
 @contextlib.contextmanager
 def served(
-    tmp_path: Path, profile: ExecutionProfile = POOL_PROFILE, workers: int = 1, store: Path | None = None
+    tmp_path: Path,
+    profile: ExecutionProfile = POOL_PROFILE,
+    workers: int = 1,
+    store: Path | None = None,
+    *,
+    here: bool = True,
 ) -> Iterator[tuple[PoolSession, Served]]:
     """Open a session over `tmp_path` whose pool workers run here, `workers` of the first class, closed after.
 
-    Its results are in the store at `store` (`<tmp_path>/store` when None). The process model caches are emptied
+    Its results are in the store at `store` (`<tmp_path>/store` when None). `here` false makes the session one whose
+    workers its coordinator treats as on other hosts, as a Slurm pool's are. The process model caches are emptied
     before and after, so a test's loads are its own.
     """
     release_process_caches()
     root = store if store is not None else tmp_path / "store"
-    session = PoolSession(profile, tmp_path / "session", root, substrate=ExternalSubstrate())
+    session = PoolSession(profile, tmp_path / "session", root, substrate=ExternalSubstrate(), here=here)
     pool = Served(session)
     for _ in range(workers):
         pool.serve()
