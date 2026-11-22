@@ -9,7 +9,6 @@ from pool_stack_fixture import host_env, registry, scoring
 from senselab_core.kernel.declare import BackendSpec
 from senselab_core.runtime.execution.executor import FaultRecord
 from senselab_core.runtime.execution.providers import Loader, SenselabHost
-from senselab_core.runtime.execution.warm import classify
 from senselab_core.runtime.execution.workers import WorkerLoadFailed, loaded
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.worker_client import WorkerFatal
@@ -97,6 +96,9 @@ def test_a_device_the_env_cannot_use_moves_the_job_and_records_no_unfit_load(kin
     The pool then moves the job up its ladder or fails it `Unplaceable` at once, instead of charging the residency
     an infrastructure fault per load until it is held, and records no out-of-memory unfit load.
     """
+    pytest.importorskip("pydra")
+    from senselab_core.runtime.execution.warm import classify  # noqa: PLC0415 - the pool classifier needs pydra
+
     fault = classify(
         KINDS[kind](DeviceUnusable("device cuda was granted, and this env's torch is a CPU build")), "load"
     )

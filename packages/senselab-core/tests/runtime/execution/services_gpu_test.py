@@ -45,6 +45,7 @@ def test_two_plans_share_one_pii_server_and_a_new_config_is_another_service(
         profile.env_root("server"),
         settings=profile.envs,
         lease=profile.lease,
+        device="cuda",
     )
     entry = Catalogue.load(DATA / "catalogue.yaml").default("pii_spans")
     model = ResolvedModel(ref=ModelRef(source="hf", id=entry.id, ref=entry.revision), identity=entry.revision)
