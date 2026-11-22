@@ -4,6 +4,8 @@
 # `gpu:h100` class (`gres: gpu:h100:1`, `max_workers: 1`, its partition). Without LOCAL, this CPU job is the
 # coordinator and the pool's `SlurmSubstrate` submits the H100 worker as its own job (`--gres=gpu:h100:1`, no QOS);
 # with LOCAL=1, run in a one-H100 allocation, the worker is a process of that allocation: the one-GPU scale case.
+# This is the one step that keeps the site profile's Slurm substrate for a pool; the pool root is under the job's
+# cache on scratch ($WORK/cache), which every node reaches.
 # Submit (placeholders, P-28):
 #   sbatch --partition="$CPU_PARTITION" --cpus-per-task=4 --mem=16G --time=02:00:00 \
 #          --job-name=orcd-pool --output="$WORK_ROOT/orcd-pool-%j.out" \
@@ -20,6 +22,7 @@
 SCRIPTS_DIR="${SCRIPTS_DIR:?SCRIPTS_DIR is not set}"
 source "$SCRIPTS_DIR/lib.sh"
 orcd_setup "pool${LOCAL:+-local}" "gpu:h100"
+export SENSELAB_CACHE="$WORK/cache"
 AUDIO="$WORK/audio"
 ITEMS="${ITEMS:-200}"
 uv run --no-sync python - "$AUDIO" "$ITEMS" <<'EOF'

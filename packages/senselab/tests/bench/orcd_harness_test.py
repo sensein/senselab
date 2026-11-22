@@ -599,6 +599,51 @@ def test_profile_refuses_a_class_whose_time_passes_its_partition(
 
 
 @pytest.mark.logic
+def test_profile_makes_a_local_substrate_copy_with_its_own_no_progress_bound(tmp_path: Path) -> None:
+    """`--substrate local` turns the site's Slurm substrate into a local one; `--no-progress-s` sets the run bound."""
+    src = tmp_path / "site.yaml"
+    src.write_text(
+        "resource_classes: {}\npool:\n  no_progress_s: 7200\nsubstrate:\n  kind: slurm\n  qos_cpu_cap: 64\n"
+        "  exclude_nodes: [n1]\n  placement_hook:\n  placement_hook_s: 1\n"
+        "  commands: {timeout_s: 60, attempts: 3, retry_first_s: 0.5}\n"
+    )
+    out = tmp_path / "profile.yaml"
+    assert (
+        _drive("profile", "--src", str(src), "--out", str(out), "--substrate", "local", "--no-progress-s", "600") == 0
+    )
+    written = orcd_driver.load_yaml(out, "profile")
+    assert written["substrate"] == {"kind": "local", "placement_hook": None, "placement_hook_s": 1}
+    assert written["pool"]["no_progress_s"] == 600  # noqa: PLR2004 - the value passed
+    assert _drive("profile", "--src", str(src), "--out", str(out)) == 0
+    assert orcd_driver.load_yaml(out, "profile")["substrate"]["kind"] == "slurm"
+
+
+@pytest.mark.logic
+def test_every_test_tier_keeps_its_files_on_scratch_and_streams_warnings() -> None:
+    """A pytest of a tier script puts its temporary tree under $WORK and logs WARNING live; the cache is the job's."""
+    seen = 0
+    for script in sorted(STEPS.glob("step-*.sh")):
+        commands = _commands(script)
+        for command in commands:
+            if "uv run --no-sync pytest " in command and "--collect-only" not in command:
+                seen += 1
+                assert '--basetemp="$WORK/pytest-' in command, f"{script.name}: {command[:80]}"
+                assert "-o log_cli=true --log-cli-level=WARNING" in command, f"{script.name}: {command[:80]}"
+                assert 'export SENSELAB_CACHE="$WORK/cache"' in commands, script.name
+    assert seen >= 1
+
+
+@pytest.mark.logic
+def test_the_test_tiers_run_on_a_local_substrate_and_only_the_pool_step_on_slurm() -> None:
+    """The suite's pool jobs run inside the job's own allocation; step-pool alone may submit its worker to Slurm."""
+    setup = re.compile(r"^orcd_setup (\S+) (\S+)(?: (\S+))?")
+    tiers = [c for c in _commands(STEPS / "step-5.sh") if c.startswith("orcd_setup ")]
+    assert [m.group(3) for c in tiers if (m := setup.match(c))] == ["local"]
+    pool = [c for c in _commands(STEPS / "step-pool.sh") if c.startswith("orcd_setup ")]
+    assert [m.group(3) for c in pool if (m := setup.match(c))] == [None]
+
+
+@pytest.mark.logic
 def test_get_prints_a_dotted_value_and_prefix_names_the_runs_jobs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

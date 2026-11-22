@@ -3,8 +3,11 @@
 # build of every shipped env lock. MODE=cpu runs on a CPU node, MODE=gpu on a typed H100 node (the `gpu` tests run only
 # there). Tiers run one pytest each (logic, contract, limits, usecase, env; TIERS overrides, space-separated), so a
 # failing tier does not hide the next and each tier has its own junit file. The model tiers read SENSELAB_TEST_PROFILE
-# (this script sets it to the job's copy of the site profile) and build their envs under $WORK_ROOT/envs-<sha>. Never
-# `-n`: every xdist worker would load the ML stack again.
+# (this script sets it to the job's copy of the site profile, its substrate made local so that a pool job's worker is a
+# process of this allocation) and build their envs under $WORK_ROOT/envs-<sha>. pytest's temporary tree, and with it
+# every pool root a test opens, is under $WORK (`--basetemp`), the cache is the job's own, and WARNING records stream to
+# the job log, so a test that a timeout kills still shows the pool's warnings. Never `-n`: every xdist worker would load
+# the ML stack again. NO_PROGRESS_S (optional) bounds a run whose pool gives no outcome inside a test's budget.
 # Submit (placeholders, P-28; one job per MODE):
 #   sbatch --partition="$CPU_PARTITION" --cpus-per-task=8 --mem=48G --time=04:00:00 --job-name=orcd-step5-cpu \
 #          --output="$WORK_ROOT/orcd-step5-cpu-%j.out" \
@@ -27,7 +30,8 @@ source "$SCRIPTS_DIR/lib.sh"
 MODE="${MODE:?MODE is cpu or gpu}"
 case "$MODE" in cpu | gpu) ;; *) echo "MODE is cpu or gpu" >&2; exit 2 ;; esac
 if [ "$MODE" = gpu ]; then nvidia-smi -L | grep -q H100 || { echo "this allocation has no H100" >&2; exit 2; }; fi
-orcd_setup "5-$MODE" "-"
+orcd_setup "5-$MODE" "-" local
+export SENSELAB_CACHE="$WORK/cache"
 TIERS="${TIERS:-logic contract limits usecase env}"
 set +e
 if [ "${SKIP_ENVS:-}" != 1 ]; then
@@ -43,6 +47,7 @@ for tier in $TIERS; do
   [ "$MODE" = gpu ] && nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader | sed "s/^/tier $tier: gpu holder before start: /"
   echo "tier $tier: start $(date +%T)"
   uv run --no-sync pytest packages -m "$tier" -p no:cacheprovider -q -rs --durations=15 \
+    --basetemp="$WORK/pytest-$tier" -o log_cli=true --log-cli-level=WARNING \
     --junitxml="$OUT/junit-$tier.xml" 2>&1 | tee "$OUT/pytest-$tier.log"
   STATUS=${PIPESTATUS[0]}
   echo "tier $tier: pytest exit $STATUS at $(date +%T)"

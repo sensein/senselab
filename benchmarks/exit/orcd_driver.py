@@ -88,8 +88,21 @@ def slurm_limit_s(partition: str) -> float | None:
 
 
 def cmd_profile(args: argparse.Namespace) -> int:
-    """Copy the site profile to `--out`; refuse a checked class whose time_s passes its partition's limit."""
+    """Copy the site profile to `--out`; refuse a checked class whose time_s passes its partition's limit.
+
+    `--substrate local` makes the copy's workers processes of this job (its Slurm keys dropped); `--no-progress-s`
+    sets the copy's `pool.no_progress_s`.
+    """
     document = load_yaml(args.src, "site profile")
+    if args.substrate == "local":
+        site = document["substrate"]
+        document["substrate"] = {
+            "kind": "local",
+            "placement_hook": site.get("placement_hook"),
+            "placement_hook_s": site["placement_hook_s"],
+        }
+    if args.no_progress_s is not None:
+        document["pool"]["no_progress_s"] = args.no_progress_s
     classes = document["resource_classes"]
     chosen = set(args.classes.split(",")) if args.classes else set(classes)
     refused = []
@@ -581,6 +594,8 @@ def build_parser() -> argparse.ArgumentParser:
         ("--out", path),
         ("--classes", {}),
         ("--worker-time-s", {"type": float}),
+        ("--substrate", {"choices": ["local"]}),
+        ("--no-progress-s", {"type": float}),
     )
     add(
         "identity",
