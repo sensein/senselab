@@ -26,18 +26,36 @@ POOL_PROFILE = ExecutionProfile.load(
 
 
 class Served:
-    """Pool workers of a session run on threads of this process, started by `serve`, joined by `close`."""
+    """Pool workers of a session run on threads of this process, started by `serve`, stopped by `close`.
+
+    Each class `serve` was called with is kept: while a queue of the class has waiting tickets and no worker of the
+    class is live, a watcher thread starts another.
+    """
 
     def __init__(self, session: PoolSession) -> None:
         """Serve `session`'s pool."""
         self.session = session
         self.threads: list[threading.Thread] = []
+        self.workers: list[Worker] = []
         self.codes: list[int] = []
+        self.kept: dict[str, WorkerClass] = {}
+        self._live: dict[str, threading.Thread] = {}
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._watcher: threading.Thread | None = None
 
     def serve(self, name: str | None = None) -> None:
-        """Start one worker of class `name` (the profile's first) on a thread; it exits once idle."""
+        """Start one worker of class `name` (the profile's first) on a thread and keep the class served."""
         classes = {c.name: c for c in worker_classes(self.session.profile)}
         cls: WorkerClass = classes[name] if name is not None else next(iter(classes.values()))
+        with self._lock:
+            self.kept[cls.name] = cls
+            self._start(cls)
+            if self._watcher is None:
+                self._watcher = threading.Thread(target=self._watch, name="pool-watcher", daemon=True)
+                self._watcher.start()
+
+    def _start(self, cls: WorkerClass) -> None:
         worker = Worker(
             self.session.pool.root,
             cls,
@@ -47,12 +65,39 @@ class Served:
         )
         thread = threading.Thread(target=lambda: self.codes.append(worker.run()), name=f"pool-worker-{cls.name}")
         thread.start()
+        self.workers.append(worker)
         self.threads.append(thread)
+        self._live[cls.name] = thread
+
+    def waiting(self, name: str) -> int:
+        """Return an upper bound on the tickets of class `name`'s queues without a final outcome for every job."""
+        root = self.session.pool.pool
+        return sum(root.depth(q) for q in root.queues() if q == name or q.startswith(name + "#"))
+
+    def _watch(self) -> None:
+        poll_s = self.session.profile.pool.poll_s
+        while not self._stop.wait(poll_s):
+            with self._lock:
+                if self._stop.is_set():
+                    return
+                for name, cls in self.kept.items():
+                    if not self._live[name].is_alive() and self.waiting(name) > 0:
+                        self._start(cls)
+
+    def stop_watching(self) -> None:
+        """Stop starting workers; return once the watcher has exited."""
+        with self._lock:
+            self._stop.set()
+        if self._watcher is not None:
+            self._watcher.join()
 
     def close(self) -> None:
-        """Wait for every worker to exit: once idle, within its idle polls and one lease's staleness."""
+        """Stop the watcher, then every worker: each exits once its current claim ends."""
+        self.stop_watching()
+        for worker in self.workers:
+            worker.stop.set()
         profile = self.session.profile
-        bound = profile.pool.idle_polls * profile.pool.poll_s + profile.lease.stale_after_s
+        bound = profile.pool.poll_s + profile.lease.stale_after_s
         for thread in self.threads:
             thread.join(bound)
 
@@ -81,6 +126,7 @@ def served(
     try:
         yield session, pool
     finally:
+        pool.stop_watching()
         session.close()
         pool.close()
         release_process_caches()
