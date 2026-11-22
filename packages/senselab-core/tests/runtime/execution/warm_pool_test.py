@@ -110,6 +110,20 @@ def test_two_calls_without_a_session_load_the_model_once(tmp_path: Path, planted
     assert _loads(tmp_path) == 1
 
 
+def test_a_run_whose_every_job_is_a_store_hit_sends_nothing_to_the_pool(tmp_path: Path, planted: Path) -> None:
+    """A second run of done jobs, on a session with no worker, is served by its coordinator: each a `cache_hit`."""
+    with packaged(registry(TASK, worker=BACKEND), tmp_path / "cache"):
+        with served(tmp_path / "first", store=tmp_path / "store") as (session, _):
+            placed, values = planned(TASK, PROFILE, ["a", "b", "b"])
+            assert start(placed, session, values=values).wait(timeout=120).done
+        with served(tmp_path / "second", store=tmp_path / "store", workers=0) as (session, _):
+            again, values = planned(TASK, PROFILE, ["b", "a"])
+            run = start(again, session, values=values)
+            assert run.wait(timeout=60).done
+    assert _kinds(run.run_dir) == ["cache_hit", "cache_hit"] and _loads(tmp_path) == 1
+    assert not [e for e in read_events(run.run_dir) if e.kind == "started"]
+
+
 def test_explicit_values_and_the_site_hook_are_the_worker_classes_a_run_opens(tmp_path: Path, planted: Path) -> None:
     """A run's explicit time and its hook's worker cap place its default session's class; another session is refused."""
     two = RESIDENT.model_copy(

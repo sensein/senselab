@@ -249,17 +249,40 @@ def ranked(
     return found
 
 
-def admits(store: PortableStore, key: str, here: ExecutionContext, run: RunConfig, backend: str) -> bool:
-    """Whether `store` would serve the job of key digest `key` in `here` under `run`: its first admitted entry serves.
+def serving(  # noqa: PLR0913 - the store and key, then the job's context, run, backend and classes
+    store: PortableStore,
+    key: str,
+    here: ExecutionContext,
+    run: RunConfig,
+    backend: str,
+    equivalence: Equivalence = NO_EQUIVALENCE,
+) -> Candidate | None:
+    """Return the entry `store` would serve the job of key digest `key` in `here` under `run`, or None.
 
-    Only each entry's `context.json` is read.
+    The first admitted entry is the one a lookup takes; it is served unless the run refuses its license or samples it
+    for verification. Only each entry's `context.json` is read.
     """
-    found = ranked(store.stored(key), here, ReusePolicy(run.reuse), backend, store.reuse.equivalence(NO_EQUIVALENCE))
+    found = ranked(store.stored(key), here, ReusePolicy(run.reuse), backend, store.reuse.equivalence(equivalence))
     if not found:
-        return False
+        return None
     first = found[0]
     entry = StoredContext(first.entry.fingerprint, stored_context(first.context), ReusePolicy(first.admitted_by))
-    return servable(run, key, here, entry) is Servable.SERVE
+    return first if servable(run, key, here, entry) is Servable.SERVE else None
+
+
+def admits(store: PortableStore, key: str, here: ExecutionContext, run: RunConfig, backend: str) -> bool:
+    """Whether `store` would serve the job of key digest `key` in `here` under `run` (`serving`)."""
+    return serving(store, key, here, run, backend) is not None
+
+
+def entry_outputs(store: PortableStore, entry: Any) -> dict[str, object]:  # noqa: ANN401 - a pydra EntryRef
+    """Return the stored outputs of `entry`, as a job's one output holds them.
+
+    Raises:
+        OSError, ValueError: the entry cannot be read.
+    """
+    outputs = store.read(entry, None).outputs
+    return dict(outputs[OUTPUTS] if isinstance(outputs, Mapping) else getattr(outputs, OUTPUTS))
 
 
 class SenselabReuse:
@@ -396,9 +419,19 @@ def record_execution(
     provenance.write(_run_dir(ref.plan_hash))
 
 
-def record_reuse(doc: JobDoc, stored: ExecutionContext, outputs: Mapping[str, object], policy: ReusePolicy) -> None:
-    """Write the `senselab:Reuse` of serving a stored entry for `doc`'s job to its run's provenance."""
-    key, current = doc.key, doc.execute_context()
+def record_reuse(
+    doc: JobDoc,
+    stored: ExecutionContext,
+    outputs: Mapping[str, object],
+    policy: ReusePolicy,
+    current: ExecutionContext | None = None,
+) -> None:
+    """Write the `senselab:Reuse` of serving a stored entry for `doc`'s job to its run's provenance.
+
+    `current` is the context the entry was admitted for: where the job would run (`execute_context`) when None.
+    """
+    key = doc.key
+    current = current if current is not None else doc.execute_context()
     identity = output_identity(dict(outputs))
     agent, stored_agent = agent_record(key, current), agent_record(key, stored)
     own: dict[str, object] = {

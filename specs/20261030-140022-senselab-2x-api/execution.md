@@ -723,6 +723,16 @@ run's attempts are ordered by their ordinal; the pool's coordinator epoch is the
 pool root; a second waits), and a fenced coordinator's jobs are `NotRun(held=True)`. A held job leaves the run
 interrupted (`QueueHeld` raised after the loop). `Run.wait` stops waiting once the run's pool has no live coordinator.
 
+**Store hits are served by the coordinator** (fix round 1). Before a round's jobs are submitted, the driver asks the
+store which it would serve (`portable.serving`, the rank and verdict the worker's reuse rule applies) and serves those
+itself, writing their `senselab:Reuse`; only misses and sampled hits (VERIFY) reach the pool, so an all-hit resume
+starts no worker and loads no model. A job's context is measured where it runs, so the coordinator looks up in it only
+where it knows it: on a `local` substrate the workers run on its host, and it builds the execute context itself. On any
+other substrate the declared context (device kind and precision) can differ from the worker's measured numerics, which
+`exact` and `equivalent` split on, so there the filter applies only to a `tolerant` policy with `verify` 0; the other
+jobs are looked up by the worker after its load (a pydra follow-up: look up before loading, RFC 0005 §4.3). A job pydra
+settles as the twin of another of its key is served the entry that job committed, exact, wherever it runs.
+
 **Placement.** A run's explicit placement values and the site's hook are resolved once, when the run starts, for each
 class its plan uses (fix round 1). A pydra pool fixes its worker classes when it opens, so the resolved values (partition,
 time, worker cap, excluded nodes) are applied by opening the session with them: the process's default session is keyed by

@@ -23,11 +23,13 @@ from senselab_core.kernel.results import TextSpans
 from senselab_core.runtime.call import Packaged, Result, TaskCall, use_packaged
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution.calls import CallFailed, call
+from senselab_core.runtime.execution.providers import Loader, server_of
 from senselab_core.runtime.execution.warm import PoolSession
+from senselab_core.runtime.execution.workers import WorkerLoadFailed, service_of, start_vllm
 from senselab_core.runtime.hardware import GpuInfo, HardwareInfo
 from senselab_core.runtime.licenses import packaged_lock_records
 from senselab_core.runtime.profiles import ExecutionProfile, resolve_execution
-from senselab_core.runtime.vllm_server import VllmServer, config_digest, server_args
+from senselab_core.runtime.vllm_server import AttestationMismatch, VllmServer, config_digest, server_args
 from senselab_core.testing.contracts import contract_cases
 from senselab_core.testing.processes import group_gone
 from senselab_core.testing.workers import RealWorkers
@@ -192,6 +194,28 @@ def test_call_serves_spans_through_the_server_and_records_its_attestation(
     assert first.context.driver["model_identity"] == ENTRY.revision and first.context.driver["engine"] == "vllm"
     second = _run(_call(), execution=profile, store=tmp_path / "results")
     assert second.reused is not None and second.context == first.context
+
+
+@pytest.mark.logic
+def test_a_store_hit_starts_no_server_and_a_mismatching_attestation_refuses(
+    served: Registry, fake_env: EnvHandle, tmp_path: Path
+) -> None:
+    """A store hit is served by the coordinator, so no server starts; a started one must attest the lock."""
+    profile, store = _profile(tmp_path, "vllm"), tmp_path / "results"
+    first = _run(_call(), execution=profile, store=store)
+    assert _starts(tmp_path) == 1
+    (tmp_path / "fake2").mkdir()
+    _knob(tmp_path, FAKE_VLLM_DIR=str(tmp_path / "fake2"))
+    served.opened.append(_make_env(tmp_path, "env2"))  # type: ignore[attr-defined]
+    assert _run(_call(), execution=profile, store=store).reused is not None
+    assert not list((tmp_path / "fake2").glob("*.json"))
+    _knob(tmp_path, FAKE_VLLM_VERSION="9.9.9")
+    backend = first.placement.backend
+    model = ResolvedModel(ref=ModelRef.parse(f"{ENTRY.id}@{ENTRY.revision}"), identity=ENTRY.revision)
+    loader = Loader(backend, _make_env(tmp_path, "env3"), model, "cpu", profile, service_of(backend, model))
+    with pytest.raises(WorkerLoadFailed) as refused:
+        server_of(loader, start_vllm)
+    assert isinstance(refused.value.__cause__, AttestationMismatch) and "9.9.9" in str(refused.value.__cause__)
 
 
 @pytest.mark.logic

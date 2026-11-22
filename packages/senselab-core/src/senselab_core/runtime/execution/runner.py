@@ -4,15 +4,17 @@
 graph node (a `map` edge reads the row, so every mapped node shares the one record axis, and a node with several
 mapped upstreams is split over them zipped), and, for each node a `gather` edge reads, a copy of it combined over the
 rows. Each node's checksum is the job's senselab key digest (`job_checksum`), so pydra hashes no senselab code.
-The runner drives pydra's `GraphRunner` from outside (RFC 0002 §3.5) on one thread: each round's ready jobs become
-pool jobs (`prepare`), submitted to the session's `WarmPool` in one `submit`; the pool's follower hands each outcome to
-the driver thread through a queue, and the driver alone calls the `GraphRunner`. A job pydra settles as the twin of
-another job of its key is sent again, to be served by the store as a reuse. The `GraphRunner`'s store is
+The runner drives pydra's `GraphRunner` from outside (RFC 0002 §3.5) on one thread: each round's ready jobs are formed
+(`prepare`); those the store would serve are served by the driver, and the rest become pool jobs submitted to the
+session's `WarmPool` in one `submit`, so a store hit starts no worker. The pool's follower hands each outcome to the
+driver thread through a queue, and the driver alone calls the `GraphRunner`. A job pydra settles as the twin of another
+job of its key is served the entry that job committed, as an exact reuse. The `GraphRunner`'s store is
 `SenselabStore`, the run's completion records in memory; results live in the session's store. Each attempt has a
 pydra root of its own, `<work dir>/<attempt>`.
 """
 
 import contextlib
+import logging
 import queue
 import threading
 import typing
@@ -48,7 +50,16 @@ from senselab_core.runtime.execution.executor import (
 from senselab_core.runtime.execution.fragments import fragment_jobs, job_checksum, node_fragment, plan_keys
 from senselab_core.runtime.execution.job import code_license, job_context, resolved, stale, used
 from senselab_core.runtime.execution.outputs import decoded
-from senselab_core.runtime.execution.portable import OUTPUTS, JobDoc, read_outputs
+from senselab_core.runtime.execution.portable import (
+    OUTPUTS,
+    JobDoc,
+    entry_outputs,
+    read_entry,
+    read_outputs,
+    record_reuse,
+    serving,
+    stored_context,
+)
 from senselab_core.runtime.execution.providers import Loader
 from senselab_core.runtime.execution.run import PYDRA_DIR
 from senselab_core.runtime.execution.warm import PoolSession, item_failure
@@ -60,6 +71,8 @@ from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.revision import attempt_scope
 from senselab_core.runtime.storage import PRIVATE_DIR, private_dir
 from senselab_core.runtime.store import output_identity
+
+logger = logging.getLogger("senselab")
 
 RECORDS = "records"
 """The pydra node split over the manifest's rows; every mapped node reads its row from it."""
@@ -544,11 +557,55 @@ class _Driver:
                     ResultRef(job=self._job_ref(batch.node, element), key_digest=job.checksum, failure=made),
                 )
                 continue
-            doc, pool_job = made
+            doc, loader = made
+            hit = self._served(doc, batch.served)
+            if hit is not None:
+                self._given(graph, batch, hit)
+                continue
+            pool_job = self.session.job(doc, loader, f"{batch.node}-{doc.key.digest()[:12]}")
             self.log("started", batch.node, element, key=doc.key.digest())
             self.sent[pool_job] = _Sent(batch, element, doc)
             formed.append(pool_job)
         return formed
+
+    def _served(self, doc: JobDoc, twin: bool) -> ResultRef | None:
+        """Return the result the store serves `doc`'s job here, its reuse recorded, or None to send it to the pool.
+
+        A twin is served the entry its run's first job of the key committed, exact. Any other job is looked up in the
+        context it would run in, which the coordinator knows on a local substrate (its workers run on this host); on
+        any other substrate only under a `tolerant` policy with no verify sampling, the one rule no measured numerics
+        decide, against the declared context.
+        """
+        store, key = self.session.store, doc.key.digest()
+        if twin:
+            first = self.first.get(key)
+            found = (
+                None
+                if first is None or first.output_identity is None
+                else read_entry(store, key, first.output_identity)
+            )
+            if found is None:
+                return None
+            outputs, stored = found
+            record_reuse(doc, stored, outputs, ReusePolicy.EXACT, current=stored)
+            return served_ref(doc, outputs, ReusePolicy.EXACT.value)
+        if self.session.profile.substrate.kind == "local":
+            here = doc.execute_context()
+        elif ReusePolicy(doc.run.reuse) is ReusePolicy.TOLERANT and doc.run.verify == 0:
+            here = doc.context
+        else:
+            return None
+        candidate = serving(store, key, here, doc.run, doc.key.backend, doc.equivalence)
+        if candidate is None:
+            return None
+        try:
+            outputs = entry_outputs(store, candidate.entry)
+        except (OSError, ValueError) as err:
+            logger.warning("the stored entry of %s was not read; the job is sent to the pool: %s", key, err)
+            return None
+        policy = ReusePolicy(candidate.admitted_by)
+        record_reuse(doc, stored_context(candidate.context), outputs, policy, current=here)
+        return served_ref(doc, outputs, policy.value)
 
     def _row(self, job: Job) -> Result:
         """Return the result of a `records` job: its row."""
@@ -751,13 +808,18 @@ def ref_of(sent: _Sent, outcome: object) -> ResultRef:
         failure = item_failure(text) or FaultRecord.from_pool({"kind": "content", "message": last}, "TaskError")
         return ResultRef(job=ref, key_digest=key, failure=failure)
     outputs = dict(getattr(outcome.outputs, OUTPUTS))
-    read = decoded(doc.job.call.task, outputs)
     hit = outcome.committed is None or outcome.committed.served
     served = (doc.run.reuse.value if outcome.cross_context else ReusePolicy.EXACT.value) if hit else None
+    return served_ref(doc, outputs, served)
+
+
+def served_ref(doc: JobDoc, outputs: Mapping[str, object], served: str | None) -> ResultRef:
+    """Return the `ResultRef` of `doc`'s job given `outputs`: their identity and lengths, `served` by that policy."""
+    read = decoded(doc.job.call.task, outputs)
     return ResultRef(
-        job=ref,
-        key_digest=key,
-        output_identity=output_identity(outputs),
+        job=doc.ref,
+        key_digest=doc.key.digest(),
+        output_identity=output_identity(dict(outputs)),
         served=served,
         lengths_ns={p: n for p, v in read.items() if (n := recording_span_ns(v)) is not None},
     )
@@ -781,8 +843,8 @@ def prepare(  # noqa: PLR0913 - the fragment and the run it is of
     run: RunConfig,
     session: PoolSession,
     attempt: str,
-) -> list[tuple[JobDoc, object] | FaultRecord]:
-    """Return, per job of `fragment`, its `JobDoc` and pool job, or the failure that keeps it from the pool.
+) -> list[tuple[JobDoc, Loader] | FaultRecord]:
+    """Return, per job of `fragment`, its `JobDoc` and the loader of its model worker, or the failure that keeps it.
 
     The backend's env is opened and its license checked once; each job's upstream inputs are read from the session's
     store, its stamps checked, its formation picked by its length and its key and lookup context built.
@@ -799,7 +861,7 @@ def prepare(  # noqa: PLR0913 - the fragment and the run it is of
     expected = service_of(backend, call.model)
     grid = BucketGrid.load_default()
     store = session.store
-    made: list[tuple[JobDoc, object] | FaultRecord] = []
+    made: list[tuple[JobDoc, Loader] | FaultRecord] = []
     for given in jobs:
         job, unread = resolved(
             replace(given, call=replace(given.call, service=expected)), lambda k, o: read_outputs(store, k, o)
@@ -825,8 +887,7 @@ def prepare(  # noqa: PLR0913 - the fragment and the run it is of
             used=used(job),
             attempt=attempt,
         )
-        loader = Loader(backend, env, call.model, keyed.device, profile, expected)
-        made.append((doc, session.job(doc, loader, f"{fragment.node}-{doc.key.digest()[:12]}")))
+        made.append((doc, Loader(backend, env, call.model, keyed.device, profile, expected)))
     return made
 
 
