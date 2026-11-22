@@ -469,8 +469,9 @@ def _ensure_blob(  # noqa: PLR0913 - the per-file step of _fetch_into, passed th
 ) -> tuple[Path, BlobStamp | None]:
     """Return `blobs/<sha256>` holding the file's bytes, and the stamp of the inode this call verified there.
 
-    A download is written and hashed through one descriptor in a private staging directory and linked from
-    there. The stamp is None when the name no longer holds the verified inode, so no marker trusts it.
+    A download is written, fsynced and hashed through one descriptor in a private staging directory and linked
+    from there. The stamp is read from `blobs/<sha256>` after that descriptor is closed and the staged name removed;
+    it is None when the name no longer holds the verified inode, so no marker trusts it.
     """
     blob = blobs.path / file.sha256
     stamp = _verified_stamp(blobs, file.sha256, recorded, verify)
@@ -500,9 +501,9 @@ def _ensure_blob(  # noqa: PLR0913 - the per-file step of _fetch_into, passed th
                         return blob, kept[-1]
                     private.remove_owned(STAGED_BLOB, pattern=STAGED_NAME)
                     written = os.fstat(out.fileno())
-                    now = blobs.lstat(file.sha256)
+                now = blobs.lstat(file.sha256)
             same = now is not None and (now.st_dev, now.st_ino) == (written.st_dev, written.st_ino)
-            return blob, _stamp(written) if same else None
+            return blob, _stamp(now) if now is not None and same else None
         except _SourceError as err:
             tried.append(f"{url} ({err})")
     raise FetchError(

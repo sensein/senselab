@@ -15,7 +15,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import IO, Any, BinaryIO
 
 import pytest
 import yaml
@@ -400,6 +400,43 @@ def test_size_mode_skips_rehash_and_full_mode_catches_same_size_corruption(
         paths = fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}), verify="full")
     assert paths["a/voice.wav"].read_bytes() == PAYLOAD
     assert _rehashed(caplog)
+
+
+class _MovedAtClose:
+    """A downloaded blob's file object whose close first moves the file's mtime, as an NFS server can at close."""
+
+    def __init__(self, handle: IO[bytes]) -> None:
+        self._handle = handle
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._handle, name)
+
+    def __enter__(self) -> "_MovedAtClose":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        st = os.fstat(self._handle.fileno())
+        os.utime(self._handle.fileno(), ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+        self._handle.close()
+
+
+@pytest.mark.logic
+def test_a_blob_is_stamped_after_its_file_is_closed(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The recorded stamp is the blob's metadata after close, so a change made at close is not a later re-hash."""
+    real = os.fdopen
+
+    def fdopen(fd: int, mode: str = "r", *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401 - os.fdopen's shape
+        handle = real(fd, mode, *args, **kwargs)
+        return _MovedAtClose(handle) if mode == "w+b" else handle
+
+    monkeypatch.setattr(os, "fdopen", fdopen)
+    fetch(_manifest(), cache_root=tmp_path, opener=_opener({"https://x/a.wav": PAYLOAD}))
+    monkeypatch.undo()
+    with caplog.at_level("DEBUG", logger="senselab"):
+        fetch(_manifest(), cache_root=tmp_path, opener=_opener({}))
+    assert _rehashed(caplog) == []
 
 
 @pytest.mark.contract
