@@ -719,7 +719,10 @@ for the plan's profile and store (`warm.default_session`, fix round 1 owner ruli
 `<cache root>/2x/pools/<pid>-<token>`, closed at exit by the process that opened it. Every call (`calls.call`, the facade)
 takes the same path, so successive calls in one process load a model once; a worker stays for the profile's idle window
 (`idle_polls × poll_s`, 300 s on `laptop`). Fix round 2: a process holds at most one default session; a run of
-another profile, store or worker classes (a changed hook answer, say) closes it and opens another. The opener's pid is
+another profile, store or worker classes (a changed hook answer, say) retires it and opens another. Fix round 3: each
+run started without a session counts as live on its default session until it ends (`release_default`); a retired
+session takes no new run and is closed when its last live run ends, or at exit. The open happens under the lock, so
+callers that first use a key at once share the one session it opens. The opener's pid is
 recorded: the exit hook closes the session only in that process, and a forked child drops the inherited one without
 closing it (`os.register_at_fork`), so a call in the child opens its own and the child's exit stops none of the
 parent's workers. The manifest names the store and the pool. A

@@ -2,6 +2,7 @@
 
 import json
 import os
+import threading
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -161,6 +162,47 @@ def test_a_process_holds_one_default_session_and_closes_the_one_it_replaces(tmp_
         call(TaskCall.model_validate({"task": TASK.name, "inputs": {"text": "b"}}), profile=two)
         [second] = warm._DEFAULTS.values()
     assert second is not first and first.pool._closed and not second.pool._closed
+
+
+def test_a_replaced_default_session_is_closed_only_when_its_live_run_ends(
+    tmp_path: Path, planted: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A call under other worker classes retires the session a live run is on; the run ends done, then it closes."""
+    monkeypatch.setenv("SENSELAB_TEST_SLEEP_S", "1")
+    two = RESIDENT.model_copy(
+        update={"resource_classes": {"cpu": RESIDENT.resource_classes["cpu"].model_copy(update={"max_workers": 2})}}
+    )
+    with packaged(registry(TASK, worker=BACKEND), tmp_path / "cache"):
+        placed, values = planned(TASK, RESIDENT, ["a", "b", "c"])
+        live = start(placed, values=values)
+        [first] = warm._DEFAULTS.values()
+        given = call(TaskCall.model_validate({"task": TASK.name, "inputs": {"text": "d"}}), profile=two)
+        assert given.outputs["value"] == "d" and not first.pool._closed
+        assert live.wait(timeout=100).done
+        deadline = time.monotonic() + 10
+        while not first.pool._closed and time.monotonic() < deadline:
+            time.sleep(0.05)
+    assert first.pool._closed and _kinds(live.run_dir) == ["finished"] * 3
+
+
+def test_callers_that_first_use_a_key_at_once_share_one_opened_session(tmp_path: Path, planted: Path) -> None:
+    """Threads making their first call at once open one default session between them, and no other pool root."""
+    gate = threading.Barrier(4)
+    given: list[object] = []
+
+    def first(text: str) -> None:
+        gate.wait()
+        given.append(call(TaskCall.model_validate({"task": TASK.name, "inputs": {"text": text}}), profile=RESIDENT))
+
+    with packaged(registry(TASK, worker=BACKEND), tmp_path / "cache"):
+        threads = [threading.Thread(target=first, args=(t,)) for t in "abcd"]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(100)
+        held = list(warm._DEFAULTS.values())
+    assert len(given) == 4 and len(held) == 1
+    assert [p.name for p in (tmp_path / "cache" / warm.POOLS_DIR).iterdir()] == [held[0].root.name]
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="fork is POSIX")

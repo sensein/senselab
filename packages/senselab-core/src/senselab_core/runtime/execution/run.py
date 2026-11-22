@@ -945,6 +945,33 @@ def _session_for(
     return session
 
 
+def _claimed(  # noqa: PLR0913 - the plan, its directories, its session and how to give the session back
+    placed: Plan,
+    run_dir: Path,
+    store: Path,
+    opened: Any,  # noqa: ANN401 - a PoolSession
+    delay: float,
+    hand_back: Callable[[], None],
+) -> tuple[str, int]:
+    """Claim the run's attempt on `opened` (`prepare`) and check its lease bound; on a refusal, call `hand_back`."""
+    try:
+        claimed = prepare(placed, run_dir, store, opened.pool.root)
+        checked_lease(opened.profile.lease, delay)
+    except BaseException:
+        hand_back()
+        raise
+    return claimed
+
+
+def _hand_back(default: Any) -> Callable[[], None]:  # noqa: ANN401 - a PoolSession
+    """Return what ends a run's use of `default`, a default session (`release_default`); nothing for a caller's."""
+    if default is None:
+        return lambda: None
+    from senselab_core.runtime.execution.warm import release_default  # noqa: PLC0415 - needs pydra
+
+    return lambda: release_default(default)
+
+
 def start(
     placed: Plan,
     session: Any = None,  # noqa: ANN401 - a PoolSession; pydra is imported only once a run starts
@@ -994,8 +1021,8 @@ def start(
     values = bind_sources(placed) if values is None else values
     placements, held = _placements(placed, values)
     opened = _session_for(session, profile, store, placements)
-    attempt, ordinal = prepare(placed, run_dir, store, opened.pool.root)
-    checked_lease(profile.lease, delay)
+    hand_back = _hand_back(opened if session is None else None)
+    attempt, ordinal = _claimed(placed, run_dir, store, opened, delay, hand_back)
     runner = PydraRunner(profile=profile, work_dir=run_dir / PYDRA_DIR)
     run = Run(run_dir, store=store, profile=profile)
     provenance = ProvStore()
@@ -1017,6 +1044,8 @@ def start(
             provenance.write(run_dir)
         except Exception as err:  # noqa: BLE001 - held for `wait`
             run.fail(err)
+        finally:
+            hand_back()
 
     run.launch(threading.Thread(target=body, name=f"senselab-run-{placed.hash[:8]}", daemon=True))
     return run
