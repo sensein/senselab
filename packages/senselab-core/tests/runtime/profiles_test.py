@@ -23,6 +23,8 @@ from senselab_core.runtime.profiles import (
     UnfilledProfile,
     UnknownProfileKey,
     UnlistedSource,
+    UnsetProfileVariable,
+    expand_profile,
     packaged_profiles,
     resolve_execution,
 )
@@ -203,24 +205,83 @@ def test_packaged_profile_comments_every_key_and_holds_no_derivations(name: str)
 
 
 @pytest.mark.logic
-def test_env_root_expands_home_and_refuses_unset_variable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """`SENSELAB_ENV_ROOT` names the fixture's roots; unset is an error; `${VAR:-fallback}` falls back."""
+def test_env_root_expands_home_and_variables_at_load(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`SENSELAB_ENV_ROOT` names the fixture's roots at load; `${VAR:-fallback}` falls back; `~` is the home."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("SCRATCH", raising=False)
     monkeypatch.setenv("SENSELAB_ENV_ROOT", str(tmp_path / "group"))
-    assert ExecutionProfile.load(CLUSTER).env_root("isolated") == tmp_path / "group"
-    assert ExecutionProfile.load(CLUSTER).env_root("server") == tmp_path / "group" / "servers"
+    loaded = ExecutionProfile.load(CLUSTER)
+    assert loaded.env_roots["isolated"] == str(tmp_path / "group")
+    assert loaded.env_root("server") == tmp_path / "group" / "servers"
     monkeypatch.delenv("SENSELAB_ENV_ROOT")
-    with pytest.raises(ValueError, match="not set"):
-        ExecutionProfile.load(CLUSTER).env_root("isolated")
     root = tmp_path / "fallback"
     fallback = {"env_roots": {"isolated": f"${{SENSELAB_ENV_ROOT:-{root}}}"}}
     assert ExecutionProfile.load(CLUSTER, fallback).env_root("isolated") == root
-    with pytest.raises(ValueError, match="not set"):
-        ExecutionProfile.load(CLUSTER, {"env_roots": {"isolated": "$SENSELAB_UNSET_ROOT/v"}}).env_root("isolated")
+    assert ExecutionProfile.load(CLUSTER, {"env_roots": {"isolated": "~/v"}}).env_root("isolated") == tmp_path / "v"
     registry = _registry(_backend("b1", "one", env=Env.isolated("x")))
     placed = resolve_execution(TASK, _entry(), ExecutionProfile.load(CLUSTER), NO_GPU, registry, CAT)
     assert "isolated:x" in placed.explain() and str(tmp_path) not in placed.record().model_dump_json()
+
+
+def _string_paths(node: Any, path: str = "") -> list[str]:  # noqa: ANN401 - any YAML node
+    """Return the key path of every string value under `node`."""
+    if isinstance(node, str):
+        return [path]
+    if isinstance(node, dict):
+        return [p for k, v in node.items() for p in _string_paths(v, f"{path}.{k}" if path else str(k))]
+    if isinstance(node, list):
+        return [p for i, v in enumerate(node) for p in _string_paths(v, f"{path}[{i}]")]
+    return []
+
+
+@pytest.mark.logic
+def test_an_unset_variable_anywhere_in_a_profile_is_refused_at_load_naming_key_and_variable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A partition naming an unset variable fails the load, not a submission minutes later; so does any other key."""
+    monkeypatch.delenv("SENSELAB_UNSET_PARTITION", raising=False)
+    gpu = {"resource_classes": {"gpu:h100": {"partition": "${SENSELAB_UNSET_PARTITION}"}}}
+    with pytest.raises(UnsetProfileVariable) as caught:
+        ExecutionProfile.load(CLUSTER, gpu)
+    assert (caught.value.key, caught.value.variable) == (
+        "resource_classes.gpu:h100.partition",
+        "SENSELAB_UNSET_PARTITION",
+    )
+    assert "SENSELAB_UNSET_PARTITION" in str(caught.value) and "gpu:h100.partition" in str(caught.value)
+    document = ExecutionProfile.load(CLUSTER).model_dump(mode="json")
+    for key in _string_paths(document):
+        planted: Any = "$SENSELAB_UNSET_PARTITION"
+        for part in reversed(key.replace("[", ".[").split(".")):
+            planted = [planted] if part.startswith("[") else {part: planted}
+        with pytest.raises(UnsetProfileVariable, match="SENSELAB_UNSET_PARTITION"):
+            expand_profile(planted)
+
+
+@pytest.mark.logic
+def test_every_variable_form_is_expanded_at_load_and_an_optional_item_is_left_out(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`${VAR}`, `$VAR` and `${VAR:-fallback}` expand; `${VAR:-}` drops a list item; `${cache_root}` stays."""
+    monkeypatch.setenv("SENSELAB_TEST_PARTITION", "p1")
+    monkeypatch.setenv("SENSELAB_TEST_EMPTY", "")
+    monkeypatch.delenv("SENSELAB_MEASURES_ROOT", raising=False)
+    override = {
+        "resource_classes": {
+            "cpu": {"partition": "${SENSELAB_TEST_PARTITION}"},
+            "gpu:h100": {"partition": "$SENSELAB_TEST_PARTITION-gpu"},
+            "gpu": {"partition": "${SENSELAB_TEST_EMPTY:-fallback}"},
+        },
+        "substrate": {"exclude_nodes": ["${SENSELAB_TEST_EMPTY:-}", "n1"]},
+    }
+    loaded = ExecutionProfile.load(CLUSTER, override)
+    partitions = {n: loaded.resource_classes[n].partition for n in ("cpu", "gpu:h100", "gpu")}
+    assert partitions == {"cpu": "p1", "gpu:h100": "p1-gpu", "gpu": "fallback"}
+    assert loaded.substrate.exclude_nodes == ("n1",)
+    assert loaded.calibration.measures_roots == ("${cache_root}/2x/measures",)
+    monkeypatch.setenv("SENSELAB_MEASURES_ROOT", str(tmp_path))
+    assert ExecutionProfile.load(CLUSTER).calibration.measures_roots[0] == str(tmp_path)
+    with pytest.raises(UnsetProfileVariable, match="SENSELAB_TEST_EMPTY"):
+        ExecutionProfile.load(CLUSTER, {"resource_classes": {"cpu": {"partition": "${SENSELAB_TEST_EMPTY}"}}})
 
 
 @pytest.mark.logic
@@ -264,7 +325,7 @@ def test_resource_class_follows_device_order_and_host() -> None:
     assert resolve_execution(TASK, _entry(), _profile(), NO_GPU, registry, CAT).resource_class == "cpu"
     cluster = ExecutionProfile.load(CLUSTER)
     scheduled = resolve_execution(TASK, _entry(), cluster, None, registry, CAT)
-    assert (scheduled.resource_class, scheduled.partition) == ("gpu:h100", "${GPU_PARTITION}")
+    assert (scheduled.resource_class, scheduled.partition) == ("gpu:h100", "cluster-gpu")
     other_gpu = GPU.__class__(**{**GPU.__dict__, "gpus": (GpuInfo(name="A100", memory_bytes=1, driver="1"),)})
     assert resolve_execution(TASK, _entry(), cluster, other_gpu, registry, CAT).resource_class == "gpu"
     cpu_only = ExecutionProfile.load(CLUSTER, {"devices": ["cpu"]})
@@ -400,7 +461,9 @@ def test_the_test_profile_is_the_site_file_untouched_or_the_fixture_with_a_temp_
     assert profile_loader().env_root("isolated") == tmp_path / "given"
     site = tmp_path / "site.yaml"
     site.write_text(
-        CLUSTER.read_text().replace("name: cluster", "name: mysite").replace("${SENSELAB_ENV_ROOT}", "/site/envs")
+        CLUSTER.read_text()
+        .replace("name: cluster", "name: mysite")
+        .replace("${SENSELAB_ENV_ROOT:-/nonexistent/senselab-test-envs}", "/site/envs")
     )
     monkeypatch.setenv("SENSELAB_TEST_PROFILE", str(site))
     loaded = profile_loader()

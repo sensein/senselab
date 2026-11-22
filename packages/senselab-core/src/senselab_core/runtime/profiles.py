@@ -30,7 +30,7 @@ from senselab_core.kernel.formats import (
     check,
 )
 from senselab_core.runtime.catalogue import Catalogue, CatalogueEntry
-from senselab_core.runtime.config import expand_variables, load_yaml, merge_over
+from senselab_core.runtime.config import load_yaml, merge_over
 from senselab_core.runtime.execution_settings import (
     CalibrationSettings,
     FaultBudgets,
@@ -49,6 +49,7 @@ from senselab_core.runtime.execution_settings import (
 )
 from senselab_core.runtime.hardware import HardwareInfo
 from senselab_core.runtime.keys import Placement
+from senselab_core.runtime.measures import CACHE_ROOT_TOKEN
 from senselab_core.runtime.network import Network
 from senselab_core.runtime.retry import RetryPolicy
 
@@ -56,6 +57,7 @@ DEFAULT_PROFILE = "laptop"
 ENV_BUILDS_BEFORE_READY: Final = 2  # invariant: the env builds a worker waits on before its ready mark
 _PROFILE_SUFFIXES = (".yaml", ".yml")
 _UNFILLED = re.compile(r"^<fill: (.+)>$")
+_VARIABLE = re.compile(r"\$\{(\w+)(:-[^}]*)?\}|\$(\w+)")
 
 
 class UnknownProfileKey(ValueError):
@@ -127,6 +129,18 @@ class IncompleteProfile(ValueError):
         self.source, self.missing = source, missing
 
 
+class UnsetProfileVariable(ValueError):
+    """A profile value names an environment variable that is unset or empty and has no `${VAR:-fallback}`."""
+
+    def __init__(self, key: str, variable: str) -> None:
+        """Name the key path and the variable."""
+        super().__init__(
+            f"profile key {key!r} names ${{{variable}}}, which is not set: export {variable}, write the value"
+            f" itself, or give a fallback as ${{{variable}:-fallback}}"
+        )
+        self.key, self.variable = key, variable
+
+
 class QosCapTooSmall(ValueError):
     """A resource class whose workers need more CPUs than the substrate's QOS CPU cap allows at all."""
 
@@ -158,8 +172,8 @@ class ExecutionProfile(Formatted):
         name: The packaged profile this was loaded from, or the file stem of a user profile.
         stack_preferences: Per task, its stacks best first.
         devices: Device kinds best first (`cuda`, `mps`, `cpu`).
-        env_roots: Per env kind (`isolated`, `server`), the directory env trees are built under;
-            `${VAR:-fallback}`, then `~` and `$VAR`, are expanded where the root is used.
+        env_roots: Per env kind (`isolated`, `server`), the directory env trees are built under; `~` is expanded
+            where the root is used.
         envs: Env settings.
         model_sources: Allowed hub organisations; None allows those of the catalogue entries.
         model_cache_budget_bytes: Cap on the model cache; None measures it (`hardware.measured_budget`).
@@ -235,6 +249,7 @@ class ExecutionProfile(Formatted):
         """Return the profile `source` names with `override` (a mapping or a YAML file) deep-merged over it.
 
         `source` is a packaged profile name (`laptop`, `slurm`), or a path to a profile file holding a whole profile.
+        Every string value of the merged mapping has its variables expanded (`expand_profile`).
 
         Raises:
             FileNotFoundError: `source` is neither a packaged profile nor a file.
@@ -242,6 +257,7 @@ class ExecutionProfile(Formatted):
             ProfileFormatRetired: the merged mapping declares a retired format.
             UnfilledProfile: a value is still a `<fill: ...>` placeholder.
             UnknownProfileKey: a key of `override` that the format does not define, naming the closest one.
+            UnsetProfileVariable: a value names a variable that is unset or empty, with no fallback.
             LeaseBoundError: two of the lease's beat intervals plus its attribute delay are not below its stale bound.
             ValueError: the merged mapping is invalid.
         """
@@ -259,7 +275,7 @@ class ExecutionProfile(Formatted):
         if unfilled:
             raise UnfilledProfile(str(merged.get("name", source)), unfilled)
         _check_keys(merged, cls.model_fields)
-        profile = cls.model_validate(merged)
+        profile = cls.model_validate(expand_profile(merged))
         profile.lease.check_bound()
         return profile
 
@@ -279,19 +295,12 @@ class ExecutionProfile(Formatted):
         return ENV_BUILDS_BEFORE_READY * (self.lease.stale_after_s + self.lease.wait_s)
 
     def env_root(self, kind: str) -> Path:
-        """Return the root for env `kind` with `${VAR:-fallback}`, then `~` and `$VAR`, expanded.
-
-        `${VAR:-fallback}` is VAR's value, or `fallback` when VAR is unset or empty.
+        """Return the root for env `kind`, `~` expanded; its variables were expanded at load.
 
         Raises:
             KeyError: the profile has no root for `kind`.
-            ValueError: the root names an unset variable.
         """
-        raw = self.env_roots[kind]
-        text = expand_variables(raw)
-        if "$" in text:
-            raise ValueError(f"env root {raw!r} names a variable that is not set")
-        return Path(text)
+        return Path(os.path.expanduser(self.env_roots[kind]))
 
     def check_source(self, model_id: str, catalogue: Catalogue) -> None:
         """Raise `UnlistedSource` unless `model_id`'s organisation is allowed.
@@ -338,6 +347,38 @@ def _unfilled(node: Any, path: str = "") -> dict[str, str]:  # noqa: ANN401 - an
     if isinstance(node, list):
         return {k: v for i, item in enumerate(node) for k, v in _unfilled(item, f"{path}[{i}]").items()}
     return {}
+
+
+def expand_profile(node: Any, key: str = "") -> Any:  # noqa: ANN401 - any YAML node
+    """Return `node` with every variable of every string value expanded from the environment.
+
+    `${VAR}` and `$VAR` are VAR's value, and `${VAR:-fallback}` VAR's value or, when VAR is unset or empty,
+    `fallback`. `${cache_root}` is left for `measures.resolve_roots`. A list item that holds a variable and expands
+    to the empty string is left out, so `${VAR:-}` is an optional item.
+
+    Raises:
+        UnsetProfileVariable: a value names a variable that is unset or empty and has no fallback, naming `key`'s path.
+    """
+    if isinstance(node, str):
+
+        def value(found: re.Match[str]) -> str:
+            name = found[1] or found[3]
+            if found[0] == CACHE_ROOT_TOKEN:
+                return found[0]
+            given = os.environ.get(name)
+            if given:
+                return given
+            if found[2] is not None:
+                return found[2][2:]
+            raise UnsetProfileVariable(key, name)
+
+        return _VARIABLE.sub(value, node)
+    if isinstance(node, Mapping):
+        return {k: expand_profile(v, f"{key}.{k}" if key else str(k)) for k, v in node.items()}
+    if isinstance(node, list):
+        items = [(item, expand_profile(item, f"{key}[{i}]")) for i, item in enumerate(node)]
+        return [new for old, new in items if not (new == "" and isinstance(old, str) and _VARIABLE.search(old))]
+    return node
 
 
 def _read(source: Any) -> dict[str, Any]:  # noqa: ANN401 - a Path or a package resource

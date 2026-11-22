@@ -499,7 +499,7 @@ def test_gpu_only_node_without_gpu_class_fails_naming_node() -> None:
     with pytest.raises(NoDevice, match="node 'call'.*resource classes"):
         _plan(_call(GPU_ONLY), _records("x"), execution=without)
     placed = _plan(_call(GPU_ONLY), _records("x"), execution=CLUSTERS["cluster"]).placement.nodes[CALL_NODE]
-    assert (placed.device, placed.resource_class, placed.partition) == ("cuda", "gpu:h100", "${GPU_PARTITION}")
+    assert (placed.device, placed.resource_class, placed.partition) == ("cuda", "gpu:h100", "cluster-gpu")
     assert _plan(_call(GPU_ONLY), _records("x"), hardware=GPU).placement.nodes[CALL_NODE].resource_class == "gpu"
 
 

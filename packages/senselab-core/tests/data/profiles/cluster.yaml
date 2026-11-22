@@ -8,10 +8,10 @@ name: cluster
 stack_preferences: {}
 # Device kinds best first; a node takes the first one its backend declares that a class offers.
 devices: [cuda, cpu]
-# Per env kind, the directory env trees are built under.
+# Per env kind, the directory env trees are built under; unset, SENSELAB_ENV_ROOT falls back to a path no test writes.
 env_roots:
-  isolated: ${SENSELAB_ENV_ROOT}
-  server: ${SENSELAB_ENV_ROOT}/servers
+  isolated: ${SENSELAB_ENV_ROOT:-/nonexistent/senselab-test-envs}
+  server: ${SENSELAB_ENV_ROOT:-/nonexistent/senselab-test-envs}/servers
 # The server start wait margin and the torch wheel index override (null: probed from the host).
 envs:
   server_start_margin_s: 60
@@ -33,14 +33,14 @@ resource_classes:
     cpus: 4
     mem_bytes: 17179869184
     time_s: 21600
-    partition: ${CPU_PARTITION}
+    partition: cluster-cpu
     max_workers: 32
   cpu:large:
     device: cpu
     cpus: 8
     mem_bytes: 68719476736
     time_s: 21600
-    partition: ${CPU_PARTITION}
+    partition: cluster-cpu
     max_workers: 8
   gpu:h100:
     device: cuda
@@ -48,7 +48,7 @@ resource_classes:
     cpus: 8
     mem_bytes: 103079215104
     time_s: 21600
-    partition: ${GPU_PARTITION}
+    partition: cluster-gpu
     gres: gpu:h100:1
     max_workers: 4
     memory_cap_bytes: 85899345920
@@ -58,7 +58,7 @@ resource_classes:
     cpus: 8
     mem_bytes: 103079215104
     time_s: 21600
-    partition: ${GPU_PARTITION}
+    partition: cluster-gpu
     gres: gpu:h100:1
     max_workers: 4
     memory_cap_bytes: 85899345920
@@ -67,7 +67,7 @@ resource_classes:
     cpus: 8
     mem_bytes: 103079215104
     time_s: 21600
-    partition: ${GPU_PARTITION}
+    partition: cluster-gpu
     gres: gpu:1
     max_workers: 4
 # What starts pool workers; the site's placement hook (a `module:callable`, none by default) and the seconds it may
@@ -108,10 +108,10 @@ sizing:
   device_query_s: 30
 # How a unit without a measure is probed, where measures are kept and whose are trusted, and when a measure is stale.
 calibration:
-  # Roots read in order and pooled; writes go to the first writable one. An unset SENSELAB_MEASURES_ROOT is no root;
-  # ${cache_root} is senselab's cache root (SENSELAB_CACHE, else its default).
+  # Roots read in order and pooled; writes go to the first writable one. An unset SENSELAB_MEASURES_ROOT leaves its
+  # root out; ${cache_root} is senselab's cache root (SENSELAB_CACHE, else its default).
   measures_roots:
-  - ${SENSELAB_MEASURES_ROOT}
+  - ${SENSELAB_MEASURES_ROOT:-}
   - ${cache_root}/2x/measures
   # group reads every file of every root; own only the reader's own files.
   trust: group

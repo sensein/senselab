@@ -33,7 +33,7 @@ class ResourceClass(Frozen):
         cpus: CPUs per worker; None for the host's.
         mem_bytes: Memory per worker; None for the host's.
         time_s: Wall-time limit per worker; None for none.
-        partition: The scheduler partition, `${VAR}` expanded where a worker is submitted; None off a scheduler.
+        partition: The scheduler partition, its variables expanded at load; None off a scheduler.
         gres: The scheduler's generic-resource request, such as `gpu:h100:1`; None for none.
         max_workers: Workers of the class alive at once.
         memory_cap_bytes: The static memory the models resident at once on one worker may hold; None for no cap.
