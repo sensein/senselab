@@ -945,16 +945,20 @@ def _session_for(
     return session
 
 
-def _claimed(  # noqa: PLR0913 - the plan, its directories, its session and how to give the session back
+def _claimed(
     placed: Plan,
     run_dir: Path,
     store: Path,
     opened: Any,  # noqa: ANN401 - a PoolSession
-    delay: float,
     hand_back: Callable[[], None],
 ) -> tuple[str, int]:
-    """Claim the run's attempt on `opened` (`prepare`) and check its lease bound; on a refusal, call `hand_back`."""
+    """Probe the store's storage, claim the run's attempt on `opened` (`prepare`) and check its lease bound.
+
+    The probe follows the session's open, which lays out the store, so no probe file stands in a store root that has
+    no layout yet. On a refusal, `hand_back` is called.
+    """
     try:
+        delay = check_storage(opened.profile, store)
         claimed = prepare(placed, run_dir, store, opened.pool.root)
         checked_lease(opened.profile.lease, delay)
     except BaseException:
@@ -1017,12 +1021,11 @@ def start(
         store = Path(session.store.path)
     store = Path(store) if store is not None else results_root()
     store.mkdir(parents=True, exist_ok=True)
-    delay = check_storage(profile, store)
     values = bind_sources(placed) if values is None else values
     placements, held = _placements(placed, values)
     opened = _session_for(session, profile, store, placements)
     hand_back = _hand_back(opened if session is None else None)
-    attempt, ordinal = _claimed(placed, run_dir, store, opened, delay, hand_back)
+    attempt, ordinal = _claimed(placed, run_dir, store, opened, hand_back)
     runner = PydraRunner(profile=profile, work_dir=run_dir / PYDRA_DIR)
     run = Run(run_dir, store=store, profile=profile)
     provenance = ProvStore()
