@@ -252,7 +252,7 @@ def profiles_page() -> str:
     ]
     return f"""{BADGES["2x"]}
 
-An execution profile (`execution-profile@5`) says where and how a plan runs: devices, resource classes, the substrate
+An execution profile (`execution-profile@6`) says where and how a plan runs: devices, resource classes, the substrate
 that starts workers, the pool, calibration, leases and fault budgets. It is recorded with each result and never
 reaches a key, so a plan has one hash under every profile. The packaged profiles are
 {", ".join(f"`{p}`" for p in packaged_profiles())}. `ExecutionProfile.load(name_or_path)` reads one; a mapping or file
@@ -272,9 +272,9 @@ a site profile: every `<fill: ...>` in it is yours to set, and it refuses to loa
   `PlacementRequest` and answers a `PlacementAnswer`, once per class when a run starts. Its values, over a run's
   explicit `placement` values, are the partition, time, worker cap and excluded nodes of the worker classes the run's
   pool session opens; a session opened by hand takes them as `PoolSession(..., placements=...)`.
-- A group calibrates its own resource with `benchmarks/scale/ladder.py run SUITE --execution PROFILE --measures-root
-  PATH`, then lists that shared measures root in `calibration.measures_roots`. A unit measured there is read on an
-  identity match, so one calibration serves every member of the group.
+- A group shares what its runs measure by listing a shared measures root first in `calibration.measures_roots`: the
+  pool's calibration (memory samples and the classes a backend ran out of memory on) is kept under the first writable
+  root, so a run on any member's session places a backend from what earlier runs measured.
 - There is no packaged resource table: figures for a resource come from measures made on it.
 
 ## Keys

@@ -34,7 +34,7 @@ TWO_CLASSES = ExecutionProfile.load(
             "cpu": {"device": "cpu", "mem_bytes": 2**30, "max_workers": 1},
             "cpu:big": {"device": "cpu", "mem_bytes": 2**31, "max_workers": 1},
         },
-        "pool": {"poll_s": 0.05, "first_poll_s": 0.01, "quantum_items": 8, "quantum_s": 60, "idle_polls": 60},
+        "pool": {"poll_s": 0.05, "quantum_items": 8, "quantum_s": 60, "idle_polls": 60},
         "lease": {"stale_after_s": 4.0, "renew_fraction": 0.2, "attribute_delay_s": 0, "wait_s": 10.0},
         "faults": {"infrastructure_replacements": 2},
     },

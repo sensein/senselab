@@ -730,3 +730,6 @@ Design: [`calibration-probe.md`](../calibration-probe.md) §3.2, §8.
   changes, so `measure-oom@1.1`, `measure-regime@1.0`, `measure-drift@1.0` and `measure-supersede@1.0` are unchanged;
   no profile key is added, so `execution-profile@5.0` is unchanged. `source` uses the registered identity tag
   `core-runtime@1`, the digest of the package's `*.py` files the retired resource-table directory was named by; `overlay` is the existing `env-overlay@1` digest. No tag is added.
+- 2026-11-21 (route-B S1b fix round 1): `execution-profile@6.0` replaces `@5.0`. It drops
+  `substrate.{start_backoff_first_s,start_backoff_max_s,stop_grace_s}` and `pool.{first_poll_s,presence_refresh_s,
+  segment_items}`, which only senselab's deleted pool read; `@5` is retired and refused naming the dropped keys.

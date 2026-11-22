@@ -739,6 +739,10 @@ time, worker cap, excluded nodes) are applied by opening the session with them: 
 its worker classes, and a caller's session opened with other values for a class the plan uses is refused at `start`. Each
 class's placement is then recorded under the pool's epoch, as applied.
 
+**Profile keys.** The keys only the deleted pool read (`substrate.start_backoff_first_s`, `start_backoff_max_s`,
+`stop_grace_s`; `pool.first_poll_s`, `presence_refresh_s`, `segment_items`) are dropped in `execution-profile@6.0` (fix
+round 1). `substrate.placement_hook_s` stays: it bounds the site hook, which a run now applies.
+
 **Calibration.** The pool's `DirectoryCalibration` (memory samples, unfit records) lives under the profile's first
 writable `calibration.measures_roots` entry, in `pydra-directory-calibration@1/` (fix round 1), so every session of the
 profile, over any pool root, reads what earlier ones measured: a backend that ran out of memory on a class is placed above
@@ -752,7 +756,5 @@ process held is taken over only once it is 300 s stale (the `PortableStore` leas
 **Not carried over, each a follow-up.** The worker-side cold re-check (pydra's runs in the coordinator, so
 `recheck_fraction` stays 0); batched calls (W10); the scale ladder and the batch invariance probe, which measured the
 deleted pool's online probe and the job engine's batched requests, with the r253 step; the calibration probe writing
-`DirectoryCalibration` records; profile keys only the deleted pool read
-(`substrate.start_backoff_*`, `stop_grace_s`, `placement_hook_s`, `pool.segment_items`, `presence_refresh_s`,
-`first_poll_s`), whose removal bumps `execution-profile@`; a provider `measure` by process (pydra attributes memory to the
+`DirectoryCalibration` records; a provider `measure` by process (pydra attributes memory to the
 worker's own processes); `explain`'s fit lines, since the class is chosen at submit.

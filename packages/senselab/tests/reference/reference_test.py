@@ -281,7 +281,6 @@ def test_profiles_page_states_the_site_profile_rules() -> None:
         "generic profiles only",
         "invisible",
         "placement hook",
-        "--measures-root",
         "calibration.measures_roots",
     ):
         assert phrase in page

@@ -4,9 +4,8 @@
 substrate:
   commands:
     timeout_s: 1
-# Seconds a test first waits between reads of what its worker processes wrote, and the longest it waits for them.
+# The longest a test waits between reads of what its worker processes wrote.
 pool:
-  first_poll_s: 0.01
   poll_s: 10
 # Test-only values, which the execution profile does not take: the `slack` fixture returns the rest, `slack_tests` these.
 tests:

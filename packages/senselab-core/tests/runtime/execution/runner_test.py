@@ -22,7 +22,6 @@ from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution import portable, runner
 from senselab_core.runtime.execution.events import TERMINAL, EventLog, read_events, run_dir_of, status_from
 from senselab_core.runtime.execution.executor import RunCancelled
-from senselab_core.runtime.execution.job import job_context
 from senselab_core.runtime.execution.portable import read_outputs, stored_evidence
 from senselab_core.runtime.execution.records import add_plan_entity
 from senselab_core.runtime.licenses import LicensePolicy, license_record
@@ -287,10 +286,9 @@ def test_a_verified_hit_records_an_execution_naming_its_evidence(
     )
     status, store, _ = _run(placed, values, tmp_path)
     assert status.done
-    monkeypatch.setattr(
-        "senselab_core.runtime.execution.portable.job_context",
-        lambda *a: job_context(*a).model_copy(update={"numerics": {"elsewhere": "gpu"}}),
-    )
+    elsewhere = dataclasses.replace(_this_interpreter(REGISTRY.backends(SCORE.name)[0], PROFILE), wheel_set="5" * 64)
+    records = {"pkg": _license()}
+    use_packaged(Packaged(CATALOGUE, lambda _b, _p: elsewhere, REGISTRY, lambda _: records))
     sampling = dataclasses.replace(placed, config=RunConfig(ReusePolicy.TOLERANT, 1.0))
     events = EventLog(tmp_path / "again", "a2", 1)
     with served(tmp_path / "again-pool", store=tmp_path / "pool" / "store") as (session, _):
