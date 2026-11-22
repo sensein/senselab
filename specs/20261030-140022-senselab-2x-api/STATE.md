@@ -142,6 +142,10 @@ match what was built), plus **fix round 1** (`b76681a9`): a holder is identified
   test (120 s CPU, 300 s GPU), fills one shared uv cache first (`step-prepare.sh`), runs the CPU and GPU tiers as
   `step-tier.sh` and folds the GPU tier's env builds into its verdict (R-312 closed). `execution.md` carries the
   amendment, `testing.md` the harness bounds.
+  Fix round 1: a run releases the holds of its plan's classes before it submits; a failed listing at the no-progress
+  check counts as working; plans carry the profile's identity as written (`identity_digest`), so another shell's
+  env root resumes them; `pool.start_deadline_s`/`start_deadline_failures` are profile keys (`execution-profile@6.2`);
+  R-318 closed, R-319 and R-320 opened.
 - **2026-11-21 (route-B S1b):** senselab runs on pydra's warm pool. Pinned to pydra `integration/senselab`
   @`3046e31e` (RFC 0005 W12, O4). A run's jobs go to a `WarmPool` through a caller-owned `PoolSession`
   (`runtime/execution/warm.py`); models are pydra providers (`senselab-worker@3` owns a process, `senselab-host@3` loads

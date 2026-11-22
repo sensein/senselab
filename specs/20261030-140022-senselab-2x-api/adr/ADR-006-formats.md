@@ -737,3 +737,7 @@ Design: [`calibration-probe.md`](../calibration-probe.md) §3.2, §8.
   `pool.no_progress_s`, the bound past which a run whose pool jobs give no outcome fails with `NoProgress`
   (config-derivations.md, `pool`). A `@6.0` file is still accepted by the format check and fails validation naming the
   missing key.
+- 2026-11-22 (route-B S1c fix round 1): `execution-profile@6.2` replaces `@6.1`. It adds the required keys
+  `pool.start_deadline_s` and `pool.start_deadline_failures`, pydra's start deadline (config-derivations.md, `pool`). A
+  `@6.1` file is still accepted by the format check and fails validation naming the missing keys. The profile's
+  identity digest (`ExecutionProfile.identity_digest`) is taken over its values as written, before variables expand.

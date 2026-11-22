@@ -802,3 +802,20 @@ senselab is pinned to pydra `integration/senselab` @`b98cb8a0` (#988, the pool f
   measures roots were expanded where used and a partition not at all, so a site profile's `${GPU_PARTITION}` reached
   `sbatch` verbatim and failed 19 minutes into a pool step. `orcd_driver profile` applies the same expansion, so the
   job's copy of a site profile is literal and an unset variable refuses the job before anything is submitted.
+
+**Fix round 1 (2026-11-22).**
+- *A run is a fresh attempt.* Before its first submit the driver calls `WarmPool.release_hold` for each resource class
+  of its plan, so a class an earlier run saw break (a scheduler that refused submissions for minutes, a disk that
+  filled while an env built) is started again rather than holding every later run of a long-lived default session
+  with a stale error. The run that saw the break still raises its `QueueHeld`.
+- *An unknown state is not a stall.* A substrate listing that raises at the no-progress check (an `squeue` that times
+  out) is logged and counts as working; the next look is one bound later. pydra's own listings absorb the same error.
+- *The plan's profile identity is the profile as written.* `ExecutionProfile.identity_digest` takes each value `load`
+  expanded in its written form (`written`, recorded at load as `(written, expanded)` per key path), so a plan placed in
+  one shell is run or resumed in another whose `SENSELAB_ENV_ROOT` or measures root differs. It is the plan's
+  `profile_digest`, the check `run.start`, the runner and `senselab run` make, and the digest an entry and the harness
+  record. `canonical_digest`, which covers the expanded values and `written`, stays the in-process value identity
+  (the default-session key).
+- *Start deadline as profile keys.* `pool.start_deadline_s` (120) and `pool.start_deadline_failures` (3), pydra's
+  defaults, are passed to its `PoolSettings` (`execution-profile@6.2`; config-derivations.md, `pool`).
+- `coordinator_live` opens the pool with the public `PoolRoot.open` and `LeaseSettings.from_json` (R-318 closed).
