@@ -11,8 +11,8 @@ entry is renamed into place (`record_execution`, the store's `on_commit`), and e
 import json
 import logging
 import os
+import re
 import threading
-import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -24,8 +24,6 @@ from pydra.engine.lease import LeaseSettings
 from pydra.engine.portable.identity import ABSENT_KEY, absent_form, absent_triples
 from pydra.engine.portable.layout import (
     HEADER_NAME,
-    TEMP_PREFIX,
-    TEMP_SUFFIX,
     LayoutHeader,
     StoreLayoutMismatch,
     StoreLayoutUnknown,
@@ -64,6 +62,7 @@ from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.provenance import ProvStore
 from senselab_core.runtime.servable import Servable, StoredContext, servable
+from senselab_core.runtime.storage import StorageDir
 from senselab_core.runtime.store import agent_record, context_record, key_record, output_identity
 from senselab_core.runtime.vocabulary import core_vocabulary
 
@@ -580,32 +579,21 @@ def _header_identity(root: Path) -> object:
 def upgrade_header(root: Path) -> None:
     """Rewrite the `UPGRADED` store header at `root` to name `IDENTITY`, keeping every other key and its mode.
 
-    The new header is written to a temporary of pydra's header-temporary form, synced and renamed over the old one,
-    so a concurrent opener reads the old or the new header whole; two upgraders write the same bytes. The mode is set
-    through the descriptor, never from the umask, and a link at the temporary's name is refused.
+    `StorageDir.write_atomically` writes it: a fresh temporary given the header's mode through its descriptor, never
+    from the umask, synced and renamed over the old header, then the directory synced. A concurrent opener reads the
+    old or the new header whole, and two upgraders write the same bytes.
     """
-    header = root / HEADER_NAME
-    doc = json.loads(header.read_bytes())
-    doc["identity"]["name"] = IDENTITY
-    data = LayoutHeader.from_json(json.dumps(doc).encode()).to_json()
-    staged = root / f"{TEMP_PREFIX}{uuid.uuid4().hex}{TEMP_SUFFIX}"
-    mode = header.stat().st_mode & 0o7777
-    fd = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
-    try:
-        os.fchmod(fd, mode)
-        with os.fdopen(fd, "wb") as out:
-            out.write(data)
-            out.flush()
-            os.fsync(out.fileno())
-        os.replace(staged, header)
-    finally:
-        staged.unlink(missing_ok=True)
-    directory = os.open(root, os.O_RDONLY)
-    try:
-        os.fsync(directory)
-    finally:
-        os.close(directory)
+    with StorageDir.open_root(root) as directory:
+        mode = (root / HEADER_NAME).stat().st_mode & 0o7777
+        doc = json.loads((root / HEADER_NAME).read_bytes())
+        doc["identity"]["name"] = IDENTITY
+        data = LayoutHeader.from_json(json.dumps(doc).encode()).to_json()
+        directory.write_atomically(HEADER_NAME, data, grammar=_HEADER, mode=mode)
     logger.info("the store at %s was upgraded from %s to %s", root, UPGRADED, IDENTITY)
+
+
+_HEADER = re.compile(re.escape(HEADER_NAME))
+"""The store header's name, the one name `upgrade_header` writes."""
 
 
 def read_entry(store: PortableStore, checksum: str, identity: str) -> tuple[dict[str, object], ExecutionContext] | None:

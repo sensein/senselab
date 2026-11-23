@@ -129,19 +129,19 @@ def test_a_refused_upgrade_serves_the_previous_store_unchanged_and_says_so(
 ) -> None:
     """A root that looks writable but refuses the header's rename is read under @1, header unchanged, logged once."""
     header = _previous_store(tmp_path)
-    written = header.read_bytes()
+    written, names = header.read_bytes(), sorted(p.name for p in header.parent.iterdir())
     replace = os.replace
 
-    def refusing(source: object, target: object) -> None:
+    def refusing(source: str, target: str, **dirs: int) -> None:
         if str(target).endswith("pydra-store.json"):
             raise PermissionError(13, "refused", str(target))
-        replace(source, target)  # type: ignore[arg-type]
+        replace(source, target, **dirs)
 
     monkeypatch.setattr(os, "replace", refusing)
     store = portable.open_store(tmp_path / "store", tmp_path / "work")
     assert store.identity.name == "senselab-identity@1" and header.read_bytes() == written
     assert [r.levelname for r in caplog.records if "not upgraded" in r.getMessage()] == ["WARNING"]
-    assert not list((tmp_path / "store").glob(".pydra-store.*"))
+    assert sorted(p.name for p in header.parent.iterdir()) == names
 
 
 @pytest.mark.logic
