@@ -2,7 +2,6 @@
 
 import hashlib
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from senselab_core.kernel.identity import LogicalKey
@@ -49,16 +48,12 @@ def test_a_checksum_with_an_absence_suffix_is_the_key_digest_plus_the_suffix_of_
 
 
 @pytest.mark.logic
-def test_a_job_with_absent_values_keys_its_entry_by_its_logical_key_and_their_triples(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_a_job_with_absent_values_keys_its_entry_by_its_logical_key_and_their_triples() -> None:
     """The entry's key is the logical key's fields, plus `absent` only when pydra recorded absence triples."""
-    monkeypatch.setattr(portable, "doc_of", lambda task: task)
-    task, identity = SimpleNamespace(key=KEY), portable.SenselabIdentity()
-    assert identity.key(SimpleNamespace(task=task, absent=[])) == key_record(KEY)
-    keyed = identity.key(SimpleNamespace(task=task, absent=sorted(TRIPLES)))
+    assert portable.entry_key(KEY, []) == key_record(KEY)
+    keyed = portable.entry_key(KEY, TRIPLES)
     assert keyed == {**key_record(KEY), "absent": FORM}  # type: ignore[dict-item]
-    assert identity.check_key(KEY.digest() + SUFFIX, keyed)
+    assert portable.SenselabIdentity().check_key(KEY.digest() + SUFFIX, keyed)
 
 
 @pytest.mark.logic

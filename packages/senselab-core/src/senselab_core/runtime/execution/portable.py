@@ -169,6 +169,13 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def entry_key(key: LogicalKey, absent: Sequence[tuple[str, int, str]]) -> dict[str, Any]:
+    """Return the store key record of `key`: its fields, plus `absent` in pydra's form when it has absence triples."""
+    record = key_record(key)
+    assert isinstance(record, dict)
+    return {**record, ABSENT_KEY: absent_form(absent)} if absent else record
+
+
 @dataclass(frozen=True)
 class SenselabIdentity:
     """`senselab-identity@2`: the key is the job's `LogicalKey`, the slot its context's `context@5` fingerprint.
@@ -183,11 +190,8 @@ class SenselabIdentity:
     fingerprint_name: ClassVar[str] = "context@5"
 
     def key(self, job: "PydraJob") -> dict[str, Any]:
-        """Return the record the job's checksum digests: its logical key's fields, and `absent` when it has any."""
-        record = key_record(doc_of(job.task).key)
-        assert isinstance(record, dict)
-        triples = job.absent
-        return {**record, ABSENT_KEY: absent_form(triples)} if triples else record
+        """Return the record the job's checksum digests: `entry_key` of its logical key and its absence triples."""
+        return entry_key(doc_of(job.task).key, job.absent)
 
     def check_key(self, checksum: str, key: Mapping[str, Any]) -> bool:
         """Whether `key` is a logical key whose digest, plus the absence suffix of its `absent`, is `checksum`."""
