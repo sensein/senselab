@@ -8,14 +8,26 @@ cross-context hits for verification. Each executed entry's activity is written t
 entry is renamed into place (`record_execution`, the store's `on_commit`), and each reuse when it is served.
 """
 
+import json
 import logging
+import os
+import re
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Final
 
+from pydra.engine.absent import absence_suffix
+from pydra.engine.lease import LeaseSettings
+from pydra.engine.portable.identity import ABSENT_KEY, absent_form, absent_triples
+from pydra.engine.portable.layout import (
+    HEADER_NAME,
+    LayoutHeader,
+    StoreLayoutMismatch,
+    StoreLayoutUnknown,
+)
 from pydra.engine.portable.reuse import Candidate, Verdict
 from pydra.engine.portable.store import PortableStore
 from senselab_worker.canonical import jcs_dumps
@@ -50,6 +62,7 @@ from senselab_core.runtime.keys import Placement
 from senselab_core.runtime.profiles import ExecutionProfile
 from senselab_core.runtime.provenance import ProvStore
 from senselab_core.runtime.servable import Servable, StoredContext, servable
+from senselab_core.runtime.storage import StorageDir
 from senselab_core.runtime.store import agent_record, context_record, key_record, output_identity
 from senselab_core.runtime.vocabulary import core_vocabulary
 
@@ -166,25 +179,50 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def entry_key(key: LogicalKey, absent: Sequence[tuple[str, int, str]]) -> dict[str, Any]:
+    """Return the store key record of `key`: its fields, plus `absent` in pydra's form when it has absence triples."""
+    record = key_record(key)
+    if not isinstance(record, dict):
+        raise TypeError(f"a logical key records as a mapping, got {type(record).__name__}")
+    return {**record, ABSENT_KEY: absent_form(absent)} if absent else record
+
+
+IDENTITY = "senselab-identity@2"
+"""The store identity senselab writes."""
+UPGRADED = "senselab-identity@1"
+"""The identity whose every entry is an `IDENTITY` entry: the two differ only for entries with absence triples, which
+it never wrote. A store header naming it is rewritten to `IDENTITY` (`open_store`)."""
+
+
 @dataclass(frozen=True)
 class SenselabIdentity:
-    """`senselab-identity@1`: the key is the job's `LogicalKey`, the slot its context's `context@5` fingerprint."""
+    """`senselab-identity@2`: the key is the job's `LogicalKey`, the slot its context's `context@5` fingerprint.
+
+    A job whose pydra checksum carries an absence suffix (`<digest>-absent-<hex>`) keys its entry by the logical key's
+    fields plus `absent`, its absence triples in pydra's form, and its checksum is the logical key's digest plus the
+    suffix of those triples. `name` is `UPGRADED` only to read a store this account cannot upgrade.
+    """
 
     recorded_only: frozenset[str] = RECORDED_ONLY
-    name: ClassVar[str] = "senselab-identity@1"
+    name: str = IDENTITY
     fingerprint_name: ClassVar[str] = "context@5"
 
     def key(self, job: "PydraJob") -> dict[str, Any]:
-        """Return the record the job's checksum digests: its logical key's fields."""
-        record = key_record(doc_of(job.task).key)
-        assert isinstance(record, dict)
-        return record
+        """Return the record the job's checksum digests: `entry_key` of its logical key and its absence triples."""
+        return entry_key(doc_of(job.task).key, job.absent)
 
     def check_key(self, checksum: str, key: Mapping[str, Any]) -> bool:
-        """Whether `key` is a logical key whose digest is `checksum`."""
+        """Whether `key` is a logical key whose digest, plus the absence suffix of its `absent`, is `checksum`."""
+        fields = {k: v for k, v in key.items() if k != ABSENT_KEY}
         try:
-            return LogicalKey.model_validate(dict(key)).digest() == checksum
-        except ValueError:
+            suffix = ""
+            if ABSENT_KEY in key:
+                triples = absent_triples(key[ABSENT_KEY])
+                if not triples or absent_form(triples) != key[ABSENT_KEY]:
+                    return False
+                suffix = absence_suffix(triples)
+            return LogicalKey.model_validate(fields).digest() + suffix == checksum
+        except (TypeError, ValueError):
             return False
 
     def context(self, job: "PydraJob", phase: str) -> dict[str, Any]:
@@ -467,24 +505,95 @@ def record_reuse(
     provenance.write(_run_dir(doc.ref.plan_hash))
 
 
-def open_store(root: Path, work: Path) -> PortableStore:
+def open_store(root: Path, work: Path, lease: LeaseSettings | None = None) -> PortableStore:
     """Open the senselab store at `root`, every job running in a directory of its own under `work`.
 
-    Both are on storage every node sees; `work` is the run's private directory.
+    Both are on storage every node sees; `work` is the run's private directory. `lease` bounds the store's job leases
+    (`warm.lease_settings` of the run's profile); None keeps pydra's defaults, which a reader that takes no lease uses.
+    A store whose header names `UPGRADED`, and otherwise matches, has its header rewritten to `IDENTITY` when this
+    account can write the root (`upgrade_header`), and is read under `UPGRADED` when it cannot.
+
+    Raises:
+        StoreLayoutMismatch: the root's header names another identity, or differs in any other key.
     """
     work = Path(work).absolute()
 
     def work_dir(checksum: str, fingerprint: str, attempt: str) -> Path:
         return work / checksum / fingerprint / attempt
 
-    return PortableStore(
-        Path(root),
-        trust="shared",
-        identity=SenselabIdentity(),
-        reuse=SenselabReuse(),
-        on_commit=record_execution,
-        work_dir=work_dir,
-    )
+    def opened(name: str) -> PortableStore:
+        return PortableStore(
+            Path(root),
+            trust="shared",
+            identity=SenselabIdentity(name=name),
+            reuse=SenselabReuse(),
+            on_commit=record_execution,
+            work_dir=work_dir,
+            lease_settings=lease,
+        )
+
+    store = _following(opened, Path(root))
+    if store.identity.name == IDENTITY or not os.access(root, os.W_OK | os.X_OK):
+        return store
+    try:
+        upgrade_header(Path(root))
+    except OSError as err:
+        logger.warning("the store at %s was not upgraded to %s and is read under %s: %s", root, IDENTITY, UPGRADED, err)
+        return store
+    return _following(opened, Path(root))
+
+
+OPEN_ATTEMPTS: Final = 3  # invariant: two identity names and one upgrade between them
+"""Opens a store takes to follow its header: under `IDENTITY`, then under the name the header gives after the refusal
+(`UPGRADED`, or `IDENTITY` when another process upgraded it in between), then under `IDENTITY` once more if it was
+upgraded during the `UPGRADED` open. A header changes name at most once, so a later refusal is no race."""
+
+
+def _following(opened: Callable[[str], PortableStore], root: Path) -> PortableStore:
+    """Open the store at `root` under the senselab identity its header names, re-reading the header on each refusal.
+
+    Raises:
+        StoreLayoutMismatch: the header names another identity, or differs in any other key.
+    """
+    name = IDENTITY
+    for attempt in range(OPEN_ATTEMPTS):
+        try:
+            return opened(name)
+        except StoreLayoutMismatch as err:
+            found = _header_identity(root)
+            last = attempt == OPEN_ATTEMPTS - 1
+            if last or err.key != "identity" or found not in (IDENTITY, UPGRADED):
+                raise
+            name = str(found)
+    raise RuntimeError(f"OPEN_ATTEMPTS is {OPEN_ATTEMPTS}; a store open needs at least one")
+
+
+def _header_identity(root: Path) -> object:
+    """Return the identity name the store header at `root` records, or None when it cannot be read."""
+    try:
+        return LayoutHeader.from_json((root / HEADER_NAME).read_bytes()).identity.get("name")
+    except (OSError, StoreLayoutUnknown):
+        return None
+
+
+def upgrade_header(root: Path) -> None:
+    """Rewrite the `UPGRADED` store header at `root` to name `IDENTITY`, keeping every other key and its mode.
+
+    `StorageDir.write_atomically` writes it: a fresh temporary given the header's mode through its descriptor, never
+    from the umask, synced and renamed over the old header, then the directory synced. A concurrent opener reads the
+    old or the new header whole, and two upgraders write the same bytes.
+    """
+    with StorageDir.open_root(root) as directory:
+        mode = (root / HEADER_NAME).stat().st_mode & 0o7777
+        doc = json.loads((root / HEADER_NAME).read_bytes())
+        doc["identity"]["name"] = IDENTITY
+        data = LayoutHeader.from_json(json.dumps(doc).encode()).to_json()
+        directory.write_atomically(HEADER_NAME, data, grammar=_HEADER, mode=mode)
+    logger.info("the store at %s was upgraded from %s to %s", root, UPGRADED, IDENTITY)
+
+
+_HEADER = re.compile(re.escape(HEADER_NAME))
+"""The store header's name, the one name `upgrade_header` writes."""
 
 
 def read_entry(store: PortableStore, checksum: str, identity: str) -> tuple[dict[str, object], ExecutionContext] | None:

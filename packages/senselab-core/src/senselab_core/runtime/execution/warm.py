@@ -243,17 +243,21 @@ def budgets(profile: ExecutionProfile) -> FaultBudgets:
     )
 
 
+def lease_settings(profile: ExecutionProfile) -> LeaseSettings:
+    """Return the profile's `lease` section as pydra's lease settings, for the pool's leases and the store's."""
+    lease = profile.lease
+    return LeaseSettings(
+        stale_after=lease.stale_after_s,
+        renew_fraction=lease.renew_fraction,
+        attribute_delay=lease.attribute_delay_s,
+        timeout=max(lease.wait_s, lease.stale_after_s + lease.attribute_delay_s),
+    )
+
+
 def settings(profile: ExecutionProfile) -> PoolSettings:
     """Return the profile's pool settings: its lease, polls, wall target and unmeasured workers; no re-check."""
-    lease = profile.lease
-    timeout = max(lease.wait_s, lease.stale_after_s + lease.attribute_delay_s)
     return PoolSettings(
-        lease=LeaseSettings(
-            stale_after=lease.stale_after_s,
-            renew_fraction=lease.renew_fraction,
-            attribute_delay=lease.attribute_delay_s,
-            timeout=timeout,
-        ),
+        lease=lease_settings(profile),
         poll_s=profile.pool.poll_s,
         idle_polls=profile.pool.idle_polls,
         call_timeout=profile.timeouts.request_s,
@@ -372,7 +376,7 @@ class PoolSession:
         work = self.root / "private" / "work"
         work.mkdir(parents=True, exist_ok=True, mode=0o700)
         (self.root / "private").chmod(0o700)
-        self.store = open_store(Path(store), work)
+        self.store = open_store(Path(store), work, lease_settings(profile))
         calibration = DirectoryCalibration(calibration_root(profile) or self.root / "pool" / "calibration")
         self.calibration = calibration
         self.providers = (SenselabWorker(), SenselabHost())
@@ -401,7 +405,8 @@ class PoolSession:
 
         It is when the substrate lists a worker of one of `classes` (ready or starting: a submitted Slurm job still
         queued is starting), or when a claim lease on one of their queues (`claim_leases`) has beaten: its newest
-        mtime (`newest_beat`) differs from the one seen at the last call, or it is seen for the first time.
+        mtime (`newest_beat`) differs from the one seen at the last call, or it is seen for the first time. A claim
+        seen at the last call and gone now ended its ticket, whose outcome is on its way, so it counts too.
         A listing that raises (an `squeue` that times out) counts as working, logged.
         """
         wanted = set(classes)
@@ -412,13 +417,11 @@ class PoolSession:
             return True
         if any(h.worker_class in wanted for h in listed):
             return True
-        beat = False
-        for lease in claim_leases(self.pool.root, wanted):
-            newest = newest_beat(lease)
-            if newest is not None and self._beats.get(lease) != newest:
-                self._beats[lease] = newest
-                beat = True
-        return beat
+        beats = {lease: newest_beat(lease) for lease in claim_leases(self.pool.root, wanted)}
+        current = {lease: newest for lease, newest in beats.items() if newest is not None}
+        moved = set(self._beats) != set(current) or any(self._beats[k] != v for k, v in current.items())
+        self._beats = current
+        return moved
 
     def job(self, doc: JobDoc, loader: Loader, name: str) -> PydraJob:
         """Return the pool job of `doc`, its model worker loaded by `loader`, asking for its plan class's resources."""

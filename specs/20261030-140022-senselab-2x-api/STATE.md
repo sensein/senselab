@@ -134,6 +134,15 @@ match what was built), plus **fix round 1** (`b76681a9`): a holder is identified
 
 ## Log
 
+- **2026-11-22 (route-B S2):** repinned to pydra `integration/senselab` @`f191eb6c` (RFC 0004 identity group;
+  `pydra-identity@2` is pydra's default; R10a/R10b, X6/X6b, P-lease, R11). senselab supplies every pydra checksum, so no
+  key changed; the store identity is `senselab-identity@2`, which accepts pydra's absence-suffixed checksums (key record
+  plus `absent`); an @1 store header is upgraded in place (read-only roots read as @1), so nothing recomputes (UX-61
+  ruling). The store's job leases follow
+  the profile (R-324 closed); a claim gone since the last look counts as working (R-326 closed); E2 per-element release
+  past a gather source tested. Driver overhead at 10⁴ jobs: 1.75-1.79 ms/job at `b98cb8a0`, 1.78-1.89 at `f191eb6c`
+  (laptop under load); `Job.context` memo follow-up R-325. R-319 still open (no public heartbeat reader). execution.md
+  amendment "route-B S2"; ADR-001 amendment 2026-11-22.
 - **2026-11-22 (route-B S1c):** repinned to pydra `integration/senselab` @`b98cb8a0` (#988: the pool fails fast). A class
   whose workers cannot start is held with the start error (`QueueHeld(resource_class, jobs, reason)`); the no-progress
   check reads only the substrate's `live()` and the documented claim-lease layout (R-307, R-308 closed; R-318 opened for

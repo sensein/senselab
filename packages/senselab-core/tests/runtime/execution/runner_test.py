@@ -21,7 +21,7 @@ from senselab_core.runtime.datasets import RecordSet
 from senselab_core.runtime.envs import EnvHandle
 from senselab_core.runtime.execution import portable, runner
 from senselab_core.runtime.execution.events import TERMINAL, EventLog, read_events, run_dir_of, status_from
-from senselab_core.runtime.execution.executor import RunCancelled
+from senselab_core.runtime.execution.executor import JobRef, ResultRef, RunCancelled
 from senselab_core.runtime.execution.portable import read_outputs, stored_evidence
 from senselab_core.runtime.execution.records import add_plan_entity
 from senselab_core.runtime.licenses import LicensePolicy, license_record
@@ -377,3 +377,67 @@ def test_a_plan_of_another_profile_is_refused(tmp_path: Path) -> None:
     events = EventLog(tmp_path / "run", "a1", 1)
     with served(tmp_path / "pool", other) as (session, _), pytest.raises(ValueError, match="another execution profile"):
         runner.PydraRunner(profile=other).run_plan(placed, session, values=values, events=events)
+
+
+def _released(placed: Plan, tmp_path: Path) -> list[tuple[str, str, object]]:
+    """Drive `placed`'s compiled graph one job at a time, oldest first; return each dispatch and completion in order.
+
+    Every job completes at once with a result naming no real output, so only the graph's release order is observed.
+    """
+    graph_runner = pytest.importorskip("pydra.engine.runner").GraphRunner
+    result_type = pytest.importorskip("pydra.engine.result").Result
+    submitter_type = pytest.importorskip("pydra.engine.submitter").Submitter
+    store = runner.SenselabStore(tmp_path / "pydra")
+    seen: list[tuple[str, str, object]] = []
+    with submitter_type(worker="debug", store=store, telemetry=False) as submitter:
+        graph = graph_runner(
+            runner.compile_plan(placed),
+            store,
+            on_error="raise_at_end",
+            lookup_before_dispatch=False,
+            submitter=submitter,
+        )
+        pending: list[Any] = []
+        while not graph.done:
+            dispatched = graph.ready().dispatch
+            seen += [("dispatch", job.name, job.state_index) for job in dispatched]
+            pending += dispatched
+            job = pending.pop(0)
+            node, element = runner._senselab(job)
+            value = (
+                {runner.RECORD_FIELD: int(job.task.row)}
+                if node is None
+                else ResultRef(
+                    job=JobRef(plan_hash=placed.hash, node=node, element=element),
+                    key_digest=job.checksum,
+                    output_identity="output:" + "0" * 64,
+                ).model_dump(mode="json")
+            )
+            done = result_type(
+                outputs=job.task.Outputs(**{runner.REF: value}),
+                runtime=None,
+                errored=False,
+                cache_dir=store.cache_dir(job.checksum, job.context),
+                task=job.task,
+                context=job.context,
+            )
+            store.record(job.checksum, done)
+            graph.complete(job, done)
+            seen.append(("complete", job.name, job.state_index))
+        graph.close()
+    return seen
+
+
+@pytest.mark.logic
+def test_a_mapped_node_after_a_gather_source_is_released_per_element_and_the_gather_after_all(tmp_path: Path) -> None:
+    """`a` feeds the gather `g`, so it runs as its combined copy `g_a`, and the mapped `b`.
+
+    `b`'s element 0 is handed out once `a`'s element 0 ended and before `a`'s element 1 ends; `g` after every element.
+    """
+    graph = _graph(
+        [("a", SCORE), ("g", GATHER), ("b", CHAIN)], [*GATHER_EDGES, ("a.value", "b.value", "plain")], text="list[json]"
+    )
+    placed, _ = _plan(graph, [{"text": f"t{i}"} for i in range(3)])
+    at = {step: i for i, step in enumerate(_released(placed, tmp_path))}
+    assert at[("dispatch", "n_b", 0)] < at[("complete", "g_a", 1)]
+    assert at[("dispatch", "n_g", None)] > max(at[("complete", "g_a", i)] for i in range(3))

@@ -831,3 +831,61 @@ senselab is pinned to pydra `integration/senselab` @`b98cb8a0` (#988, the pool f
   only broken classes, and a run that already received its held outcomes still raises `QueueHeld`.
 - `orcd_driver profile` writes the job's copy of a site profile already expanded, so an ORCD run's profile identity
   names the job's literal values.
+
+## Amendment 2026-11-22 (route-B S2): the repin to pydra `f191eb6c`
+
+senselab is pinned to pydra `integration/senselab` @`f191eb6c`, which adds RFC 0004's identity group (`pydra-identity@2`
+is pydra's default store identity), `Absent` and its checksum suffix (R10a-core, R10a-split, R10a-store), gates (R10b),
+find-before-lease and `PortableStore` as pydra's default store (X6, X6b), `PortableStore(lease_settings=)` (P-lease)
+and `workflow.loop` (R11). What changed for senselab:
+
+- **senselab keys nothing on pydra's own checksums.** Every pydra task senselab defines supplies its checksum (the
+  logical key's digest, or a records or plan name), so `pydra-identity@2` changes no senselab key. The run-scoped
+  adapter store keeps its records in memory.
+- **The store identity is `senselab-identity@2` and accepts suffixed checksums.** A job with a supplied checksum that
+  accepted or dropped an `Absent` has `-absent-<sha256 of its triples>` appended to its checksum, and pydra's store
+  now checks every published key against its checksum. senselab's identity keys such an entry by the logical key's
+  fields plus `absent`, the triples in pydra's form, and its `check_key` accepts `<logical-key@7 digest><suffix>`,
+  pydra's `PydraIdentityV2` rule. This was chosen over a `logical-key@8` with an `absent` field because the logical key
+  then stays the senselab identity of a computation everywhere else (plans, provenance, `ResultRef.key_digest`,
+  measures) and only the store's key record, which pydra already defines for this case, carries the triples. No
+  senselab job produces an `Absent` today: senselab outputs are result references, a failure is `Failed`, and the
+  compiled nodes' checksum functions read result references only.
+- **An @1 store is upgraded in place, so nothing recomputes (UX-61).** Every @1 entry is an @2 entry, because @1 never
+  wrote absence triples. pydra refuses a root whose header names another identity (`StoreLayoutMismatch`), so
+  `open_store` handles that refusal itself: when the stored name is `senselab-identity@1`, it opens the root under @1,
+  which lets pydra check every other header key.
+  - **A writable root** has its header rewritten to @2 (`upgrade_header`). The new header is written to a temporary in
+    pydra's header-temporary form, synced, renamed over the old one with its mode kept, and the directory is synced. A
+    concurrent opener therefore reads one header whole, and two upgraders write the same bytes. The header is
+    rewritten once.
+  - **The mode is set through the descriptor.** The temporary is opened with `O_NOFOLLOW` and given the header's
+    mode by `fchmod`, so an upgrader's umask never narrows a group-shared header.
+  - **An opener that races an upgrade follows the header.** On an identity refusal, the opener re-reads the header and
+    reopens under the senselab name it now gives, at most `OPEN_ATTEMPTS` (3) times: @2, then @1, then @2 again if
+    the header was upgraded during the @1 open. A header changes name at most once, so the first jobs of an array
+    opening one shared store together all open it.
+  - **A root the account cannot write** is read under @1, with no write. So is a root whose header rename is
+    refused although `access()` reports it writable (a sticky-bit directory, NFS); that case is logged once.
+  - **Any other identity name** is still refused.
+  - The default result store keeps its root, `<cache>/2x/results`.
+- **The store's job leases follow the profile** (closes the 300 s resume item of the S1b amendment). A session's
+  `PortableStore` gets the `LeaseSettings` its pool gets (`warm.lease_settings`: `stale_after_s`, `renew_fraction`,
+  `attribute_delay_s`, and a timeout of the larger of `wait_s` and `stale_after_s + attribute_delay_s`). A holder
+  records its `stale_after` and a taker honours the larger of its own and the holder's, at most pydra's
+  `max_honoured_stale_after` (1200 s by default), so a resume under a shorter profile still waits out a holder that ran
+  under a longer one, up to that cap. Readers that take no lease (`Run.store`, the planner's servable count) keep
+  pydra's defaults.
+- **A claim that ended since the last look counts as working.** The no-progress check could fall between a worker
+  removing its claim lease and the driver receiving the outcome; `PoolSession.working` now counts a claim seen at the
+  last look and gone now, once.
+- **Per-element release past a gather source holds (E2).** A node feeding both a gather and a mapped node runs as its
+  combined copy `g_<node>`, and the mapped node's element `i` is released once element `i` of the source ends
+  (`runner_test::test_a_mapped_node_after_a_gather_source_is_released_per_element_and_the_gather_after_all`). A map over
+  a node's list output is refused at planning (`UnmappedOutput`).
+- **Driver overhead at 10⁴ leaf jobs** (a probe outside the tree, as `benchmarks` may not import pydra: leaf jobs with
+  supplied checksums driven by the driver loop on `SenselabStore`, each completed at once; one laptop under load,
+  so upper bounds):
+  1.79 and 1.75 ms per job at `b98cb8a0`, 1.89 and 1.78 ms at `f191eb6c`. `Job.context` is on the per-job path (the
+  driver reads it for each result's slot): 4 to 6 % of the wall at 10⁴, and about 89 % at 200 jobs, where the first
+  contexts dominate. Memoising it per task class and environment in the submitting process is a follow-up (R-325).

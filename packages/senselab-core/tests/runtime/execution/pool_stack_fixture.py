@@ -1,6 +1,7 @@
 """A one-node plan over host backends for pool tests: its task, registry, packaged stack and placed plan."""
 
 import contextlib
+import json
 import os
 import platform
 from collections.abc import Iterator, Sequence
@@ -132,3 +133,18 @@ def planned_nodes(
     rows = [Record(id=f"r{i}", inputs={"text": ValueInput(value=t)}) for i, t in enumerate(texts)]
     placed = plan(graph, RecordSet(rows), config=RunConfig(), execution=profile)
     return placed, {bind_input("x", "json", t)[0]: t for t in texts}
+
+
+def relabel_store(store: Path, name: str) -> Path:
+    """Replace the store header at `store` with one naming `name` as its identity, as a store written under it carries.
+
+    The header is read-only, so the new one is renamed over it, keeping its mode. Returns the header's path.
+    """
+    header = store / "pydra-store.json"
+    doc = json.loads(header.read_text(encoding="utf-8"))
+    doc["identity"]["name"] = name
+    staged = store / "relabelled.json"
+    staged.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    staged.chmod(header.stat().st_mode & 0o777)
+    os.replace(staged, header)
+    return header
