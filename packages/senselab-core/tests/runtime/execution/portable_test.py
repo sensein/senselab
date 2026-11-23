@@ -4,9 +4,9 @@ import hashlib
 from pathlib import Path
 
 import pytest
+from pool_stack_fixture import relabel_store
 from senselab_core.kernel.identity import LogicalKey
 from senselab_core.runtime.execution import portable, warm
-from senselab_core.runtime.execution.run import RESULTS_DIR
 from senselab_core.runtime.store import key_record
 from senselab_core.testing.pools import POOL_PROFILE
 from senselab_worker.canonical import jcs_dumps
@@ -57,9 +57,16 @@ def test_a_job_with_absent_values_keys_its_entry_by_its_logical_key_and_their_tr
 
 
 @pytest.mark.logic
-def test_the_default_result_store_is_named_by_its_identity() -> None:
-    """A new store identity reads no root an earlier one wrote: the default root carries its name."""
-    assert RESULTS_DIR.endswith(portable.SenselabIdentity.name)
+@pytest.mark.parametrize("name", ["senselab-identity@3", "senselab-identity@0", "pydra-identity@2", "other"])
+def test_a_store_of_any_other_identity_is_refused_and_left_as_it_was(tmp_path: Path, name: str) -> None:
+    """Only a `senselab-identity@1` header is upgraded; a newer, older or foreign scheme is a layout mismatch."""
+    mismatch = pytest.importorskip("pydra.engine.portable.layout").StoreLayoutMismatch
+    portable.open_store(tmp_path / "store", tmp_path / "work")
+    header = relabel_store(tmp_path / "store", name)
+    written = header.read_bytes()
+    with pytest.raises(mismatch, match="identity"):
+        portable.open_store(tmp_path / "store", tmp_path / "work")
+    assert header.read_bytes() == written
 
 
 @pytest.mark.logic

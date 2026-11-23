@@ -11,14 +11,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from pool_stack_fixture import packaged, planned, registry, scoring
+from pool_stack_fixture import packaged, planned, registry, relabel_store, scoring
 from senselab_core.kernel.identity import ReusePolicy
 from senselab_core.runtime.call import RunConfig, TaskCall
 from senselab_core.runtime.execution import warm
 from senselab_core.runtime.execution.calls import call
 from senselab_core.runtime.execution.events import read_events
 from senselab_core.runtime.execution.executor import NoProgress, QueueHeld
-from senselab_core.runtime.execution.run import start
+from senselab_core.runtime.execution.run import Run, start
 from senselab_core.runtime.execution.warm import PoolSession, claim_leases, newest_beat
 from senselab_core.runtime.licenses import LicensePolicy
 from senselab_core.runtime.profiles import ExecutionProfile
@@ -250,6 +250,49 @@ def test_a_run_whose_every_job_is_a_store_hit_sends_nothing_to_the_pool(tmp_path
             assert run.wait(timeout=60).done
     assert _kinds(run.run_dir) == ["cache_hit", "cache_hit"] and _loads(tmp_path) == 1
     assert not [e for e in read_events(run.run_dir) if e.kind == "started"]
+
+
+def test_a_store_written_under_the_previous_identity_serves_every_entry_and_is_upgraded_once(
+    tmp_path: Path, planted: Path
+) -> None:
+    """An upgrade recomputes nothing: a `senselab-identity@1` store serves each entry, its header rewritten once."""
+    with packaged(registry(TASK, worker=BACKEND), tmp_path / "cache"):
+        with served(tmp_path / "first", store=tmp_path / "store") as (session, _):
+            placed, values = planned(TASK, PROFILE, ["a", "b"])
+            assert start(placed, session, values=values).wait(timeout=120).done
+        header = relabel_store(tmp_path / "store", "senselab-identity@1")
+        with served(tmp_path / "second", store=tmp_path / "store", workers=0) as (session, _):
+            again, values = planned(TASK, PROFILE, ["b", "a"])
+            run = start(again, session, values=values)
+            assert run.wait(timeout=60).done
+        upgraded = (header.stat().st_ino, header.read_bytes())
+        with served(tmp_path / "third", store=tmp_path / "store", workers=0):
+            pass
+    assert _kinds(run.run_dir) == ["cache_hit", "cache_hit"] and _loads(tmp_path) == 1
+    assert json.loads(upgraded[1])["identity"]["name"] == "senselab-identity@2"
+    assert (header.stat().st_ino, header.read_bytes()) == upgraded
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes any directory")
+def test_a_read_only_store_of_the_previous_identity_is_read_without_a_write(tmp_path: Path, planted: Path) -> None:
+    """A `senselab-identity@1` store this account cannot write serves its results; its header stays as it was."""
+    store = tmp_path / "store"
+    with packaged(registry(TASK, worker=BACKEND), tmp_path / "cache"), served(tmp_path, store=store) as (session, _):
+        placed, values = planned(TASK, PROFILE, ["a", "b"])
+        run = start(placed, session, values=values)
+        assert run.wait(timeout=120).done
+    header = relabel_store(store, "senselab-identity@1")
+    before = (header.stat().st_ino, header.stat().st_mtime_ns, header.read_bytes())
+    dirs = [store, *(p for p in store.rglob("*") if p.is_dir())]
+    for d in dirs:
+        d.chmod(0o555)
+    try:
+        given = list(Run(run.run_dir).results())
+    finally:
+        for d in dirs:
+            d.chmod(0o755)
+    assert [g.outputs["value"] for _, g in given] == ["a", "b"]  # type: ignore[union-attr]
+    assert (header.stat().st_ino, header.stat().st_mtime_ns, header.read_bytes()) == before
 
 
 def test_explicit_values_and_the_site_hook_are_the_worker_classes_a_run_opens(tmp_path: Path, planted: Path) -> None:
