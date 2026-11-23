@@ -889,3 +889,20 @@ and `workflow.loop` (R11). What changed for senselab:
   1.79 and 1.75 ms per job at `b98cb8a0`, 1.89 and 1.78 ms at `f191eb6c`. `Job.context` is on the per-job path (the
   driver reads it for each result's slot): 4 to 6 % of the wall at 10⁴, and about 89 % at 200 jobs, where the first
   contexts dominate. Memoising it per task class and environment in the submitting process is a follow-up (R-325).
+
+## Amendment 2026-11-23 (route-B S3): the repin to pydra `79227e32`
+
+senselab is pinned to pydra `integration/senselab` @`79227e32`, which adds warm environments in pool workers (W3,
+W5b), batched calls (W10), unhashed `Annotated` metadata (T4), digest-stable by-value pickling (T1, T2), `pydracli
+check-reach` (I9), the Windows lease and drain fixes and `pydracli store adopt`/`migrate`/`collect` with `legacy=`
+roots (P9, P7). What changed for senselab:
+
+- **No key changed.** senselab supplies every pydra checksum, and the digest contract tests pass unchanged.
+- **Every profile passes `LocalSubstrate`'s stop bound.** `LocalSubstrate.attach` now refuses a `stop_wait` below
+  `drain_bound` (`poll_s + drain_s + release patience`) and reads the settings from `Attachment.pool_settings`, which
+  `WarmPool` sets. senselab passes no `stop_wait`, so the default `drain_bound + shutdown_bound` applies: 51 s for
+  `laptop` and 80 s for the cluster test profile (poll_s 30).
+- **Batched calls are not declared (R-327).** pydra's batch is one constant per task class, and senselab has no
+  measured N to give it.
+- **`legacy=` roots do not replace the @1 header upgrade.** They read pydra's flat `<root>/<checksum>` caches, not a
+  `PortableStore` written under another identity.
