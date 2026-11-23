@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from pydra.engine.absent import absence_suffix
+from pydra.engine.lease import LeaseSettings
 from pydra.engine.portable.identity import ABSENT_KEY, absent_form, absent_triples
 from pydra.engine.portable.reuse import Candidate, Verdict
 from pydra.engine.portable.store import PortableStore
@@ -482,10 +483,11 @@ def record_reuse(
     provenance.write(_run_dir(doc.ref.plan_hash))
 
 
-def open_store(root: Path, work: Path) -> PortableStore:
+def open_store(root: Path, work: Path, lease: LeaseSettings | None = None) -> PortableStore:
     """Open the senselab store at `root`, every job running in a directory of its own under `work`.
 
-    Both are on storage every node sees; `work` is the run's private directory.
+    Both are on storage every node sees; `work` is the run's private directory. `lease` bounds the store's job leases
+    (`warm.lease_settings` of the run's profile); None keeps pydra's defaults, which a reader that takes no lease uses.
     """
     work = Path(work).absolute()
 
@@ -499,6 +501,7 @@ def open_store(root: Path, work: Path) -> PortableStore:
         reuse=SenselabReuse(),
         on_commit=record_execution,
         work_dir=work_dir,
+        lease_settings=lease,
     )
 
 

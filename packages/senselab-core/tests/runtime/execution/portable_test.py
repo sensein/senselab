@@ -1,13 +1,15 @@
-"""The senselab store identity: a checksum with pydra's absence suffix."""
+"""The senselab store identity and lease: a checksum with pydra's absence suffix, and the profile's lease bounds."""
 
 import hashlib
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from senselab_core.kernel.identity import LogicalKey
-from senselab_core.runtime.execution import portable
+from senselab_core.runtime.execution import portable, warm
 from senselab_core.runtime.execution.run import RESULTS_DIR
 from senselab_core.runtime.store import key_record
+from senselab_core.testing.pools import POOL_PROFILE
 from senselab_worker.canonical import jcs_dumps
 
 KEY = LogicalKey(
@@ -63,3 +65,19 @@ def test_a_job_with_absent_values_keys_its_entry_by_its_logical_key_and_their_tr
 def test_the_default_result_store_is_named_by_its_identity() -> None:
     """A new store identity reads no root an earlier one wrote: the default root carries its name."""
     assert RESULTS_DIR.endswith(portable.SenselabIdentity.name)
+
+
+@pytest.mark.logic
+def test_the_store_leases_are_bounded_by_the_profiles_lease_section(tmp_path: Path) -> None:
+    """A session's store takes, beats and waits on its job leases as the profile's `lease` says, as its pool does."""
+    bounds = warm.lease_settings(POOL_PROFILE)
+    lease = POOL_PROFILE.lease
+    assert (bounds.stale_after, bounds.renew_fraction, bounds.attribute_delay) == (
+        lease.stale_after_s,
+        lease.renew_fraction,
+        lease.attribute_delay_s,
+    )
+    assert bounds.timeout == max(lease.wait_s, lease.stale_after_s + lease.attribute_delay_s)
+    assert warm.settings(POOL_PROFILE).lease == bounds
+    store = portable.open_store(tmp_path / "store", tmp_path / "work", bounds)
+    assert store.lease_settings == bounds and store.lease_settings.holder == "anonymous"

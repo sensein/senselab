@@ -243,17 +243,21 @@ def budgets(profile: ExecutionProfile) -> FaultBudgets:
     )
 
 
+def lease_settings(profile: ExecutionProfile) -> LeaseSettings:
+    """Return the profile's `lease` section as pydra's lease settings, for the pool's leases and the store's."""
+    lease = profile.lease
+    return LeaseSettings(
+        stale_after=lease.stale_after_s,
+        renew_fraction=lease.renew_fraction,
+        attribute_delay=lease.attribute_delay_s,
+        timeout=max(lease.wait_s, lease.stale_after_s + lease.attribute_delay_s),
+    )
+
+
 def settings(profile: ExecutionProfile) -> PoolSettings:
     """Return the profile's pool settings: its lease, polls, wall target and unmeasured workers; no re-check."""
-    lease = profile.lease
-    timeout = max(lease.wait_s, lease.stale_after_s + lease.attribute_delay_s)
     return PoolSettings(
-        lease=LeaseSettings(
-            stale_after=lease.stale_after_s,
-            renew_fraction=lease.renew_fraction,
-            attribute_delay=lease.attribute_delay_s,
-            timeout=timeout,
-        ),
+        lease=lease_settings(profile),
         poll_s=profile.pool.poll_s,
         idle_polls=profile.pool.idle_polls,
         call_timeout=profile.timeouts.request_s,
@@ -372,7 +376,7 @@ class PoolSession:
         work = self.root / "private" / "work"
         work.mkdir(parents=True, exist_ok=True, mode=0o700)
         (self.root / "private").chmod(0o700)
-        self.store = open_store(Path(store), work)
+        self.store = open_store(Path(store), work, lease_settings(profile))
         calibration = DirectoryCalibration(calibration_root(profile) or self.root / "pool" / "calibration")
         self.calibration = calibration
         self.providers = (SenselabWorker(), SenselabHost())
