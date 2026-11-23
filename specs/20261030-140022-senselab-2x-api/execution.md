@@ -831,3 +831,46 @@ senselab is pinned to pydra `integration/senselab` @`b98cb8a0` (#988, the pool f
   only broken classes, and a run that already received its held outcomes still raises `QueueHeld`.
 - `orcd_driver profile` writes the job's copy of a site profile already expanded, so an ORCD run's profile identity
   names the job's literal values.
+
+## Amendment 2026-11-22 (route-B S2): the repin to pydra `f191eb6c`
+
+senselab is pinned to pydra `integration/senselab` @`f191eb6c`, which adds RFC 0004's identity group (`pydra-identity@2`
+is pydra's default store identity), `Absent` and its checksum suffix (R10a-core, R10a-split, R10a-store), gates (R10b),
+find-before-lease and `PortableStore` as pydra's default store (X6, X6b), `PortableStore(lease_settings=)` (P-lease)
+and `workflow.loop` (R11). What changed for senselab:
+
+- **senselab keys nothing on pydra's own checksums.** Every pydra task senselab defines supplies its checksum (the
+  logical key's digest, or a records or plan name), so `pydra-identity@2` changes no senselab key. The run-scoped
+  adapter store keeps its records in memory.
+- **The store identity is `senselab-identity@2` and accepts suffixed checksums.** A job with a supplied checksum that
+  accepted or dropped an `Absent` has `-absent-<sha256 of its triples>` appended to its checksum, and pydra's store
+  now checks every published key against its checksum. senselab's identity keys such an entry by the logical key's
+  fields plus `absent`, the triples in pydra's form, and its `check_key` accepts `<logical-key@7 digest><suffix>`,
+  pydra's `PydraIdentityV2` rule. This was chosen over a `logical-key@8` with an `absent` field because the logical key
+  then stays the senselab identity of a computation everywhere else (plans, provenance, `ResultRef.key_digest`,
+  measures) and only the store's key record, which pydra already defines for this case, carries the triples. No
+  senselab job produces an `Absent` today: senselab outputs are result references, a failure is `Failed`, and the
+  compiled nodes' checksum functions read result references only.
+- **A new identity starts a new store.** pydra refuses a root whose header names another identity
+  (`StoreLayoutMismatch`), so the default result store moves to `<cache>/2x/results-senselab-identity@2`; entries written
+  under @1 recompute. A run whose manifest names an @1 root raises the mismatch.
+- **The store's job leases follow the profile** (closes the 300 s resume item of the S1b amendment). A session's
+  `PortableStore` gets the `LeaseSettings` its pool gets (`warm.lease_settings`: `stale_after_s`, `renew_fraction`,
+  `attribute_delay_s`, and a timeout of the larger of `wait_s` and `stale_after_s + attribute_delay_s`). A holder
+  records its `stale_after` and a taker honours the larger of its own and the holder's, at most pydra's
+  `max_honoured_stale_after` (1200 s by default), so a resume under a shorter profile still waits out a holder that ran
+  under a longer one, up to that cap. Readers that take no lease (`Run.store`, the planner's servable count) keep
+  pydra's defaults.
+- **A claim that ended since the last look counts as working.** The no-progress check could fall between a worker
+  removing its claim lease and the driver receiving the outcome; `PoolSession.working` now counts a claim seen at the
+  last look and gone now, once.
+- **Per-element release past a gather source holds (E2).** A node feeding both a gather and a mapped node runs as its
+  combined copy `g_<node>`, and the mapped node's element `i` is released once element `i` of the source ends
+  (`runner_test::test_a_mapped_node_after_a_gather_source_is_released_per_element_and_the_gather_after_all`). A map over
+  a node's list output is refused at planning (`UnmappedOutput`).
+- **Driver overhead at 10⁴ leaf jobs** (a probe outside the tree, as `benchmarks` may not import pydra: leaf jobs with
+  supplied checksums driven by the driver loop on `SenselabStore`, each completed at once; one laptop under load,
+  so upper bounds):
+  1.79 and 1.75 ms per job at `b98cb8a0`, 1.89 and 1.78 ms at `f191eb6c`. `Job.context` is on the per-job path (the
+  driver reads it for each result's slot): 4 to 6 % of the wall at 10⁴, and about 89 % at 200 jobs, where the first
+  contexts dominate. Memoising it per task class and environment in the submitting process is a follow-up (R-325).
