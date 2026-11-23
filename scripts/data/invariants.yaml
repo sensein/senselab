@@ -54,4 +54,7 @@ invariants:
 - path: packages/senselab-core/src/senselab_core/testing/processes.py
   name: POLL_S
   reason: The poll of a test-harness process probe, run on its injected clock.
+- path: packages/senselab-core/src/senselab_core/runtime/execution/portable.py
+  name: OPEN_ATTEMPTS
+  reason: A store open follows its header across two identity names and the one upgrade between them; a header changes name at most once.
 pending: []

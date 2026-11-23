@@ -859,7 +859,14 @@ and `workflow.loop` (R11). What changed for senselab:
     pydra's header-temporary form, synced, renamed over the old one with its mode kept, and the directory is synced. A
     concurrent opener therefore reads one header whole, and two upgraders write the same bytes. The header is
     rewritten once.
-  - **A root the account cannot write** is read under @1, with no write.
+  - **The mode is set through the descriptor.** The temporary is opened with `O_NOFOLLOW` and given the header's
+    mode by `fchmod`, so an upgrader's umask never narrows a group-shared header.
+  - **An opener that races an upgrade follows the header.** On an identity refusal, the opener re-reads the header and
+    reopens under the senselab name it now gives, at most `OPEN_ATTEMPTS` (3) times: @2, then @1, then @2 again if
+    the header was upgraded during the @1 open. A header changes name at most once, so the first jobs of an array
+    opening one shared store together all open it.
+  - **A root the account cannot write** is read under @1, with no write. So is a root whose header rename is
+    refused although `access()` reports it writable (a sticky-bit directory, NFS); that case is logged once.
   - **Any other identity name** is still refused.
   - The default result store keeps its root, `<cache>/2x/results`.
 - **The store's job leases follow the profile** (closes the 300 s resume item of the S1b amendment). A session's

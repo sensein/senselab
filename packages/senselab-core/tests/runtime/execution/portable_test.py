@@ -1,6 +1,7 @@
 """The senselab store identity and lease: a checksum with pydra's absence suffix, and the profile's lease bounds."""
 
 import hashlib
+import os
 from pathlib import Path
 
 import pytest
@@ -67,6 +68,80 @@ def test_a_store_of_any_other_identity_is_refused_and_left_as_it_was(tmp_path: P
     with pytest.raises(mismatch, match="identity"):
         portable.open_store(tmp_path / "store", tmp_path / "work")
     assert header.read_bytes() == written
+
+
+def _previous_store(tmp_path: Path) -> Path:
+    """Make a store at `tmp_path/store` whose header names `senselab-identity@1`; return its header."""
+    portable.open_store(tmp_path / "store", tmp_path / "work")
+    return relabel_store(tmp_path / "store", "senselab-identity@1")
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("window", ["senselab-identity@2", "senselab-identity@1"])
+def test_an_opener_racing_another_processs_upgrade_opens_the_upgraded_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, window: str
+) -> None:
+    """Another process upgrades the header while this one opens: after its @2 open was refused, or as its @1 open reads.
+
+    Either way the open follows the header it finds and ends on the upgraded store, never a layout mismatch.
+    """
+    store_module = pytest.importorskip("pydra.engine.portable.store")
+    header = _previous_store(tmp_path)
+    real = store_module.open_layout
+    raced: list[str] = []
+
+    def racing(handle: object, expected: object, *args: object, **kwargs: object) -> object:
+        configured = expected.identity["name"]  # type: ignore[attr-defined]
+        if not raced and configured == window:
+            raced.append(configured)
+            if window == "senselab-identity@1":
+                portable.upgrade_header(tmp_path / "store")
+            else:
+                try:
+                    return real(handle, expected, *args, **kwargs)
+                finally:
+                    portable.upgrade_header(tmp_path / "store")
+        return real(handle, expected, *args, **kwargs)
+
+    monkeypatch.setattr(store_module, "open_layout", racing)
+    store = portable.open_store(tmp_path / "store", tmp_path / "work")
+    assert raced == [window] and store.identity.name == "senselab-identity@2"
+    assert b"senselab-identity@2" in header.read_bytes()
+
+
+@pytest.mark.logic
+def test_an_upgraded_header_keeps_its_mode_whatever_the_umask(tmp_path: Path) -> None:
+    """The header's mode is set through its descriptor, so an upgrader's umask never narrows it for the group."""
+    header = _previous_store(tmp_path)
+    header.chmod(0o444)
+    previous = os.umask(0o077)
+    try:
+        portable.open_store(tmp_path / "store", tmp_path / "work")
+    finally:
+        os.umask(previous)
+    assert b"senselab-identity@2" in header.read_bytes()
+    assert header.stat().st_mode & 0o777 == 0o444
+
+
+@pytest.mark.logic
+def test_a_refused_upgrade_serves_the_previous_store_unchanged_and_says_so(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A root that looks writable but refuses the header's rename is read under @1, header unchanged, logged once."""
+    header = _previous_store(tmp_path)
+    written = header.read_bytes()
+    replace = os.replace
+
+    def refusing(source: object, target: object) -> None:
+        if str(target).endswith("pydra-store.json"):
+            raise PermissionError(13, "refused", str(target))
+        replace(source, target)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "replace", refusing)
+    store = portable.open_store(tmp_path / "store", tmp_path / "work")
+    assert store.identity.name == "senselab-identity@1" and header.read_bytes() == written
+    assert [r.levelname for r in caplog.records if "not upgraded" in r.getMessage()] == ["WARNING"]
+    assert not list((tmp_path / "store").glob(".pydra-store.*"))
 
 
 @pytest.mark.logic

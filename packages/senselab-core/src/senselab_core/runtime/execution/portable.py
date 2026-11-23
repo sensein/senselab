@@ -13,11 +13,11 @@ import logging
 import os
 import threading
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Final
 
 from pydra.engine.absent import absence_suffix
 from pydra.engine.lease import LeaseSettings
@@ -183,7 +183,8 @@ def _now() -> str:
 def entry_key(key: LogicalKey, absent: Sequence[tuple[str, int, str]]) -> dict[str, Any]:
     """Return the store key record of `key`: its fields, plus `absent` in pydra's form when it has absence triples."""
     record = key_record(key)
-    assert isinstance(record, dict)
+    if not isinstance(record, dict):
+        raise TypeError(f"a logical key records as a mapping, got {type(record).__name__}")
     return {**record, ABSENT_KEY: absent_form(absent)} if absent else record
 
 
@@ -532,16 +533,40 @@ def open_store(root: Path, work: Path, lease: LeaseSettings | None = None) -> Po
             lease_settings=lease,
         )
 
+    store = _following(opened, Path(root))
+    if store.identity.name == IDENTITY or not os.access(root, os.W_OK | os.X_OK):
+        return store
     try:
-        return opened(IDENTITY)
-    except StoreLayoutMismatch as err:
-        if err.key != "identity" or _header_identity(Path(root)) != UPGRADED:
-            raise
-    previous = opened(UPGRADED)
-    if not os.access(root, os.W_OK | os.X_OK):
-        return previous
-    upgrade_header(Path(root))
-    return opened(IDENTITY)
+        upgrade_header(Path(root))
+    except OSError as err:
+        logger.warning("the store at %s was not upgraded to %s and is read under %s: %s", root, IDENTITY, UPGRADED, err)
+        return store
+    return _following(opened, Path(root))
+
+
+OPEN_ATTEMPTS: Final = 3  # invariant: two identity names and one upgrade between them
+"""Opens a store takes to follow its header: under `IDENTITY`, then under the name the header gives after the refusal
+(`UPGRADED`, or `IDENTITY` when another process upgraded it in between), then under `IDENTITY` once more if it was
+upgraded during the `UPGRADED` open. A header changes name at most once, so a later refusal is no race."""
+
+
+def _following(opened: Callable[[str], PortableStore], root: Path) -> PortableStore:
+    """Open the store at `root` under the senselab identity its header names, re-reading the header on each refusal.
+
+    Raises:
+        StoreLayoutMismatch: the header names another identity, or differs in any other key.
+    """
+    name = IDENTITY
+    for attempt in range(OPEN_ATTEMPTS):
+        try:
+            return opened(name)
+        except StoreLayoutMismatch as err:
+            found = _header_identity(root)
+            last = attempt == OPEN_ATTEMPTS - 1
+            if last or err.key != "identity" or found not in (IDENTITY, UPGRADED):
+                raise
+            name = str(found)
+    raise RuntimeError(f"OPEN_ATTEMPTS is {OPEN_ATTEMPTS}; a store open needs at least one")
 
 
 def _header_identity(root: Path) -> object:
@@ -556,15 +581,18 @@ def upgrade_header(root: Path) -> None:
     """Rewrite the `UPGRADED` store header at `root` to name `IDENTITY`, keeping every other key and its mode.
 
     The new header is written to a temporary of pydra's header-temporary form, synced and renamed over the old one,
-    so a concurrent opener reads the old or the new header whole; two upgraders write the same bytes.
+    so a concurrent opener reads the old or the new header whole; two upgraders write the same bytes. The mode is set
+    through the descriptor, never from the umask, and a link at the temporary's name is refused.
     """
     header = root / HEADER_NAME
     doc = json.loads(header.read_bytes())
     doc["identity"]["name"] = IDENTITY
     data = LayoutHeader.from_json(json.dumps(doc).encode()).to_json()
     staged = root / f"{TEMP_PREFIX}{uuid.uuid4().hex}{TEMP_SUFFIX}"
-    fd = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL, header.stat().st_mode & 0o777)
+    mode = header.stat().st_mode & 0o7777
+    fd = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
     try:
+        os.fchmod(fd, mode)
         with os.fdopen(fd, "wb") as out:
             out.write(data)
             out.flush()
