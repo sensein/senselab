@@ -851,9 +851,17 @@ and `workflow.loop` (R11). What changed for senselab:
   measures) and only the store's key record, which pydra already defines for this case, carries the triples. No
   senselab job produces an `Absent` today: senselab outputs are result references, a failure is `Failed`, and the
   compiled nodes' checksum functions read result references only.
-- **A new identity starts a new store.** pydra refuses a root whose header names another identity
-  (`StoreLayoutMismatch`), so the default result store moves to `<cache>/2x/results-senselab-identity@2`; entries written
-  under @1 recompute. A run whose manifest names an @1 root raises the mismatch.
+- **An @1 store is upgraded in place, so nothing recomputes (UX-61).** Every @1 entry is an @2 entry, because @1 never
+  wrote absence triples. pydra refuses a root whose header names another identity (`StoreLayoutMismatch`), so
+  `open_store` handles that refusal itself: when the stored name is `senselab-identity@1`, it opens the root under @1,
+  which lets pydra check every other header key.
+  - **A writable root** has its header rewritten to @2 (`upgrade_header`). The new header is written to a temporary in
+    pydra's header-temporary form, synced, renamed over the old one with its mode kept, and the directory is synced. A
+    concurrent opener therefore reads one header whole, and two upgraders write the same bytes. The header is
+    rewritten once.
+  - **A root the account cannot write** is read under @1, with no write.
+  - **Any other identity name** is still refused.
+  - The default result store keeps its root, `<cache>/2x/results`.
 - **The store's job leases follow the profile** (closes the 300 s resume item of the S1b amendment). A session's
   `PortableStore` gets the `LeaseSettings` its pool gets (`warm.lease_settings`: `stale_after_s`, `renew_fraction`,
   `attribute_delay_s`, and a timeout of the larger of `wait_s` and `stale_after_s + attribute_delay_s`). A holder

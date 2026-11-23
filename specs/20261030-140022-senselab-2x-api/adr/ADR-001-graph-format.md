@@ -135,9 +135,14 @@ Authority: route-B task S1b, the repin to pydra `integration/senselab` @`3046e31
 The `PortableStore` identity of the 2026-11-21 (second) amendment is `senselab-identity@2`: as @1, and a job whose
 pydra checksum carries an absence suffix (RFC 0002 §2.3(a)) keys its entry by the logical key's fields plus `absent`,
 its absence triples in pydra's form, with the checksum `<logical key digest><suffix>`. The logical key is unchanged
-(`logical-key@7`). The default result store is named by the identity, so an @1 root is never opened under @2.
+(`logical-key@7`). Every @1 entry is an @2 entry, since the two differ only for entries with absence triples, which @1
+never wrote. So the default result store keeps its root. A root whose header names @1, and matches in every other key,
+has its header rewritten to @2 in place, atomically, when the account can write the root. A root it cannot write is
+read under @1 with no write. A header naming any other identity is refused (`StoreLayoutMismatch`). An upgrade
+recomputes nothing (UX-61).
 
-Authority: route-B task S2, the repin to pydra `integration/senselab` @`f191eb6c` (RFC 0004 identity group).
+Authority: route-B task S2, the repin to pydra `integration/senselab` @`f191eb6c` (RFC 0004 identity group), and the
+controller's UX-61 ruling of 2026-11-22.
 
 ## Amendment log
 
@@ -145,4 +150,4 @@ Authority: route-B task S2, the repin to pydra `integration/senselab` @`f191eb6c
 - 2026-11-05: under Route A pydra is the graph runner above the `Executor`s, not an executor; node-supplied checksums, no byte representations; record lists zip per record; nested fan-outs refused by `validate`, a map over a list output not run in Phase 3 (Task 9b, P3-2).
 - 2026-11-21: `PydraRunner` drives pydra's `GraphRunner` by the RFC 0002 §3.5 loop in place of `ExecutorWorker`; the protocol lists `poll`, `fragment_size`, `bind_epoch` and `submit_many(fragments, stop)` (route-B S1a).
 - 2026-11-21: jobs run on pydra's `WarmPool` through a caller-owned `PoolSession`, results on a fresh `PortableStore` under senselab's identity and reuse rule; senselab's `Executor` protocol, `InProcess` and `Pool` are gone (route-B S1b).
-- 2026-11-22: the store identity is `senselab-identity@2`, accepting pydra's absence-suffixed checksums; the default result store is named by it (route-B S2).
+- 2026-11-22: the store identity is `senselab-identity@2`, accepting pydra's absence-suffixed checksums; an @1 store header is upgraded in place, so an upgrade recomputes nothing (route-B S2).
