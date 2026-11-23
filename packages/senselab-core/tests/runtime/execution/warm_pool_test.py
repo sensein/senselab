@@ -651,6 +651,18 @@ def test_a_failed_listing_at_the_no_progress_check_counts_as_working(
     assert "could not run squeue" in caplog.text
 
 
+def test_a_claim_that_ended_since_the_last_look_counts_as_working(tmp_path: Path) -> None:
+    """A claim gone since the last look ended its ticket, whose outcome is on its way: working once, then not."""
+    with PoolSession(DEADLINE, tmp_path / "session", tmp_path / "store", substrate=_Refusing(), here=True) as session:
+        queue = session.root / "pool" / "queues" / "planted"
+        (queue / "claims" / "t.lease").mkdir(parents=True)
+        (queue / "name").write_text("cpu", encoding="utf-8")
+        looks = [session.working(["cpu"]), session.working(["cpu"])]
+        (queue / "claims" / "t.lease").rmdir()
+        looks += [session.working(["cpu"]), session.working(["cpu"])]
+    assert looks == [True, False, True, False]
+
+
 def test_a_plan_placed_in_one_shell_runs_in_another_whose_env_root_differs(
     tmp_path: Path, planted: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
