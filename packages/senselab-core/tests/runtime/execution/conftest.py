@@ -16,6 +16,7 @@ collect_ignore = (
     []
     if importlib.util.find_spec("pydra") is not None
     else [
+        "portable_test.py",
         "provenance_check_test.py",
         "resume_test.py",
         "run_test.py",

@@ -64,8 +64,8 @@ PYDRA_DIR = f"{PRIVATE_DIR}/pydra"
 """The pydra runner's job and error pickles, which hold the store path and tracebacks."""
 LICENSES_FILE = "licenses.json"
 """The run's license policy, written once at its first start (`run-licenses@1`)."""
-RESULTS_DIR = "2x/results"
-"""The default result store, `<cache root>/2x/results`."""
+RESULTS_DIR = "2x/results-senselab-identity@2"
+"""The default result store, named by its store identity, so a new identity starts an empty store."""
 ATTEMPTS_DIR = "attempts"
 POOL_DIRS = ("prov",)
 _LIST = re.compile(r"^list\[(.+)\]$")

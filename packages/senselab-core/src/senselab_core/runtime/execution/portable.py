@@ -16,6 +16,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from pydra.engine.absent import absence_suffix
+from pydra.engine.portable.identity import ABSENT_KEY, absent_form, absent_triples
 from pydra.engine.portable.reuse import Candidate, Verdict
 from pydra.engine.portable.store import PortableStore
 from senselab_worker.canonical import jcs_dumps
@@ -168,23 +170,36 @@ def _now() -> str:
 
 @dataclass(frozen=True)
 class SenselabIdentity:
-    """`senselab-identity@1`: the key is the job's `LogicalKey`, the slot its context's `context@5` fingerprint."""
+    """`senselab-identity@2`: the key is the job's `LogicalKey`, the slot its context's `context@5` fingerprint.
+
+    A job whose pydra checksum carries an absence suffix (`<digest>-absent-<hex>`) keys its entry by the logical key's
+    fields plus `absent`, its absence triples in pydra's form, and its checksum is the logical key's digest plus the
+    suffix of those triples.
+    """
 
     recorded_only: frozenset[str] = RECORDED_ONLY
-    name: ClassVar[str] = "senselab-identity@1"
+    name: ClassVar[str] = "senselab-identity@2"
     fingerprint_name: ClassVar[str] = "context@5"
 
     def key(self, job: "PydraJob") -> dict[str, Any]:
-        """Return the record the job's checksum digests: its logical key's fields."""
+        """Return the record the job's checksum digests: its logical key's fields, and `absent` when it has any."""
         record = key_record(doc_of(job.task).key)
         assert isinstance(record, dict)
-        return record
+        triples = job.absent
+        return {**record, ABSENT_KEY: absent_form(triples)} if triples else record
 
     def check_key(self, checksum: str, key: Mapping[str, Any]) -> bool:
-        """Whether `key` is a logical key whose digest is `checksum`."""
+        """Whether `key` is a logical key whose digest, plus the absence suffix of its `absent`, is `checksum`."""
+        fields = {k: v for k, v in key.items() if k != ABSENT_KEY}
         try:
-            return LogicalKey.model_validate(dict(key)).digest() == checksum
-        except ValueError:
+            suffix = ""
+            if ABSENT_KEY in key:
+                triples = absent_triples(key[ABSENT_KEY])
+                if not triples or absent_form(triples) != key[ABSENT_KEY]:
+                    return False
+                suffix = absence_suffix(triples)
+            return LogicalKey.model_validate(fields).digest() + suffix == checksum
+        except (TypeError, ValueError):
             return False
 
     def context(self, job: "PydraJob", phase: str) -> dict[str, Any]:
