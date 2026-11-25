@@ -11,7 +11,7 @@ from typing import Any
 from senselab.audio.workflows.triage.nodes.common import live_entities
 from senselab.utils.prov_store import ProvStore
 
-CORPUS = Path("/orcd/scratch/bcs/002/satra/triage_replay_20260922/out")
+CORPUS = Path("${ORCD_GROUP_SCRATCH}/triage_replay_20260922/out")
 
 
 def _overlaps(a: tuple[float, float], b: tuple[float, float]) -> bool:

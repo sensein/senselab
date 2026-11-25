@@ -60,7 +60,7 @@ duration from ADMIT's `recording` stream and the event tokens from the consensus
 
 ## Measured effect
 
-In-memory re-fold of r9 stores, read-only (`/orcd/scratch/bcs/002/satra/tmp_trunc/`), old code
+In-memory re-fold of r9 stores, read-only (`${ORCD_GROUP_SCRATCH}/tmp_trunc/`), old code
 `73a9f66d` against this change, 0 errors.
 
 All 114 empty-route recordings discard (76 already did). Of the 38 that were flagged, 36 go as

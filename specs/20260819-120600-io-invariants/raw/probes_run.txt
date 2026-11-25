@@ -72,21 +72,21 @@ note: 1.0 -> 32767 means /32767-ish or clamped; -1.0 -> -32768 means /32768 scal
   --- mp4_h264_aac (15284 bytes)
     torchcodec.AudioDecoder      OK shape=(1, 48128) sr=48000
     torchaudio.load              OK shape=(1, 48128) sr=48000
-    soundfile.read               LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work2/vid_mp4_h264_aac.mp4': Format not recogni
+    soundfile.read               LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work2/vid_mp4_h264_aac.mp4': Format not recogni
     librosa.load                 OK shape=(1, 48000) sr=48000
     ffmpeg-cli                   OK 48128 samples
 
   --- mkv_vp9_opus (16158 bytes)
     torchcodec.AudioDecoder      OK shape=(1, 48000) sr=48000
     torchaudio.load              OK shape=(1, 48000) sr=48000
-    soundfile.read               LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work2/vid_mkv_vp9_opus.mkv': Format not recogni
+    soundfile.read               LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work2/vid_mkv_vp9_opus.mkv': Format not recogni
     librosa.load                 OK shape=(1, 48000) sr=48000
     ffmpeg-cli                   OK 48000 samples
 
   --- mov_h264_pcm (101965 bytes)
     torchcodec.AudioDecoder      OK shape=(1, 48000) sr=48000
     torchaudio.load              OK shape=(1, 48000) sr=48000
-    soundfile.read               LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work2/vid_mov_h264_pcm.mov': Format not recogni
+    soundfile.read               LibsndfileError: Error opening '${AGENT_SCRATCH}/io-audit/work2/vid_mov_h264_pcm.mov': Format not recogni
     librosa.load                 OK shape=(1, 48000) sr=48000
     ffmpeg-cli                   OK 48000 samples
 

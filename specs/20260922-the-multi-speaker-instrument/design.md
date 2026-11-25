@@ -217,8 +217,8 @@ take.
 `specs/20260817-triage-workflow-dag/config-derivations.md` § verdict.gates.**
 
 What the corpus scan can say, over the 62,392 recordings of the replayed run at
-`/orcd/scratch/bcs/002/satra/triage_replay_20260922/out/` (the scan is
-`/orcd/scratch/bcs/002/satra/msinstr_20260922/scripts/scan_trigger.py`, array job 23477727, which
+`${ORCD_GROUP_SCRATCH}/triage_replay_20260922/out/` (the scan is
+`${ORCD_GROUP_SCRATCH}/msinstr_20260922/scripts/scan_trigger.py`, array job 23477727, which
 reads each recording's `summary.json` and its `enhanced_diarization` sidecar and recomputes the
 share against the task extent — no inference, nothing written to the replayed tree):
 

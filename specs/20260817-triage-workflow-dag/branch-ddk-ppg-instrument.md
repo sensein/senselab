@@ -85,7 +85,7 @@ nothing downstream may treat `unit_places` as one. Both measurements carry that 
 
 ## What the instrument reads on known material
 
-Measured on the b2ai corpus at `/orcd/scratch/bcs/002/satra/clipfix_20260913`, 2026-09-16, over 597
+Measured on the b2ai corpus at `${ORCD_GROUP_SCRATCH}/clipfix_20260913`, 2026-09-16, over 597
 declared-DDK recordings across the five DDK families (`-pa -ta -ka -pataka -buttercup`) against
 connected-speech and non-speech controls. **These are descriptive context for reading a measurement,
 not thresholds, and nothing in the code compares against them.**
