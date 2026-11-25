@@ -1,6 +1,6 @@
 {
     "schema_version": "triage-summary-demo-manifest/v1",
-    "output_root": "/Users/satra/Downloads/pr567-redesigned-summaries",
+    "output_root": "${LOCAL_INPUT}/pr567-redesigned-summaries",
     "reports": [
         {
             "name": "sample-speech-flag",

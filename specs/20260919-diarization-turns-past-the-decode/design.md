@@ -23,7 +23,7 @@ SPEECH runs no diarizer of its own. It reads `enhanced_diarization` (the first s
 ## The source was wrong, not the audio
 
 Three measurements, all over the Sept-8 corpus at
-`/orcd/scratch/bcs/002/satra/triage_full_20260908/out/` (62,578 stores on disk):
+`${ORCD_GROUP_SCRATCH}/triage_full_20260908/out/` (62,578 stores on disk):
 
 | measurement | result |
 | --- | --- |

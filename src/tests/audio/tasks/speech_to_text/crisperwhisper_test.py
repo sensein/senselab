@@ -214,14 +214,14 @@ def test_the_strategy_used_reaches_the_scriptline(monkeypatch: pytest.MonkeyPatc
 def test_ct2_cache_key_matches_the_library_layout() -> None:
     """The computed key is the directory name the library's converter writes."""
     snapshot = (
-        "/orcd/data/satra/002/huggingface/hub/models--nyralabs--CrisperWhisper2.0_turbo"
+        "/srv/models/huggingface/hub/models--nyralabs--CrisperWhisper2.0_turbo"
         "/snapshots/de0369c8a68025b7f6e86387b6eb5a3b369787c8"
     )
     assert cw._ct2_cache_key(snapshot, "float32") == (
-        "--orcd--data--satra--002--huggingface--hub--models--nyralabs--CrisperWhisper2.0_turbo"
-        "--snapshots--de0369c8a68025b7f6e86387b6eb5a3b369787c8_float32_6794fe16e2f2"
+        "--srv--models--huggingface--hub--models--nyralabs--CrisperWhisper2.0_turbo"
+        "--snapshots--de0369c8a68025b7f6e86387b6eb5a3b369787c8_float32_89a17684b38a"
     )
-    assert cw._ct2_cache_key(snapshot, "float16").endswith("_float16_6794fe16e2f2")
+    assert cw._ct2_cache_key(snapshot, "float16").endswith("_float16_89a17684b38a")
 
 
 def test_torn_ct2_entry_is_discarded(tmp_path: Path) -> None:

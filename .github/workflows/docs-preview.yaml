@@ -6,7 +6,10 @@ permissions:
   deployments: write
 
 on:
+  # 1.x previews at the site root (pr-<N>/), for every base except the 2.x line, which runs
+  # 2x-docs-preview.yaml.
   pull_request:
+    branches-ignore: [2.x, senselab-2x-api, 2x/**]
     types: [opened, synchronize, reopened, closed]
 
 jobs:
@@ -39,7 +42,9 @@ jobs:
         uv run python scripts/generate-compat-matrix.py
         touch docs/.nojekyll
     - name: Deploy preview
-      run: bash .github/scripts/docs-deploy.sh preview docs "${{ github.event.pull_request.number }}"
+      env:
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: bash .github/scripts/docs-deploy.sh preview docs "$PR_NUMBER"
 
   cleanup:
     if: github.event.action == 'closed'

@@ -1,7 +1,7 @@
 # Measurement
 
 Every number here comes from the Sept-8 corpus at
-`/orcd/scratch/bcs/002/satra/triage_full_20260908/out/` (62,578 run directories, 62,521 with a
+`${ORCD_GROUP_SCRATCH}/triage_full_20260908/out/` (62,578 run directories, 62,521 with a
 complete set of decodable streams). The corpus driver ran PREPROCESS and TAXONOMY and **no branch**,
 so a SPEECH replay over those stores is the first time the branch sees them — the same thing a
 corpus SPEECH pass would do, and with no hint, exactly as the driver runs PREPROCESS.

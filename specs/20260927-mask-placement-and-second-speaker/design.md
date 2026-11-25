@@ -177,7 +177,7 @@ NAME 394, AGE 213 ("ninety-three"), LOCATION 50.
 - Replay (5-7): replay all 62,550 (SPEECH's residue for recall tasks; the replay retires every REVIEW
   reading), the review manifest, a full GPU review of every recording with residue (about 15,200;
   the owner asked for every reading to come from one prompt), re-fold, parquet, page. Staged under
-  `/orcd/scratch/bcs/002/satra/triage_r7_20260927/`, with `RUN.md`.
+  `${ORCD_GROUP_SCRATCH}/triage_r7_20260927/`, with `RUN.md`.
 
 ## 9. SPEECH places each finding on its own words (replay set)
 
