@@ -156,6 +156,8 @@ from senselab.audio.workflows.triage.vocabulary import (
     reviewer_may_unmask,
     standing_task_extents,
 )
+from senselab.audio.workflows.triage.vocabulary import QUALITY as QUALITY_NODE
+from senselab.audio.workflows.triage.workflow import off_notes
 from senselab.utils.prov_store import PROV_TYPE, Entity, ProvStore
 
 NODE = "VERDICT"
@@ -573,6 +575,8 @@ def _task_evidence(
     store: ProvStore,
     declared_family: str | None,
     gate_record: Mapping[str, Any] | None = None,
+    *,
+    quality_off: bool = False,
 ) -> TaskEvidence:
     """Whether the declared task was performed at all: its owner, the duration and its event tokens.
 
@@ -581,6 +585,8 @@ def _task_evidence(
             AIRWAY's task readings.
         declared_family: The task family the recording declares.
         gate_record: The gate outcome record, read for the owning node's uncomputed readings.
+        quality_off: Whether the workflow leaves QUALITY off (plan step 11); its join is then not expected, so its
+            absence is no uncomputed reading.
 
     Returns:
         The evidence :func:`~senselab.audio.workflows.triage.vocabulary.fold_file_verdict` reads. A
@@ -633,7 +639,7 @@ def _task_evidence(
         {k: v for k, v in joined.attributes.items() if k not in ("name", "signal")}
         if joined is not None
         else {"missing": [QUALITY_JOIN]}
-        if find_measurement(store, BACKGROUND_MODEL) is not None
+        if find_measurement(store, BACKGROUND_MODEL) is not None and not quality_off
         else {}
     )
     speech_reading = find_measurement(store, TASK_SPEECH_READING) if reads_task_speech(declared_family) else None
@@ -1477,11 +1483,12 @@ def verdict(
     cohort = find_measurement(store, COHORT_READING)
     resolved_ran = {**_derived_ran(store, node_verdicts, reports), **(ran or {})}
     policy = FoldPolicy.from_config(config)
+    off_stages = frozenset(off_notes(config.values))
     plan = fold_mask_plan(
         store, config, hint, reviewer_applies=policy.llm_reset_redactions and reviewer_may_unmask(annotation)
     )
     task_evidence = replace(
-        _task_evidence(store, declared_family or None, outcome.record()),
+        _task_evidence(store, declared_family or None, outcome.record(), quality_off=QUALITY_NODE in off_stages),
         reviewer_other_spans=reviewer_other_spans(store, annotation),
     )
     file_verdict = fold_file_verdict(
@@ -1492,6 +1499,7 @@ def verdict(
         ran=resolved_ran,
         hint_claims=_hint_claims(decisions, hint, declared_family=declared_family),
         route_state=route_state,
+        off_stages=off_stages,
         declared_family=declared_family or None,
         redaction=_redaction_evidence(store, report_pairs, plan, final_coverage(store, plan, config, run_dir)),
         llm_redaction=annotation,

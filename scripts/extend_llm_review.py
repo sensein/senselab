@@ -628,7 +628,7 @@ def main(argv: list[str] | None = None) -> int:
             args.manifest,
             slice_index=args.slice_index,
             slice_count=args.slice_count,
-            config=driver_config(args),
+            config=driver_config(args, stage="REVIEW"),
             log_dir=args.log_dir if args.log_dir is not None else args.manifest.parent,
             out_root=args.out_root,
             apply=args.apply,

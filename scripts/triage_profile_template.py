@@ -38,11 +38,24 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--name", required=True, help="The new profile's name")
     parser.add_argument("--extends", default=REFERENCE_PROFILE, help="senselab:<name>, a profile directory, or none")
     parser.add_argument("--start-from", type=Path, default=None, help="Copy this profile directory instead")
+    parser.add_argument(
+        "--off",
+        default="",
+        help="Comma-separated stages the dataset does not run (e.g. AIRWAY,COHORT); their values are not asked for",
+    )
     args = parser.parse_args(argv)
     extends = None if str(args.extends).lower() == "none" else args.extends
+    off = tuple(stage.strip() for stage in str(args.off).split(",") if stage.strip())
+    if off and args.start_from is not None:
+        print(
+            "ERROR: --off writes a new template; a copy (--start-from) keeps the original's workflow", file=sys.stderr
+        )
+        return 2
     try:
-        supply = values_to_supply(extends) if args.start_from is None else None
-        root = write_template(args.out, name=args.name, extends=extends, start_from=args.start_from, supply=supply)
+        supply = values_to_supply(extends, off=off) if args.start_from is None else None
+        root = write_template(
+            args.out, name=args.name, extends=extends, start_from=args.start_from, supply=supply, off=off
+        )
         blank = sum(len(entries) for entries in supply.values()) if supply is not None else None
     except (FileExistsError, ValueError, OSError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
