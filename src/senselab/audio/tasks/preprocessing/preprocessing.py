@@ -9,13 +9,14 @@ Notes:
 """
 
 import os
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union
 
 import torch
 import torchaudio.functional as taf
 from scipy import signal
 
 from senselab.audio.data_structures import Audio
+from senselab.utils import provenance as _provenance
 
 RESAMPLE_KAISER_PARAMS: Dict[str, Any] = {
     "lowpass_filter_width": 64,
@@ -25,12 +26,19 @@ RESAMPLE_KAISER_PARAMS: Dict[str, Any] = {
 }
 """Parameters of the anti-aliasing sinc filter used by :func:`resample_audios` (torchaudio's "kaiser_best")."""
 
+ResamplePrecision = Literal["float64", "float32"]
+"""The dtype :func:`resample_audios` computes in; the output is float32 either way."""
+
 
 # ---------------------------------------------------------------------
 # Resample Audios
 # ---------------------------------------------------------------------
 def resample_audios(
-    audios: List[Audio], resample_rate: int, lowcut: Optional[float] = None, order: int = 4
+    audios: List[Audio],
+    resample_rate: int,
+    lowcut: Optional[float] = None,
+    order: int = 4,
+    precision: ResamplePrecision = "float64",
 ) -> List[Audio]:
     """Resample a batch of `Audio` objects to a target sampling rate.
 
@@ -39,6 +47,16 @@ def resample_audios(
     passband is flat to about 7.4 kHz (-3 dB near 7.5 kHz) and content above 8 kHz is attenuated by
     more than 100 dB. An audio whose `sampling_rate` already equals `resample_rate` is returned
     unchanged when `lowcut` is `None`.
+
+    `precision` selects the dtype the filter computes in; the result is float32 either way.
+    ``"float64"`` (the default) gave identical output across the Intel and AMD CPUs tested, at about
+    2-2.5x the resample time: 30 minutes of 48 kHz audio took 3-5 s on one thread, against 1.3-1.9 s
+    in float32. ``"float32"`` is faster, but its output can differ in the last bit between CPU
+    vendors. Measurements: ``specs/20261125-resample-float64/design.md``.
+
+    Each resampled audio's metadata gains a ``resample_audios`` entry in ``processing_steps``,
+    with the parameters and precision it ran with and the fingerprint of its execution environment
+    (see :func:`senselab.utils.provenance.record_step`). An audio returned unchanged gains none.
 
     Args:
         audios (list[Audio]):
@@ -51,13 +69,17 @@ def resample_audios(
             when the rates already match. Must lie below the input's Nyquist frequency.
         order (int, optional):
             Order of the `lowcut` Butterworth filter (default: 4).
+        precision ({"float64", "float32"}, optional):
+            The dtype the filters compute in (default: ``"float64"``). The output is float32 either
+            way.
 
     Returns:
         list[Audio]: Resampled `Audio` objects (sampling rate set to `resample_rate`).
 
     Raises:
         ValueError:
-            If `lowcut` is not below the input's Nyquist frequency.
+            If `lowcut` is not below the input's Nyquist frequency, or `precision` is not one of
+            ``"float64"`` and ``"float32"``.
 
     Example:
         >>> from senselab.audio.tasks.preprocessing import resample_audios
@@ -67,7 +89,11 @@ def resample_audios(
         >>> out[0].sampling_rate
         16000
     """
+    if precision not in ("float64", "float32"):
+        raise ValueError(f"precision must be 'float64' or 'float32', got {precision!r}")
+    dtype = torch.float64 if precision == "float64" else torch.float32
     outs: List[Audio] = []
+    env: Optional[Dict[str, Any]] = None
 
     for audio in audios:
         md = audio.metadata.copy()
@@ -77,19 +103,32 @@ def resample_audios(
             outs.append(Audio(waveform=audio.waveform, sampling_rate=resample_rate, metadata=md))
             continue
 
-        waveform = audio.waveform.detach().cpu().float()
+        waveform = audio.waveform.detach().cpu().to(dtype)
         if lowcut is not None:
             if not 0 < lowcut < source_rate / 2:
                 raise ValueError(
                     f"lowcut {lowcut} Hz must lie in (0, {source_rate / 2}) Hz for a {source_rate} Hz input"
                 )
             sos = signal.butter(order, lowcut, btype="low", output="sos", fs=source_rate)
-            waveform = torch.from_numpy(signal.sosfiltfilt(sos, waveform.numpy(), axis=-1).copy()).float()
+            waveform = torch.from_numpy(signal.sosfiltfilt(sos, waveform.numpy(), axis=-1).copy()).to(dtype)
 
         if source_rate != resample_rate:
             waveform = taf.resample(waveform, source_rate, resample_rate, **RESAMPLE_KAISER_PARAMS)
 
-        outs.append(Audio(waveform=waveform, sampling_rate=resample_rate, metadata=md))
+        env = env if env is not None else _provenance.environment()
+        _provenance.record_step(
+            md,
+            "resample_audios",
+            {
+                "source_rate": source_rate,
+                "resample_rate": resample_rate,
+                "lowcut": lowcut,
+                "order": order if lowcut is not None else None,
+                "precision": precision,
+            },
+            env,
+        )
+        outs.append(Audio(waveform=waveform.float(), sampling_rate=resample_rate, metadata=md))
 
     return outs
 

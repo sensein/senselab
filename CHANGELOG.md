@@ -2,7 +2,12 @@
 
 #### 💥 Breaking Change
 
+- `resample_audios` computes in float64 by default and returns float32, so its output is the same on Intel and AMD CPUs. Output changes by at most one 16-bit step against the previous float32 computation; `precision="float32"` keeps the previous computation for speed (about 2.2–2.6× faster: 30 minutes of 48 kHz audio resample in 1.3–1.9 s instead of 3–5 s). Each resampled audio's `metadata` gains a `processing_steps` entry with its parameters, precision and environment fingerprint, and `metadata["environments"]` holds the environment record. Cache schema 27 → 28 ([#650](https://github.com/sensein/senselab/issues/650))
 - `extract_objective_quality_features_from_audios` (torchaudio SQUIM) now reads 10 s windows of each recording by default and reports the median STOI, PESQ and SI-SDR over the windows. New arguments: `window_s` (`None` for one pass), `min_window_s`, `start_s`, `end_s` and `floor_s`. Each result gains `windows`, `windows_n` and `span_s`. Every non-empty span is read by default; `floor_s` sets a cut-off below which the values are NaN. An empty span, or one outside the recording, raises `ValueError`. To get the previous whole-recording values, pass `window_s=None`, or `torchaudio_squim={"window_s": None}` to `extract_features_from_audios` ([#614](https://github.com/sensein/senselab/issues/614))
+
+#### 🚀 Enhancement
+
+- `senselab.utils.provenance`: `environment()` records the library versions that affect numerics, the CPU vendor and model, torch's CPU capability, threads, determinism flags and the CUDA device in use; `record_step` appends a processing step and its environment fingerprint to a data object's `metadata` ([#650](https://github.com/sensein/senselab/issues/650))
 
 ---
 
