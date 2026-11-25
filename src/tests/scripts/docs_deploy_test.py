@@ -190,3 +190,47 @@ def test_push_failure_other_than_lease_is_not_retried(origin: Path, tmp_path: Pa
     result = _deploy(clone, "preview", str(_site(tmp_path / "pr", "pr")), "5")
     assert result.returncode != 0
     assert "retrying" not in result.stderr
+
+
+def test_namespaces_are_cleaned_separately(origin: Path, tmp_path: Path) -> None:
+    """A root cleanup never removes `2x/` previews, and a `2x` cleanup never removes root previews."""
+    clone = _clone(origin, tmp_path / "clone")
+    assert _deploy(clone, "preview", str(_site(tmp_path / "root7", "root 7")), "7").returncode == 0
+    for pr in ("7", "9"):
+        result = _deploy(clone, "--namespace", "2x", "preview", str(_site(tmp_path / f"ns{pr}", f"2x {pr}")), pr)
+        assert result.returncode == 0, result.stderr
+    assert _show(origin, "2x/pr-7/index.html") == "2x 7"
+    assert _show(origin, "pr-7/index.html") == "root 7"
+
+    assert _deploy(clone, "cleanup").returncode == 0
+    names = _tree(origin)
+    assert not any(n.startswith("pr-7/") for n in names)
+    assert {"2x/pr-7/index.html", "2x/pr-9/index.html"} <= names
+
+    assert _deploy(clone, "preview", str(_site(tmp_path / "root8", "root 8")), "8").returncode == 0
+    assert _deploy(clone, "--namespace", "2x", "cleanup", "9").returncode == 0
+    names = _tree(origin)
+    assert not any(n.startswith("2x/pr-7/") for n in names)
+    assert {"2x/pr-9/index.html", "pr-8/index.html"} <= names
+    assert _commit_count(origin) == 1
+
+
+def test_release_keeps_namespace_previews(origin: Path, tmp_path: Path) -> None:
+    """A release replaces the root site and keeps every namespace directory, even one the site also builds."""
+    clone = _clone(origin, tmp_path / "clone")
+    assert _deploy(clone, "--namespace", "2x", "preview", str(_site(tmp_path / "ns", "2x")), "4").returncode == 0
+    rel = _site(tmp_path / "rel", "release")
+    (rel / "2x").mkdir()
+    (rel / "2x" / "stray.html").write_text("x")
+    assert _deploy(clone, "release", str(rel)).returncode == 0
+    names = _tree(origin)
+    assert "2x/pr-4/index.html" in names
+    assert "2x/stray.html" not in names
+    assert _show(origin, "index.html") == "release"
+
+
+def test_unknown_namespace_and_namespaced_release_are_refused(origin: Path, tmp_path: Path) -> None:
+    """Only listed namespaces are accepted, and a release takes none."""
+    clone = _clone(origin, tmp_path / "clone")
+    assert _deploy(clone, "--namespace", "zz", "cleanup").returncode != 0
+    assert _deploy(clone, "--namespace", "2x", "release", str(_site(tmp_path / "rel", "r"))).returncode != 0

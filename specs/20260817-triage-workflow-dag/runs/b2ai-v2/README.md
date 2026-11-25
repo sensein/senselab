@@ -23,7 +23,7 @@ later ones.
 ## Sources
 
 ```
-/orcd/data/satra/002/datasets/b2aivoice/post_3.0/v3.1/adult/bids_07_01_lang/
+${ORCD_DATA}/datasets/b2aivoice/post_3.0/v3.1/adult/bids_07_01_lang/
   sub-SUBJ04/     # 28 files; the v1 b2ai-28 subject
   sub-SUBJ05/     # 47 files
   sub-SUBJ03/     # 37 files
@@ -70,7 +70,7 @@ uv run python make_hints.py --selftest              # first: the rules still rep
 
 SUB=sub-SUBJ05
 uv run python make_hints.py \
-    --dir "/orcd/data/satra/002/datasets/b2aivoice/post_3.0/v3.1/adult/bids_07_01_lang/$SUB/" \
+    --dir "${ORCD_DATA}/datasets/b2aivoice/post_3.0/v3.1/adult/bids_07_01_lang/$SUB/" \
     --out "$SCRATCH/triage_b2ai_v2/$SUB/hints/"
 ```
 
@@ -181,7 +181,7 @@ distribution.
 SUB=sub-SUBJ04
 uv run python specs/20260817-triage-workflow-dag/runs/b2ai-v2/make_enrollment.py \
     --subject "$SUB" \
-    --dir "/orcd/data/satra/002/datasets/b2aivoice/post_3.0/v3.1/adult/bids_07_01_lang/$SUB/" \
+    --dir "${ORCD_DATA}/datasets/b2aivoice/post_3.0/v3.1/adult/bids_07_01_lang/$SUB/" \
     --created-at "2026-08-25T00:00:00Z" \
     --out "$SCRATCH/triage_b2ai_v2/enrollment/$SUB.yaml"
 ```

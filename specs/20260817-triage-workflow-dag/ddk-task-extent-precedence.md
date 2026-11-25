@@ -63,7 +63,7 @@ instruments against each run's own stored provenance and derivatives — `ddk_ca
 `events_in_span` → `hull(onsets)` on the envelope side, `ppg_reading` → `cycle_evidence` →
 `cv_covered_extent` on the CV side. Slurm job 23105513 on `mit_preemptable`, 61 s, 0 failed rows.
 Script and per-recording rows:
-`/orcd/scratch/bcs/002/satra/checks_20260916/task_extent_sweep_20260919/`.
+`${ORCD_GROUP_SCRATCH}/checks_20260916/task_extent_sweep_20260919/`.
 
 | | count | of what |
 |---|---|---|

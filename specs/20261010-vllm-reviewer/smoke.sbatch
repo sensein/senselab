@@ -1,7 +1,7 @@
 #!/bin/bash
 # GPU smoke test of the vLLM reviewer engine and prompt 14, on copies of the owner-labelled stores.
 #
-#   W=/orcd/scratch/bcs/002/satra/vllm_smoke_20261010
+#   W=${ORCD_GROUP_SCRATCH}/vllm_smoke_20261010
 #   sbatch --output="$W/logs/%x-%j.out" --export=ALL,SENSELAB_SHA=<40-hex pushed commit> smoke.sbatch
 #
 # Copies the 11 stems' run roots from tefix_20261010/gpu twice (out_a, out_b; every stream materialised so
@@ -10,7 +10,7 @@
 # both, and reports labels, digests and the fold (smoke_report.py). Prints no transcript text.
 
 #SBATCH --job-name=vllm-smoke
-#SBATCH --partition=pi_satra,ou_bcs_low,mit_preemptable
+#SBATCH --partition=${CPU_PARTITION},ou_bcs_low,mit_preemptable
 #SBATCH --exclude=node2119,node2621,node3002,node1702
 #SBATCH --gres=gpu:h100:1
 #SBATCH --cpus-per-task=12
@@ -19,7 +19,7 @@
 
 set -uo pipefail
 umask 077
-S=/orcd/scratch/bcs/002/satra
+S=${ORCD_GROUP_SCRATCH}
 W=$S/vllm_smoke_20261010
 T=$S/tefix_20261010
 R9=$S/triage_r9_20260929
@@ -117,7 +117,7 @@ printf 'redaction:\n  llm_check:\n    enabled: true\n    ref: 52f3f65bc7a02d5557
 "$PY" -u scripts/extend_second_opinion.py $W/rows_a.jsonl --slice-index 0 --slice-count 1 \
   --config $W/second_opinion.yaml --hints $R9/scope --log-dir $W/opinion_a \
   --ollama-binary $S/ollama-models-flash/ollama-0.35.1/bin/ollama --ollama-models $S/ollama-models-flash/models \
-  --verified-dir /orcd/data/satra/002/models/ollama-senselab/verified 2>&1 | grep -E "^\[slice|Rows|  [a-z]" | tail -15
+  --verified-dir ${ORCD_DATA}/models/ollama-senselab/verified 2>&1 | grep -E "^\[slice|Rows|  [a-z]" | tail -15
 
 { cat $W/review-vllm-$SERVERS.yaml; printf 'second_opinion:\n  enabled: true\n'; } > $W/fold.yaml
 for copy in a b; do

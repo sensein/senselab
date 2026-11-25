@@ -11,7 +11,7 @@ RuntimeError: PREPROCESS: 1 block(s) failed unexpectedly:
   but got position 448
 ```
 
-The two recordings (listed in `/orcd/scratch/bcs/002/satra/triage_full_20260908/retry_asr.txt`):
+The two recordings (listed in `${ORCD_GROUP_SCRATCH}/triage_full_20260908/retry_asr.txt`):
 
 | recording | duration |
 | --- | --- |

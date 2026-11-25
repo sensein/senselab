@@ -395,7 +395,7 @@ the shipped `cycle_scan` on the same recordings:
 
 Jobs 23107265 (A, all 7,994), 23107979 (B, and a control at `log` of the top-two mean), 23108420 (D),
 23109184 (E), all on `mit_preemptable`. Scripts and per-recording rows in
-`/orcd/scratch/bcs/002/satra/checks_20260916/figwork/`.
+`${ORCD_GROUP_SCRATCH}/checks_20260916/figwork/`.
 
 **(A) is the textbook parameter-free background model and it absorbs the recording.** The argument
 for it is sound as far as it goes: a class sum that contains the frame's argmax phoneme necessarily
@@ -742,7 +742,7 @@ snapshot at `checks_20260916/code`, both off the same stored `ppg_posteriorgram`
 printed the resolved `ddk.py` path as their first line, so neither can have read the other's code.
 7,989 recordings carry a readable posteriorgram; 49 have no sidecar and are rows with a `status`
 rather than silent omissions. Scripts, sbatch files and per-recording rows:
-`/orcd/scratch/bcs/002/satra/ddkdecode_20260919/`.
+`${ORCD_GROUP_SCRATCH}/ddkdecode_20260919/`.
 
 ### A1 — sequence realisation where the shipped instrument was structurally blind — **met**
 

@@ -1,9 +1,9 @@
 # What a task extent is, and how much of the corpus has one
 
 Measured on the finished design corpus,
-`/orcd/scratch/bcs/002/satra/triage_design_20260919/run/out`, 62,548 recordings over 1,527
-subjects, at commit `f3da4081`. Slurm job `23470827` (32 shards, `pi_satra`); the per-recording
-census rows are at `/orcd/scratch/bcs/002/satra/speaker_vectors_20260922/census_design/`.
+`${ORCD_GROUP_SCRATCH}/triage_design_20260919/run/out`, 62,548 recordings over 1,527
+subjects, at commit `f3da4081`. Slurm job `23470827` (32 shards, `${CPU_PARTITION}`); the per-recording
+census rows are at `${ORCD_GROUP_SCRATCH}/speaker_vectors_20260922/census_design/`.
 
 ## The thing itself
 

@@ -93,7 +93,7 @@ enforced when ~13 sites share the same exposure.
 - [x] **Step 1: Confirm you are on the branch and it descends from the merged alpha**
 
 ```bash
-cd /Users/satra/software/sensein/senselab
+cd .
 git fetch origin --prune
 git rev-parse --abbrev-ref HEAD
 git merge-base --is-ancestor origin/alpha HEAD && echo "branch contains origin/alpha"
