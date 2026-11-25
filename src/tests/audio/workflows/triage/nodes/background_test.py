@@ -58,7 +58,7 @@ def test_background_reads_the_family_every_stage_reads() -> None:
     store.entity(
         prov_type="stream",
         extent=(0.0, 1.0),
-        attributes={"name": "recording", "path": "/data/sub-a_ses-b_task-respiration-and-cough-fivebreaths-2.wav"},
+        attributes={"name": "recording", "path": "/data/rec-0001.wav"},
     )
     assert declared_family(store) is declared_task_family(store) is None
     record_task(store, "respiration-and-cough-fivebreaths", variant={"index": "2", "route": "mouth"}, take=2)

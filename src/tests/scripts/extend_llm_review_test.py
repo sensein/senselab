@@ -21,8 +21,8 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from senselab.audio.data_structures import AudioHints
-from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.data_structures import AudioHints, ExpectedSpeech
+from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 from senselab.audio.workflows.triage.extend import REFOLD_MARKER_STEP, REFOLD_NODE, refold_verdict
 from senselab.audio.workflows.triage.hint_record import hint_attributes
 from senselab.audio.workflows.triage.nodes import review as review_module
@@ -32,8 +32,11 @@ from senselab.audio.workflows.triage.run import LOG_FILE
 from senselab.audio.workflows.triage.vocabulary import REDACTION_LLM_ANNOTATION, Outcome
 from senselab.text.tasks.pii_detection.redaction_review import ReviewProposal, ReviewResult
 from senselab.utils.prov_store import ProvStore
-from tests.audio.workflows.triage.conftest import b2ai_identity_attributes
+from tests.audio.workflows.triage.conftest import declared_identity_attributes
 from tests.audio.workflows.triage.nodes.conftest import word_attributes
+
+pytestmark = pytest.mark.usefixtures("triage_profile")
+"""The drivers' internals these tests call read the fixture profile's data; a driver run is given ``--profile``."""
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI = _REPO_ROOT / "scripts" / "extend_llm_review.py"
@@ -51,12 +54,21 @@ def _config(tmp_path: Path, text: str = LLM_ON) -> Any:  # noqa: ANN401 — Tria
     """The packaged config with a partial YAML deep-merged over it."""
     path = tmp_path / "override.yaml"
     path.write_text(text, encoding="utf-8")
-    return load_triage_config(path)
+    return load_triage_config(path, profile=ACTIVE)
 
 
-def _finished_run(root: Path, *, words: Sequence[str] = ("hello", "alicia")) -> Path:
-    """One finished run in miniature: a store with consensus words, SPEECH's scan of them, and the streams."""
-    run_root = root / "sub-a_task-free-speech_20260924-000000"
+RECORDED = AudioHints(task="free-speech")
+"""The hint the seeded run records, the one :func:`_hints` builds, so a re-fold compares a recorded hint."""
+
+
+def _finished_run(
+    root: Path, *, words: Sequence[str] = ("hello", "alicia"), hint: AudioHints | None = RECORDED
+) -> Path:
+    """One finished run in miniature: a store with consensus words, SPEECH's scan of them, and the streams.
+
+    ``hint`` is the hint its ADMIT recorded; None seeds a store from before ADMIT recorded hints.
+    """
+    run_root = root / "rec-0001_20260924-000000"
     streams = run_root / "run" / "streams"
     streams.mkdir(parents=True, exist_ok=True)
     wave = (0.05 * np.random.default_rng(0).standard_normal(SR * 5)).astype(np.float32)
@@ -76,7 +88,8 @@ def _finished_run(root: Path, *, words: Sequence[str] = ("hello", "alicia")) -> 
                 "path": f"streams/{name}.flac",
                 "sampling_rate": SR,
                 "channels": 1,
-                **(b2ai_identity_attributes(run_root.name) if name == "recording" else {}),
+                **(declared_identity_attributes("p01", None, "free-speech") if name == "recording" else {}),
+                **(hint_attributes(hint) if name == "recording" and hint is not None else {}),
             },
         )
         store.was_generated_by(stream, activity)
@@ -670,6 +683,42 @@ class TestItIsResumableTheWayTheFamilyIs:
         assert again["counts"] == {"present": 1}, "an identical re-reading is the same entity, not a second one"
         assert len(_annotations(run_root)) == 1
 
+    def test_force_on_another_machine_retires_nothing_when_the_reading_is_the_same(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Satra review 2026-11-14: where an answer ran is the activity's, so the same reading elsewhere is kept.
+
+        The annotation keeps its id and stays live; the re-reading's activity carries the second machine.
+        """
+        run_root = _finished_run(tmp_path / "corpus")
+        manifest = _manifest(tmp_path, run_root)
+        machines = iter(({"host": "node-a", "gpus": ["NVIDIA A100-SXM4-80GB"]}, {"host": "node-b", "gpus": None}))
+        _stub(monkeypatch)
+        answering = review_module.review_transcript
+
+        def _on_a_machine(original: str, **kw: Any) -> ReviewResult:  # noqa: ANN401
+            result = answering(original, **kw)
+            result.runtime = dict(next(machines))
+            return result
+
+        monkeypatch.setattr(review_module, "review_transcript", _on_a_machine)
+        cli.run_slice(manifest, slice_index=0, slice_count=1, config=_config(tmp_path), log_dir=tmp_path)
+        before = ProvStore.read_jsonl(run_root / "run" / "store.jsonl", run_id=run_root.name)
+        (first,) = [
+            e.id for e in before.entities("measurement") if e.attributes.get("name") == REDACTION_LLM_ANNOTATION
+        ]
+        cli.run_slice(manifest, slice_index=0, slice_count=1, config=_config(tmp_path), log_dir=tmp_path, force=True)
+        after = ProvStore.read_jsonl(run_root / "run" / "store.jsonl", run_id=run_root.name)
+        annotations = [e for e in after.entities("measurement") if e.attributes.get("name") == REDACTION_LLM_ANNOTATION]
+        assert [e.id for e in annotations] == [first], "the same reading is the same annotation"
+        assert not after.is_invalidated(first), "nothing that did not differ is retired"
+        hosts = [
+            activity.parameters[review_module.RUNTIME]["host"]
+            for activity in after.activities(review_module.NODE)
+            if activity.step == "llm_check"
+        ]
+        assert hosts == ["node-a", "node-b"]
+
 
 class TestItCannotWriteThroughTheCorpusSStreams:
     """17,924 redacted.flac files were overwritten by a mirror that seeded one as a symlink."""
@@ -740,7 +789,12 @@ class TestTheReviewerReadsTheTaskItWasGiven:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """r6's story-recall cards read ``{'task': 'story-recall'}``: the driver built the hint for the re-fold only."""
-        run_root = _finished_run(tmp_path / "corpus")
+        told = AudioHints(
+            instructions="Recall the story.",
+            speech_type="recall",
+            expected_speech=[ExpectedSpeech(text="he is ninety-three")],
+        )
+        run_root = _finished_run(tmp_path / "corpus", hint=told)
         _seed_verdicts(run_root)
         directory = tmp_path / "scope"
         directory.mkdir(parents=True, exist_ok=True)
@@ -790,6 +844,27 @@ class TestTheReviewerReadsTheTaskItWasGiven:
         assert context["instructions"] == "Recall the story."
         assert context["speech_type"] == "recall"
         assert context["asked_to_say"] == "he is ninety-three"
+
+
+def test_without_hints_the_reviewer_reads_the_recorded_hint_unless_it_carried_a_voice() -> None:
+    """Review K2: ``--no-refold`` or no ``--hints`` reads with the hint the run recorded, not with none."""
+    from senselab.audio.data_structures import TargetSpeaker
+    from senselab.audio.data_structures.audio_hints import SpeakerEmbeddingProvenance, TargetSpeakerEmbedding
+
+    def stored(hint: AudioHints) -> ProvStore:
+        store = ProvStore(run_id="k2")
+        store.entity(
+            prov_type="stream",
+            extent=(0.0, 1.0),
+            attributes={"name": "recording", "path": "/d/rec.wav", **hint_attributes(hint)},
+        )
+        return store
+
+    told = AudioHints(instructions="Recall the story.", speech_type="recall")
+    assert cli.review_hint(stored(told)) == told
+    voice = TargetSpeakerEmbedding(vector=[0.6, 0.8], provenance=SpeakerEmbeddingProvenance(model_id="m"))
+    assert cli.review_hint(stored(AudioHints(target_speakers=[TargetSpeaker(id="p01", embedding=voice)]))) is None
+    assert cli.review_hint(ProvStore(run_id="none")) is None
 
 
 def _stub_engine(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
@@ -857,3 +932,29 @@ class TestResumeIsPerRowAndPerEngine:
             assert (cli.standing(store, engine) is not None) is stands
             assert cli.standing(store, {**engine, "name": "vllm"}) is None
             assert cli.standing(store) is not None
+
+    def test_an_annotation_under_another_policy_does_not_stand(self, tmp_path: Path) -> None:
+        """A reading recorded under another review policy or word lists is read again; one under this one stands."""
+        from senselab.audio.workflows.triage.nodes.review import POLICY_FINGERPRINT
+        from senselab.audio.workflows.triage.review_inputs import policy_fingerprint
+        from senselab.text.tasks.pii_detection.redaction_review import PROMPT_VERSION
+        from senselab.text.tasks.pii_detection.redaction_review_vllm import engine_identity
+
+        engine = engine_identity("transformers")
+        for label, recorded, stands in (("other", "0" * 64, False), ("this", policy_fingerprint(), True)):
+            run_root = _finished_run(tmp_path / f"corpus-{label}")
+            store = ProvStore.read_jsonl(run_root / "run" / "store.jsonl", run_id=run_root.name)
+            activity = store.activity(node="REVIEW", step="llm_check", parameters={"enabled": True})
+            store.was_associated_with(activity, software_agent(store))
+            reading = store.entity(
+                prov_type="measurement",
+                extent=None,
+                attributes={
+                    "name": REDACTION_LLM_ANNOTATION,
+                    "status": "clean",
+                    "prompt_version": PROMPT_VERSION,
+                    POLICY_FINGERPRINT: recorded,
+                },
+            )
+            store.was_generated_by(reading, activity)
+            assert (cli.standing(store, engine) is not None) is stands

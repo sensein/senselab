@@ -12,6 +12,9 @@ import pytest
 from senselab.audio.workflows.triage import triage_table
 from tests.audio.workflows.triage.triage_table_test import BIDS, HEADER, _tables
 
+pytestmark = pytest.mark.usefixtures("triage_profile")
+"""The drivers' internals these tests call read the fixture profile's data; a driver run is given ``--profile``."""
+
 SCRIPT = Path(__file__).parents[3] / "scripts" / "triage_table.py"
 
 
@@ -100,5 +103,15 @@ def test_a_recording_missing_from_or_repeated_in_the_tables_fails_the_build(
     pq.write_table(pa.concat_tables([decisions, decisions.slice(0, 1)]), tmp_path / "d.parquet")
     assert _script().main([*_argv(tmp_path, out), "--manifest", str(manifest)]) == 2
     err = capsys.readouterr().err
-    assert "1 stems appear more than once" in err and "1 source paths are held by more than one row" in err
+    assert "1 recordings appear more than once" in err and "1 source paths are held by more than one row" in err
+    assert not out.exists()
+
+
+def test_without_a_profile_the_table_exits_2_naming_it(
+    tmp_path: Path, without_triage_profile: None, capsys: pytest.CaptureFixture
+) -> None:
+    """Review A1: the per-recording columns read the profile's task list; with none nothing is written, exit 2."""
+    out = tmp_path / "pub" / triage_table.TABLE_NAME
+    assert _script().main(_argv(tmp_path, out)) == 2
+    assert "dataset profile" in capsys.readouterr().err
     assert not out.exists()

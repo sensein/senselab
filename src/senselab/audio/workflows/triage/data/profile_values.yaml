@@ -11,11 +11,21 @@
 #         the column; one value per recording, session or participant (`per`); an optional `where` filter, task
 #         filter (`tasks`, matched against the task list's `expects`) and `absolute`; the statistic (median,
 #         percentile at `q`, percentile_band at `q: [low, high]`, tukey_upper / tukey_lower with k = 1.5); `by`
-#         for one value per task family; `clamp`; and the decimals it is rounded to.
+#         for one value per task family; `clamp`; and the decimals it is rounded to. `n_min` overrides the
+#         statistic's default below.
 #   required: false where the value switches a feature off or nothing reads it yet, so it may stay empty.
 #   stages: the stages that read the value, where only stages a workflow may leave off do (workflow.py); a required
 #         value is asked for only when one of them runs. No stages: read whatever runs.
 version: 1
+# The fewest values (one per `per` group; per family for a `by` value) a statistic is fitted over; fewer and
+# scripts/fit_profile.py refuses unless --allow-small-n. Conservative defaults, derived in
+# specs/20260817-triage-workflow-dag/config-derivations.md "profile fit: n_min".
+n_min:
+  median: 30
+  tukey_upper: 50
+  tukey_lower: 50
+  percentile: 200
+  percentile_band: 200
 values:
   asr_degenerate.yaml:
   - path: [chars_min]
@@ -1519,7 +1529,7 @@ values:
     fit: 'Tuned by listening to labelled recordings: whether a free response is too short to be the task; no derivation written; the reference profile carries the value set on adult clinical speech.'
   - path: [short_response, family_median_s]
     kind: b
-    required: false
+    required: true
     unit: s, by task family
     means: Each free-response task's median response length, against which a short response is measured; a task without one is not read.
     fit: Median of the response length (the gate response_min_s reading) per task family over a pilot corpus's free-response recordings.
@@ -2041,7 +2051,7 @@ values:
     unit: s
     means: Longest gap between the count-in's end and phonation onset for the count-in to join the extent.
     fit: 99th percentile of the count-in-end to phonation-onset gap over a pilot corpus's voice recordings with a count-in (an overlap counts as a negative gap).
-    method: {column: count_in_gap_s, per: recording, statistic: percentile, q: 99, decimals: 3}
+    method: {column: count_in_gap_s, per: recording, statistic: percentile, q: 99, decimals: 3, n_min: 500}
   - path: [edges, bridge_s]
     kind: c
     required: true

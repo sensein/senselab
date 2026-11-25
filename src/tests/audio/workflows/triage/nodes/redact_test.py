@@ -20,9 +20,7 @@ import soundfile as sf
 from senselab.audio.data_structures import Audio
 from senselab.audio.data_structures.audio_hints import AudioHints, ExpectedSpeech
 from senselab.audio.tasks.redaction.api import RedactionExtent, apply_redactions
-from senselab.audio.workflows.triage.b2ai_hints import identity_from_name
-from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
-from senselab.audio.workflows.triage.identity import PARTICIPANT_KEY, SESSION_KEY, TASK_TOKEN_KEY
+from senselab.audio.workflows.triage.config import ACTIVE, TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes import redact as redact_module
 from senselab.audio.workflows.triage.nodes import verdict as verdict_module
 from senselab.audio.workflows.triage.nodes.common import consensus_words, live_entities, resolve_stream
@@ -75,7 +73,7 @@ from senselab.audio.workflows.triage.vocabulary import (
 from senselab.text.tasks.pii_detection.api import PiiScan, PiiSpan
 from senselab.text.tasks.pii_detection.api import scan_for_pii as real_scan_for_pii
 from senselab.utils.prov_store import Entity, ProvStore
-from tests.audio.workflows.triage.conftest import record_admitted_hint, record_task
+from tests.audio.workflows.triage.conftest import record_task
 from tests.audio.workflows.triage.nodes.conftest import word_attributes
 
 SR = 16000
@@ -94,7 +92,7 @@ def _override(tmp_path: Path, yaml_text: str) -> TriageConfig:
     """The production override mechanism: a partial YAML deep-merged over the packaged config."""
     path = tmp_path / f"override-{abs(hash(yaml_text))}.yaml"
     path.write_text(yaml_text)
-    return load_triage_config(path)
+    return load_triage_config(path, profile=ACTIVE)
 
 
 @pytest.fixture(name="redact_config")
@@ -184,12 +182,12 @@ def _seed_redact_store(  # noqa: C901 — one independent block per author, as t
     so its hull can reach past its derived extent. ``residue`` names, by index, the words the scan's
     residue holds; every word when None. ``readings`` gives a word, by index, each source's surface;
     ``haystacks`` gives a finding, by index, the text it was read off. ``recording_stem`` names the
-    recording's file. ``task`` is the task ADMIT records the hint naming (``record_task``), None for none; it
-    also names the file (``sub-x_ses-y_task-<task>``) where ``recording_stem`` is left ``plain``. No stage reads a
+    recording's file. ``task`` is the task ADMIT records the hint naming (``record_task``), None for none; where
+    one is named and ``recording_stem`` is left ``plain``, the file is the plain name ``rec-0001``. No stage reads a
     task off the file name.
     """
     if task is not None and recording_stem == "plain":
-        recording_stem = f"sub-x_ses-y_task-{task}"
+        recording_stem = "rec-0001"
     ends = [_word_extent(i)[1] for i in range(len(words))] + [float(extent[1]) for _c, extent, *_r in findings]
     duration_s = max([5.0, *(end + 1.0 for end in ends)])
     rng = np.random.default_rng(0)
@@ -212,11 +210,6 @@ def _seed_redact_store(  # noqa: C901 — one independent block per author, as t
         store.was_generated_by(stream_id, pre)
     if task is not None:
         record_task(store, task)
-    elif recording_stem != "plain":
-        # B2AI's hint builder declares what the file name names; senselab reads no file name (plan step 6a).
-        named = identity_from_name(recording_stem)
-        declared = {PARTICIPANT_KEY: named.participant, SESSION_KEY: named.session, TASK_TOKEN_KEY: named.task_id}
-        record_admitted_hint(store, AudioHints(metadata={k: v for k, v in declared.items() if v and v != "unknown"}))
 
     consensus = store.activity(node="PREPROCESS", step="consensus", parameters={})
     store.was_associated_with(consensus, software)
@@ -718,7 +711,7 @@ class TestTheWordLevelMaskRule:
         """The shipped key names the person and the place categories."""
         from senselab.audio.workflows.triage.vocabulary import FoldPolicy
 
-        assert FoldPolicy.from_config(load_triage_config()).trim_protected_categories == (
+        assert FoldPolicy.from_config(load_triage_config(profile=ACTIVE)).trim_protected_categories == (
             "PERSON",
             "NAME",
             "LOCATION",
@@ -1978,7 +1971,7 @@ class TestThePackagedConfigLeavesTheReviewerOff:
 
     def test_the_packaged_config_leaves_it_disabled(self) -> None:
         """The default is off, and the other keys are present so an override may only flip one."""
-        cfg = load_triage_config()
+        cfg = load_triage_config(profile=ACTIVE)
         assert cfg.require("redaction.llm_check.enabled") is False
         assert cfg.require("redaction.llm_check.model_id") == "google/gemma-4-31B-it-qat-w4a16-ct"
         assert cfg.require("redaction.llm_check.ref") == "main"
@@ -2777,7 +2770,7 @@ class TestRedactionPolicyV7:
         assert [span.agreement for span in plan.proposals] == [COUNTRY_MASKED] and plan.agreed == {0}
 
     def test_a_country_inside_an_organisations_name_stays_masked(self, store: ProvStore, tmp_path: Path) -> None:
-        """sub-SUBJ02: "United States Marine Corps" tagged LOCATION is not a country; the reviewer cannot free it."""
+        """p02: "United States Marine Corps" tagged LOCATION is not a country; the reviewer cannot free it."""
         plan = self._plan(
             store,
             tmp_path,

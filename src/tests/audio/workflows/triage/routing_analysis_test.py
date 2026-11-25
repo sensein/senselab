@@ -12,8 +12,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from senselab.audio.tasks.features_extraction.ppg import PHONEME_LABELS
-from senselab.audio.workflows.triage.b2ai_hints import task_id_of
-from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 from senselab.audio.workflows.triage.consensus import vocabulary_key
 from senselab.audio.workflows.triage.dataset_profile import data_path
 from senselab.audio.workflows.triage.label_membership import LabelMembership
@@ -239,10 +238,10 @@ def _silent_store(path: Path) -> Path:
     )
 
 
-PACKAGED_MEMBERSHIPS = span_label_memberships(load_triage_config())
+PACKAGED_MEMBERSHIPS = span_label_memberships(load_triage_config(profile=ACTIVE))
 """The shipped top-4 / 0.2 rule, so the tests read what the corpus extraction will."""
 
-PACKAGED_ONOMATOPOEIA = onomatopoeic_vocabulary(load_triage_config())
+PACKAGED_ONOMATOPOEIA = onomatopoeic_vocabulary(load_triage_config(profile=ACTIVE))
 """The shipped ``words.onomatopoeic_tokens`` vocabulary, for the same reason."""
 
 
@@ -257,7 +256,7 @@ def _features(tmp_path: Path) -> tuple[RecordingFeatures, RecordingFeatures]:
     """
     spoken = extract_features(
         _speech_store(tmp_path / "a" / "run" / "store.jsonl"),
-        "sub-1_ses-1_task-rainbow-passage",
+        "rec-0001",
         str(tmp_path / "a"),
         "rainbow-passage",
         "rainbow-passage",
@@ -266,7 +265,7 @@ def _features(tmp_path: Path) -> tuple[RecordingFeatures, RecordingFeatures]:
     )
     silent = extract_features(
         _silent_store(tmp_path / "b" / "run" / "store.jsonl"),
-        "sub-2_ses-1_task-voluntary-cough",
+        "rec-0002",
         str(tmp_path / "b"),
         "voluntary-cough",
         "voluntary-cough",
@@ -283,12 +282,6 @@ def test_task_family_collapses_only_trailing_indices() -> None:
     assert task_family("free-speech-1") == "free-speech"
     assert task_family("respiration-and-cough-v2-threebreathsnose") == "respiration-and-cough-v2-threebreathsnose"
     assert task_family("glides-high-to-low") == "glides-high-to-low"
-
-
-def test_task_id_reads_the_bids_entity() -> None:
-    """The task id comes from the stem's trailing ``task-`` entity, lowercased."""
-    assert task_id_of("sub-A_ses-B_task-Prolonged-Vowel") == "prolonged-vowel"
-    assert task_id_of("sub-A_ses-B") == "unknown"
 
 
 def test_extract_counts_live_words_by_outcome(tmp_path: Path) -> None:
@@ -372,7 +365,7 @@ def _spoken(tmp_path: Path, texts: Sequence[str], *, name: str = "w", consensus:
     """
     return extract_features(
         _consensus_store(tmp_path / name / "run" / "store.jsonl", texts, consensus=consensus),
-        "sub-9_ses-1_task-voluntary-cough",
+        "rec-0009",
         str(tmp_path / name),
         "voluntary-cough",
         "voluntary-cough",
@@ -390,7 +383,7 @@ class TestOnomatopoeicRenderings:
 
     def test_the_shipped_vocabulary_is_populated_and_already_normalised(self) -> None:
         """A token that is not its own vocabulary key could never match a word."""
-        vocabulary = onomatopoeic_vocabulary(load_triage_config())
+        vocabulary = onomatopoeic_vocabulary(load_triage_config(profile=ACTIVE))
         assert {"cough", "coughs", "coughing", "咳", "呵"} <= vocabulary
         assert all(token == vocabulary_key(token) for token in vocabulary)
 
@@ -670,7 +663,7 @@ def _labelled(tmp_path: Path, top_k: int = 4, floor: float = 0.2) -> RecordingFe
     rule = LabelMembership(top_k=top_k, floor=floor, label_floors={})
     return extract_features(
         _labelled_span_store(tmp_path / "c" / "run" / "store.jsonl"),
-        "sub-3_ses-1_task-voluntary-cough",
+        "rec-0003",
         str(tmp_path / "c"),
         "voluntary-cough",
         "voluntary-cough",
@@ -786,7 +779,7 @@ def _multi_label(tmp_path: Path) -> RecordingFeatures:
     """
     return extract_features(
         _multi_label_store(tmp_path / "d" / "run" / "store.jsonl"),
-        "sub-4_ses-1_task-voluntary-cough",
+        "rec-0004",
         str(tmp_path / "d"),
         "voluntary-cough",
         "voluntary-cough",
@@ -995,7 +988,7 @@ def _derivatives(tmp_path: Path, indices: Sequence[int], name: str = "e", *, sid
     """
     return extract_features(
         _derivative_store(tmp_path / name / "run" / "store.jsonl", indices, sidecar=sidecar),
-        "sub-5_ses-1_task-diadochokinesis-pa",
+        "rec-0005",
         str(tmp_path / name),
         "diadochokinesis-pa",
         "diadochokinesis-pa",
@@ -1189,7 +1182,7 @@ def _phonation(tmp_path: Path, kind: str, *, sidecar: bool = True) -> RecordingF
     """
     return extract_features(
         _phonation_store(tmp_path / kind / "run" / "store.jsonl", kind, sidecar=sidecar),
-        "sub-7_ses-1_task-glides-low-to-high",
+        "rec-0007",
         str(tmp_path / kind),
         "glides-low-to-high",
         "glides-low-to-high",
@@ -1342,7 +1335,7 @@ class TestBranchHeldAndStagedAreDifferentStates:
 
     def test_no_held_detector_is_in_the_catalogue_or_gates_a_branch(self) -> None:
         """A branch detector is read inside a branch; it is not a gate into one."""
-        ruleset = load_ruleset(load_triage_config())
+        ruleset = load_ruleset(load_triage_config(profile=ACTIVE))
         gating = {name for names in ruleset.branch_gates.values() for name in names}
         catalogue = {detector.name for detector in detector_catalogue()}
         for detector in BRANCH_DETECTORS["VOICE"]:
@@ -1501,7 +1494,7 @@ def test_the_syllable_repetition_detectors_have_a_reference_standard_to_be_score
     assert [standard.name for standard in standards] == ["declared_ddk"]
     record = _derivatives(tmp_path, _repeated([0, 1], 10))
     assert standards[0].predicate(record)
-    assert not standards[0].predicate(_retitled(record, "free-speech"))
+    assert not standards[0].predicate(_retitled(record, "free-speech", "rec-0101"))
 
 
 def test_the_breath_detectors_fire_below_their_threshold(tmp_path: Path) -> None:
@@ -1510,18 +1503,19 @@ def test_the_breath_detectors_fire_below_their_threshold(tmp_path: Path) -> None
         assert next(candidate for candidate in detector_catalogue() if candidate.name == name).polarity == "below"
 
 
-def _retitled(record: RecordingFeatures, family: str) -> RecordingFeatures:
-    """The same extracted evidence, presented as a recording of another task family.
+def _retitled(record: RecordingFeatures, family: str, stem: str) -> RecordingFeatures:
+    """The same extracted evidence, presented as another recording, of another task family.
 
     Args:
         record: The record to copy.
         family: The family the copy declares.
+        stem: The copy's own plain stem.
 
     Returns:
-        The copy, with its stem and task id following the family.
+        The copy, with its task id following the family.
 
     """
-    return replace(record, stem=f"sub-1_ses-1_task-{family}", task_id=family, family=family)
+    return replace(record, stem=stem, task_id=family, family=family)
 
 
 def _synthetic(n_positive: int, n_negative: int, separation: float) -> list[tuple[float | None, bool]]:
@@ -1677,11 +1671,11 @@ class TestFamiliesExcludedFromAReferenceByConstruction:
         """
         spoken, silent = _features(tmp_path)
         return [
-            _retitled(spoken, "diadochokinesis-pataka"),
-            _retitled(spoken, "diadochokinesis-ka"),
-            _retitled(spoken, "prolonged-vowel"),
-            _retitled(spoken, "free-speech"),
-            _retitled(silent, "maximum-phonation-time"),
+            _retitled(spoken, "diadochokinesis-pataka", "rec-0101"),
+            _retitled(spoken, "diadochokinesis-ka", "rec-0102"),
+            _retitled(spoken, "prolonged-vowel", "rec-0103"),
+            _retitled(spoken, "free-speech", "rec-0104"),
+            _retitled(silent, "maximum-phonation-time", "rec-0105"),
         ]
 
     def test_the_lexical_speech_standard_holds_out_the_syllable_repetition_families(self) -> None:
@@ -1927,7 +1921,7 @@ class TestFeaturesShard:
             The records.
         """
         sparse = RecordingFeatures(
-            stem="sub-01_task-a",
+            stem="rec-0001",
             run_root="/runs/a",
             task_id="a",
             family="fam-a",
@@ -1940,7 +1934,7 @@ class TestFeaturesShard:
             kind_state={"speech": "fired"},
         )
         dense = RecordingFeatures(
-            stem="sub-02_task-b",
+            stem="rec-0002",
             run_root="/runs/b",
             task_id="b",
             family="fam-b",
@@ -2035,7 +2029,7 @@ def test_extract_reads_the_live_consolidation_whatever_order_it_was_written_in(
     """A retired measurement is dropped like a retired word, not absorbed and then overwritten."""
     record = extract_features(
         _two_consolidations(tmp_path / f"{retired_first}" / "run" / "store.jsonl", retired_first=retired_first),
-        "sub-1_ses-1_task-voluntary-cough",
+        "rec-0001",
         str(tmp_path),
         "voluntary-cough",
         "voluntary-cough",
@@ -2105,7 +2099,7 @@ def _coverage(
     """
     return extract_features(
         _coverage_store(tmp_path / tag / "run" / "store.jsonl", unread=unread, invalidated=invalidated),
-        "sub-5_ses-1_task-voluntary-cough",
+        "rec-0005",
         str(tmp_path / tag),
         "voluntary-cough",
         "voluntary-cough",
@@ -2206,7 +2200,7 @@ def _cough_features(tmp_path: Path, entries: Sequence[tuple[str, float | None]])
     """
     return extract_features(
         _cough_span_store(tmp_path / "e" / "run" / "store.jsonl", entries),
-        "sub-5_ses-1_task-voluntary-cough",
+        "rec-0005",
         str(tmp_path / "e"),
         "voluntary-cough",
         "voluntary-cough",
@@ -2229,14 +2223,14 @@ def test_a_cough_on_a_span_class_carrying_no_level_writes_no_decibel(tmp_path: P
 @pytest.mark.parametrize("measure", UNMEASURABLE_MEASURES)
 def test_a_cough_on_a_span_class_carrying_no_level_is_a_definite_non_fire(tmp_path: Path, measure: str) -> None:
     """``airway.cough`` must read a measured zero, not an unreadable gate, on a labelled gap."""
-    ruleset = load_ruleset(load_triage_config())
+    ruleset = load_ruleset(load_triage_config(profile=ACTIVE))
     record = _cough_features(tmp_path, [(measure, None)])
     assert evaluate_gate(record, ruleset.gates["airway.cough"]) is GateOutcome.SILENT
 
 
 def test_a_cough_on_an_amplitude_span_still_fires_at_the_packaged_threshold(tmp_path: Path) -> None:
     """Narrowing the population changes no threshold: 50 dB was fitted on amplitude spans."""
-    ruleset = load_ruleset(load_triage_config())
+    ruleset = load_ruleset(load_triage_config(profile=ACTIVE))
     assert ruleset.gates["airway.cough"].threshold == pytest.approx(50.0)
     record = _cough_features(tmp_path / "loud", [("amplitude", 60.0)])
     assert record.span_label_set_stats["yamnet.cough_labels.peak_over_floor_db_max"] == pytest.approx(60.0)
@@ -2278,3 +2272,24 @@ def test_the_decibel_population_is_the_measure_not_the_attribute(tmp_path: Path)
     assert record.span_label_set_stats["yamnet.cough_labels.peak_over_floor_db_max"] == pytest.approx(30.0)
     assert record.span_stats["all.peak_over_floor_db_max"] == pytest.approx(30.0)
     assert "gap.peak_over_floor_db_max" not in record.span_stats
+
+
+def test_the_detector_profile_is_read_under_the_active_profile() -> None:
+    """A profile switch is never served the profile an earlier one loaded (review G3)."""
+    from senselab.audio.workflows.triage.dataset_profile import (
+        DatasetDataMissing,
+        activate_profile,
+        active_profile,
+        deactivate_profile,
+    )
+
+    assert load_detector_profile()["detectors"]
+    held = active_profile()
+    assert held is not None
+    deactivate_profile()
+    try:
+        with pytest.raises(DatasetDataMissing):
+            load_detector_profile()
+    finally:
+        activate_profile(held)
+    assert load_detector_profile()["detectors"]

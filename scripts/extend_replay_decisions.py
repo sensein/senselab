@@ -16,20 +16,29 @@ TAXONOMY on generated is retired with an invalidation edge, and TAXONOMY, routin
 branches, QUALITY, REDACT, VERDICT and REPORT run again. Nothing is deleted, so a replayed store
 reads as the new decision, the old one, and the edge between them.
 
-``--hints DIR`` names a directory holding a ``hints.py`` exposing ``build_hint(wav)``. The hint is
-the one input the run does not record, and routing, the branches, REDACT and VERDICT all read it;
-without ``--hints`` the replay passes none, which is a different run and is recorded as such on
-every row.
+``--hints DIR`` names a directory holding a ``hints.py`` exposing ``build_hint(wav)``; routing, the branches,
+REDACT and VERDICT all read the hint. Without ``--hints`` the replay runs with the hint the store records
+(``hint: recorded`` on the row); a store that records none, or no task, is refused unless ``--no-hint`` is given,
+which runs with no hint and is recorded as such. A hint that declares another task than the record, or a task list
+that now describes the task otherwise, is recorded as the run's own, and the row's ``identity_change`` names what
+moved. A hint that names another participant or session than the run records is refused (the row's
+``identity_refused`` names what it would move; the summary counts them, and every refused row's reason is printed
+to stderr) unless ``--allow-identity-change`` is given;
+a run that records no identity yet records the hint's.
 
 ``--out-root DIR`` writes each replayed run into a fresh root under ``DIR`` instead of in place,
-with the finished run's ``derivatives/`` and the streams the replay only reads reachable through
+with the finished run's ``derivatives/``, its ``run.json`` and the streams the replay only reads reachable through
 symlinks. A stream a replayed node writes -- REDACT's ``redacted``, SPEECH's ``separated_*`` -- is
 never linked, so that write lands in the new root. Use it when the finished tree must not be
 modified.
 
+Every recording is re-hashed before its run is replayed: the row's ``audio`` is ``verified`` only where the digest
+matched ADMIT's (the other passes take a recording whose size and modification time match as ``stat_matched``). A
+recording that is no longer there cannot be hashed: its row's ``audio`` is ``unverified`` and the replay goes ahead.
+
 A store already carrying this configuration's and revision's replay marker is skipped and not rewritten,
-unless ``--force`` is given. A row whose store landed although a replayed node raised is ``errored``,
-not ``ok``, and names those nodes.
+unless ``--force`` is given; its ``present`` row carries the ``review`` state that replay recorded. A row whose
+store landed although a replayed node raised is ``errored``, not ``ok``, and names those nodes.
 
 REVIEW is replayed too, under the replaying configuration. Where that configuration does not read
 (the LLM check off), an answered reading from before the replay is carried forward when the replayed
@@ -47,6 +56,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -60,10 +70,13 @@ from senselab.audio.workflows.triage.extend import (
     OK,
     PRESENT,
     REFUSED,
+    REVIEW_KEY,
     REVIEW_NEEDS_REREAD,
+    REVIEW_WHY_KEY,
     RUN_SUBDIR,
     SKIPPED,
     SLICES_SUBDIR,
+    IdentityChangeRefused,
     ReplayOutcome,
     ReplayRefused,
     SliceLog,
@@ -79,13 +92,20 @@ from senselab.audio.workflows.triage.extend import (
     read_store,
     replay_decisions,
     replay_run_id,
+    replayed_identity,
     run_root_of,
     source_of,
     take_slice,
     write_store,
 )
 from senselab.audio.workflows.triage.hint_record import hint_digest
-from senselab.audio.workflows.triage.identity import RecordingIdentity, identity_of, recorded_identity
+from senselab.audio.workflows.triage.identity import (
+    DECLARED_PARTICIPANT,
+    DECLARED_SESSION,
+    RecordingIdentity,
+    identity_of,
+    recorded_identity,
+)
 from senselab.audio.workflows.triage.nodes.common import STREAM_SUFFIX, describe_exception
 from senselab.audio.workflows.triage.nodes.redact import STREAM_NAME as REDACTED_STREAM
 from senselab.audio.workflows.triage.nodes.speech import SEPARATED_PREFIX
@@ -139,8 +159,27 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-hint", action="store_true", help="Replay with no hint, where --hints is not given and none is recorded"
     )
+    parser.add_argument(
+        "--allow-identity-change",
+        action="store_true",
+        help="Replay a run whose hint names another participant or session than the run records",
+    )
     add_config_arguments(parser, allow_profile_change=True)
     return parser
+
+
+def mirror_root(run_root: Path, out_root: Path, identity: RecordingIdentity) -> Path:
+    """Where :func:`mirror_run_root` places a replayed run root, without creating it.
+
+    Args:
+        run_root: The finished run root.
+        out_root: The tree replayed roots are created under.
+        identity: The identity the replay leaves the run with.
+
+    Returns:
+        The replayed run root's path.
+    """
+    return out_root / entity_subdir(identity) / run_root.name
 
 
 def mirror_run_root(run_root: Path, out_root: Path, identity: RecordingIdentity) -> Path:
@@ -150,7 +189,8 @@ def mirror_run_root(run_root: Path, out_root: Path, identity: RecordingIdentity)
     writers a replay runs remove the entry before writing, so a rewrite replaces the link here and never
     follows it. A ``derivatives`` that an earlier mirror made a link to the whole directory is replaced.
     ``streams/`` is a real directory holding a symlink per stream the replay only *reads*; a stream a
-    replayed node writes is never linked.
+    replayed node writes is never linked. ``run.json`` is linked, so a later pass over the mirror checks the
+    recording and the profile against the run's record as it would over the finished root.
 
     Args:
         run_root: The finished run root.
@@ -160,7 +200,7 @@ def mirror_run_root(run_root: Path, out_root: Path, identity: RecordingIdentity)
     Returns:
         The replayed run root, created.
     """
-    dest = out_root / entity_subdir(identity) / run_root.name
+    dest = mirror_root(run_root, out_root, identity)
     run_dir = dest / RUN_SUBDIR
     (run_dir / STREAMS_SUBDIR).mkdir(parents=True, exist_ok=True)
     (dest / RELEASE_SUBDIR).mkdir(parents=True, exist_ok=True)
@@ -179,6 +219,9 @@ def mirror_run_root(run_root: Path, out_root: Path, identity: RecordingIdentity)
         link = run_dir / STREAMS_SUBDIR / stream.name
         if not link.is_symlink() and not link.exists():
             link.symlink_to(stream)
+    log = run_dir / LOG_FILE
+    if (finished / LOG_FILE).is_file() and not log.is_symlink() and not log.exists():
+        log.symlink_to(finished / LOG_FILE)
     return dest
 
 
@@ -197,12 +240,30 @@ def replay_identity(
         hint_given: Whether a hint was given (``--hints``).
 
     Returns:
-        The given hint's identity; else the one the run records; else an identity declaring nothing (a run that
-        records none; the replay refuses such a run unless its hint declares one).
+        The given hint's identity, keeping the recorded participant and session where it declares none
+        (:func:`~senselab.audio.workflows.triage.extend.replayed_identity`); else the one the run records; else an
+        identity declaring nothing (a run that records none; the replay refuses such a run unless its hint declares
+        one).
     """
     if hint_given:
-        return identity_of(hint)
+        return replayed_identity(hint, recorded)
     return recorded if recorded is not None else identity_of(None)
+
+
+def _first_missing(target: Path, out_root: Path) -> Path | None:
+    """The outermost directory from ``out_root`` down to ``target`` that does not exist yet, or None where all do.
+
+    Creating ``target`` creates that directory and everything under it, so removing it undoes the creation and
+    nothing a previous call made.
+    """
+    missing = None
+    for path in (target, *target.parents):
+        if path.exists() or path.is_symlink():
+            break
+        missing = path
+        if path == out_root:
+            break
+    return missing
 
 
 def replay_one(
@@ -216,13 +277,16 @@ def replay_one(
     force: bool = False,
     no_hint: bool = False,
     allow_profile_change: bool = False,
+    allow_identity_change: bool = False,
 ) -> dict[str, Any]:
     """Replay one finished run, writing its store only once every replayed node has run.
 
     The store is read under :func:`replay_run_id`, so what the replay writes takes ids distinct
     from the decisions it retires. A run already carrying this configuration's and revision's marker is skipped
     and nothing is written; a run that raises before the write keeps the store it had, so a
-    preempted task redoes that recording from the beginning and cannot stack two retirements.
+    preempted task redoes that recording from the beginning and cannot stack two retirements. An ``out_root``
+    mirror is created only once the run's recorded inputs are accepted and the replay will run, so a refused run, or
+    one already replayed, leaves none; a replay that raises removes the part of the mirror this call created.
 
     Args:
         run_root: The finished run root.
@@ -234,24 +298,28 @@ def replay_one(
         force: Replay even when this configuration's and revision's marker is already present.
         no_hint: Replay with no hint where none is given or recorded.
         allow_profile_change: Accept a profile whose name differs from the run's.
+        allow_identity_change: Accept a hint naming another participant or session than the run records.
 
     Returns:
         ``{status, replay, ...}`` — ``ok`` when the replay landed, ``errored`` when it landed but a
         replayed node raised (``errored_nodes`` names them), ``present`` when this configuration, revision
-        and hint had already replayed the run, ``refused`` when the run's recorded inputs refuse it
-        (:func:`~senselab.audio.workflows.triage.extend.check_replay_inputs`), ``error`` when it could not.
+        and hint had already replayed the run (with the ``review`` and ``review_why`` that replay's marker
+        recorded, where it recorded them), ``refused`` when the run's recorded inputs refuse it
+        (:func:`~senselab.audio.workflows.triage.extend.check_replay_inputs`; ``identity_refused`` names the
+        participant or session change where that is why), ``error`` when it could not.
     """
     try:
         hint = build_hint(source_of(run_root))[0] if build_hint is not None else None
     except (OSError, ValueError, LookupError, KeyError, IndexError) as error:
         return {"status": ERROR, DERIVATION: f"hint: {describe_exception(error)}"}
     run_id = replay_run_id(run_root, config.config_hash, commit)
+    placed: RecordingIdentity | None = None
     try:
         store = read_store(run_root, run_id=run_id)
         target = run_root
         if out_root is not None:
             placed = replay_identity(recorded_identity(store), stem, hint, hint_given=build_hint is not None)
-            target = mirror_run_root(run_root, out_root, placed)
+            target = mirror_root(run_root, out_root, placed)
             if (target / RUN_SUBDIR / "store.jsonl").is_file():
                 store = read_store(target, run_id=run_id)
     except (OSError, ValueError) as error:
@@ -265,18 +333,34 @@ def replay_one(
             hint_given=build_hint is not None,
             no_hint=no_hint,
             allow_profile_change=allow_profile_change,
+            allow_identity_change=allow_identity_change,
         )
+    except IdentityChangeRefused as refusal:
+        return {"status": REFUSED, DERIVATION: str(refusal), "identity_refused": refusal.change}
     except ReplayRefused as refusal:
         return {"status": REFUSED, DERIVATION: str(refusal)}
-    if (
-        not force
-        and find_replay_marker(
-            store, config.config_hash, commit, hint_digest(inputs.hint), corpus_inputs=corpus_inputs_digest(store)
+    marker = (
+        None
+        if force
+        else find_replay_marker(
+            store, config.config_hashes, commit, hint_digest(inputs.hint), corpus_inputs=corpus_inputs_digest(store)
         )
-        is not None
-    ):
-        return {"status": PRESENT, DERIVATION: "this configuration, revision and hint have already replayed this run"}
+    )
+    if marker is not None:
+        recorded = store.get_activity(marker).parameters
+        return {
+            "status": PRESENT,
+            DERIVATION: "this configuration, revision and hint have already replayed this run",
+            **(
+                {"review": recorded[REVIEW_KEY], "review_why": recorded.get(REVIEW_WHY_KEY)}
+                if recorded.get(REVIEW_KEY)
+                else {}
+            ),
+        }
+    created = _first_missing(target, out_root) if out_root is not None and placed is not None else None
     try:
+        if out_root is not None and placed is not None:
+            mirror_run_root(run_root, out_root, placed)
         outcome: ReplayOutcome = replay_decisions(
             store,
             config,
@@ -287,8 +371,12 @@ def replay_one(
             commit=commit,
             inputs=inputs,
         )
-    except (OSError, ValueError, LookupError) as error:
-        return {"status": ERROR, DERIVATION: describe_exception(error)}
+    except BaseException as error:
+        if created is not None:
+            shutil.rmtree(created, ignore_errors=True)  # what this call created goes; links are unlinked, not followed
+        if isinstance(error, (OSError, ValueError, LookupError)):
+            return {"status": ERROR, DERIVATION: describe_exception(error)}
+        raise
     write_store(store, target)
     export_prov(store, target)
     return {
@@ -306,6 +394,7 @@ def replay_one(
         "summary": sorted(outcome.summary),
         "review": outcome.review,
         "review_why": outcome.review_why,
+        "identity_change": outcome.identity_change,
     }
 
 
@@ -320,6 +409,7 @@ def process(
     force: bool = False,
     no_hint: bool = False,
     allow_profile_change: bool = False,
+    allow_identity_change: bool = False,
 ) -> list[dict[str, Any]]:
     """Replay every run named by these rows, one at a time.
 
@@ -336,6 +426,7 @@ def process(
         force: Replay runs that already carry this configuration's and revision's marker.
         no_hint: Replay with no hint where none is given or recorded.
         allow_profile_change: Accept a profile whose name differs from a run's.
+        allow_identity_change: Accept a hint naming another participant or session than a run records.
 
     Returns:
         One outcome record per input row, in order.
@@ -356,10 +447,29 @@ def process(
             force=force,
             no_hint=no_hint,
             allow_profile_change=allow_profile_change,
+            allow_identity_change=allow_identity_change,
         )
         return {**row, **replayed}
 
     return logged(rows, one, log)
+
+
+def _participants_of_change(change: dict[str, Any]) -> set[str]:
+    """The participants a row's ``identity_change`` moves a run from or to, for the cohort pass to rerun.
+
+    A change counts where the participant or the session the run now records differs from the one it recorded
+    before, an empty ``from`` included: since the corpus passes refuse a store that records no identity, a first record
+    makes the run visible to the cohort pass for the first time. It names the ``to`` participant, and the ``from`` one
+    where there was one. A change of only the task, or of where the identity came from, moves no run, so it names
+    nobody.
+    """
+    before, after = change.get("from") or {}, change.get("to") or {}
+    named: set[str] = set()
+    for key in (DECLARED_PARTICIPANT, DECLARED_SESSION):
+        old, new = before.get(key), after.get(key)
+        if new and old != new:
+            named.update(str(side[DECLARED_PARTICIPANT]) for side in (before, after) if side.get(DECLARED_PARTICIPANT))
+    return named
 
 
 def run_slice(
@@ -375,6 +485,7 @@ def run_slice(
     force: bool = False,
     no_hint: bool = False,
     allow_profile_change: bool = False,
+    allow_identity_change: bool = False,
 ) -> dict[str, Any]:
     """Replay every run in one array task's stride of the manifest.
 
@@ -390,9 +501,13 @@ def run_slice(
         force: Replay runs that already carry this configuration's and revision's marker.
         no_hint: Replay with no hint where none is given or recorded.
         allow_profile_change: Accept a profile whose name differs from a run's.
+        allow_identity_change: Accept a hint naming another participant or session than a run records.
 
     Returns:
-        The task's summary: its counts, its parameters, and where its log went.
+        The task's summary: its counts, its parameters, and where its log went. ``identity_participants`` lists the
+        participants a recorded participant or session change, a first record included, took a run from or to
+        (:func:`_participants_of_change`), which ``extend_cohort.py apply --participants`` reruns. ``refused`` holds
+        each refused row's stem and reason.
     """
     started = time.time()
     build_hint = load_hint_builder(hints) if hints is not None else None
@@ -414,6 +529,7 @@ def run_slice(
             force=force,
             no_hint=no_hint,
             allow_profile_change=allow_profile_change,
+            allow_identity_change=allow_identity_change,
         )
     finally:
         rows_log.close()
@@ -422,6 +538,10 @@ def run_slice(
     node_errors: dict[str, int] = {}
     reviews: dict[str, int] = {}
     needs_reread: list[str] = []
+    identity_changed: list[str] = []
+    identity_participants: set[str] = set()
+    identity_refused: list[str] = []
+    refused: list[dict[str, str]] = []
     retired = 0
     for record in log:
         counts[str(record["status"])] = counts.get(str(record["status"]), 0) + 1
@@ -430,6 +550,13 @@ def run_slice(
             reviews[str(record["review"])] = reviews.get(str(record["review"]), 0) + 1
         if record.get("review") == REVIEW_NEEDS_REREAD:
             needs_reread.append(str(record["stem"]))
+        if record.get("identity_change"):
+            identity_changed.append(str(record["stem"]))
+            identity_participants.update(_participants_of_change(record["identity_change"]))
+        if record.get("identity_refused"):
+            identity_refused.append(str(record["stem"]))
+        if record["status"] == REFUSED:
+            refused.append({"stem": str(record["stem"]), "why": str(record.get(DERIVATION) or "")})
         for node in record.get("errors") or {}:
             node_errors[node] = node_errors.get(node, 0) + 1
 
@@ -447,6 +574,10 @@ def run_slice(
         "node_errors": node_errors,
         "reviews": reviews,
         "needs_reread": needs_reread,
+        "identity_changed": identity_changed,
+        "identity_participants": sorted(identity_participants),
+        "identity_refused": identity_refused,
+        "refused": refused,
         "elapsed_s": time.time() - started,
         "log": str(log_path),
     }
@@ -462,10 +593,12 @@ def main(argv: list[str] | None = None) -> int:
 
     Returns:
         0 when every recording in the shard was replayed or already had been, 1 when any row is
-        ``error``, ``errored`` or ``refused`` — the other stores are written either way — 2 when the
-        arguments could not be resolved and nothing was read, and 3 when any replayed recording's REVIEW
-        reading could not be carried forward and must be read again (the summary's ``needs_reread`` names
-        them).
+        ``error``, ``errored`` or ``refused`` (an identity change refused among them) — the other stores are
+        written either way — 2 when the arguments could not be resolved and nothing was read, and 3 when any
+        replayed recording's REVIEW reading could not be carried forward and must be read again (the summary's
+        ``needs_reread`` names them). 3 takes precedence over 1: a shard with both exits 3. Every refused row's stem
+        and reason is printed to stderr either way, and named in the summary (``counts``, ``refused``, and
+        ``identity_refused`` for an identity change).
     """
     args = build_parser().parse_args(argv)
 
@@ -485,6 +618,7 @@ def main(argv: list[str] | None = None) -> int:
             force=args.force,
             no_hint=args.no_hint,
             allow_profile_change=args.allow_profile_change,
+            allow_identity_change=args.allow_identity_change,
         )
     except (OSError, ValueError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
@@ -499,6 +633,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  node error {node:<10} {number}")
     for state, number in sorted(summary["reviews"].items()):
         print(f"  review {state:<12} {number}")
+    if summary["identity_changed"]:
+        print(f"  identity recorded anew on {len(summary['identity_changed'])} runs (each row's identity_change)")
+        if summary["identity_participants"]:
+            print(f"  participants affected: {' '.join(summary['identity_participants'])}")
+    for row in summary["refused"]:
+        print(f"REFUSED {row['stem']}: {row['why']}", file=sys.stderr)
+    if summary["identity_refused"]:
+        print(
+            f"REFUSED: {len(summary['identity_refused'])} runs whose hint names another participant or session "
+            "(each row's identity_refused); check --hints, or pass --allow-identity-change",
+            file=sys.stderr,
+        )
     if summary["needs_reread"]:
         print(f"REVIEW: {len(summary['needs_reread'])} recordings need the reviewer again", file=sys.stderr)
         return 3

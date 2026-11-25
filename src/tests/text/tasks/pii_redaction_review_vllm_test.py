@@ -15,7 +15,7 @@ import pytest
 from senselab.text.tasks.pii_detection import redaction_review as rr
 from senselab.text.tasks.pii_detection import redaction_review_vllm as rv
 
-pytestmark = pytest.mark.usefixtures("b2ai_triage_profile")  # these tests run triage nodes on B2AI fixtures
+pytestmark = pytest.mark.usefixtures("triage_profile")  # these tests run triage nodes on the fixture profile
 
 SHA = "c" * 40
 
@@ -221,6 +221,67 @@ class TestTheWorkerAgainstAMockedServer:
         assert max(request["most_inflight"] for request in sent) == 1
         argv = json.loads(Path(str(mocked_vllm["log"]) + ".argv").read_text())
         assert argv[argv.index("--max-model-len") + 1] == "12288" and "--enable-prefix-caching" in argv
+
+    @pytest.mark.parametrize(
+        ("mask", "order", "named"),
+        [
+            ("1", "PCI_BUS_ID", ["NVIDIA H100 80GB HBM3"]),
+            ("1", None, None),
+            ("GPU-0000aaaa-11", None, ["NVIDIA A100-SXM4-80GB"]),
+            (None, None, ["NVIDIA A100-SXM4-80GB", "NVIDIA H100 80GB HBM3"]),
+        ],
+        ids=["index-pci-order", "index-default-order", "uuid", "unset"],
+    )
+    def test_the_answer_records_the_vllm_version_and_the_machine(
+        self,
+        mocked_vllm: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+        policy: rr.ReviewPolicy,
+        mask: str | None,
+        order: str | None,
+        named: list[str] | None,
+    ) -> None:
+        """The vLLM that served it, and the devices the worker's CUDA_VISIBLE_DEVICES names, read off nvidia-smi.
+
+        The worker beside the server touches no CUDA, so its devices come from its mask and one ``nvidia-smi``
+        table, and its torch is the version installed where it runs, read without importing torch. On this node of
+        two models an index is CUDA's only under ``CUDA_DEVICE_ORDER=PCI_BUS_ID``; otherwise it names nothing.
+        """
+        from importlib.metadata import version
+
+        from senselab.utils.reproduce import host
+
+        calls: list[Any] = []
+
+        def _run(argv: Any) -> tuple[int, str]:  # noqa: ANN401
+            calls.append(argv)
+            assert argv[0] == "nvidia-smi"
+            return (
+                0,
+                "0, GPU-0000aaaa-11, NVIDIA A100-SXM4-80GB, 570.86.15\n"
+                "1, GPU-1111bbbb-22, NVIDIA H100 80GB HBM3, 570.86.15\n",
+            )
+
+        monkeypatch.setattr(host, "_run", _run)
+        if mask is None:
+            monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+        else:
+            monkeypatch.setenv("CUDA_VISIBLE_DEVICES", mask)
+        if order is None:
+            monkeypatch.delenv("CUDA_DEVICE_ORDER", raising=False)
+        else:
+            monkeypatch.setenv("CUDA_DEVICE_ORDER", order)
+        engine = rv.engine_identity("vllm", _settings())
+        result = rr.review_transcript("hello", policy=policy, context={"item_set": True}, engine=engine)
+        assert result.available, result.failure
+        assert result.runtime["vllm"] == "0.31.0" == engine["version"]
+        assert result.runtime["cuda_visible_devices"] == mask
+        assert result.runtime["gpus"] == named
+        assert result.runtime["torch"] == version("torch"), "the worker's python is this one, torch installed"
+        assert result.runtime["node_gpus"] == ["NVIDIA A100-SXM4-80GB", "NVIDIA H100 80GB HBM3"]
+        assert result.runtime["nvidia_driver"] == "570.86.15"
+        assert len(calls) == 1, "one nvidia-smi query per worker start"
+        assert rr.review_payload(result)["runtime"] == result.runtime
 
     def test_an_over_long_request_fails_alone_and_the_server_stops_with_the_worker(
         self, mocked_vllm: dict[str, Any], policy: rr.ReviewPolicy

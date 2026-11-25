@@ -3,7 +3,9 @@
 Two phases, because the corpus lives on a cluster and the page is read on a laptop.
 
 ``extract`` walks a finished run tree, keeps the recordings whose declared family carries
-``Pattern.FREE_RESPONSE``, and writes one compact JSON line per recording.
+``Pattern.FREE_RESPONSE``, and writes one compact JSON line per recording. The families are the profile's task
+list's, so ``extract`` and ``families`` take ``--profile`` (and ``--config``), which every worker process activates
+too; a recording that could not be read is an error line, and ``extract`` then exits 1.
 
 ``render`` turns those lines into a self-contained HTML page: no network reference, no external
 asset, grouped by participant, each recording one paragraph of consensus text with its redaction
@@ -26,9 +28,23 @@ from multiprocessing import Pool
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
-from senselab.audio.workflows.triage.b2ai_hints import read_sidecars, task_id_of
-from senselab.audio.workflows.triage.extend import source_of
-from senselab.audio.workflows.triage.identity import participant_group
+from senselab.audio.workflows.triage.extend import (
+    WorkerConfig,
+    activate_in_worker,
+    add_config_arguments,
+    driver_config,
+    pool_initargs,
+    worker_arguments,
+    worker_failure,
+)
+from senselab.audio.workflows.triage.hint_record import HINT
+from senselab.audio.workflows.triage.identity import (
+    ADMIT_NODE,
+    DECLARED_TASK_ID,
+    RECORDING_STREAM,
+    admit_choice,
+    participant_group,
+)
 from senselab.audio.workflows.triage.nodes.branches import EXPECTATIONS, expected_names
 from senselab.audio.workflows.triage.nodes.gates import Pattern
 from senselab.audio.workflows.triage.recording_vectors import (
@@ -39,6 +55,7 @@ from senselab.audio.workflows.triage.recording_vectors import (
     recording_dirs,
     stem_of,
     view_identity,
+    view_task,
 )
 from senselab.audio.workflows.triage.recruited_conditions import (
     DIAGNOSES_KEY,
@@ -49,7 +66,8 @@ from senselab.audio.workflows.triage.recruited_conditions import (
     ledger_value,
 )
 from senselab.audio.workflows.triage.residue import is_content_word
-from senselab.audio.workflows.triage.routing_analysis.families import task_family
+from senselab.audio.workflows.triage.routing_analysis.families import UNKNOWN_TASK, task_family
+from senselab.audio.workflows.triage.task_catalogue import task_from_attributes
 from senselab.utils import fastio
 
 PII_LABEL = "pii"
@@ -148,6 +166,14 @@ def read_store_light(path: Path, extra_markers: Sequence[str] = ()) -> StoreView
                         extent=(float(extent[0]), float(extent[1])) if extent else None,
                         attributes=record.get("attributes") or {},
                     )
+                )
+            elif kind == "activity":
+                view.activities.append(
+                    {
+                        "node": record.get("node"),
+                        "step": record.get("step"),
+                        "parameters": record.get("parameters") or {},
+                    }
                 )
             elif kind == "relation":
                 relation, source, target = record.get("relation"), record.get("source"), record.get("target")
@@ -682,34 +708,34 @@ def task_extent(view: StoreView) -> tuple[float, float] | None:
     return (float(span.extent[0]), float(span.extent[1]))
 
 
-def recording_language(run_root: Path) -> str:
-    """The language the recording's BIDS sidecar declares, or the empty string.
+def recording_language(view: StoreView) -> str:
+    """The language the recording's hint declares (its ``metadata.language``), as ADMIT recorded the hint.
 
-    The store does not carry it; the sidecar does. The recording is found through the run's own
-    ``run.json``, either in this run root or, for a mirrored tree, in the finished run its
-    ``run/derivatives`` link points into.
+    The record is ADMIT's (:func:`~senselab.audio.workflows.triage.identity.admit_choice`): the ``recording`` stream,
+    or ADMIT's activity where it refused the recording.
 
     Args:
-        run_root: The directory holding ``run/store.jsonl``.
+        view: The store view.
 
     Returns:
-        The sidecar's ``language`` value as written (``en``, ``es``, ``es-419``), or ``""``.
+        The declared code as written (``en``, ``es``, ``es-419``), or ``""`` where the hint declares none or the
+        run recorded no hint (a run from before ADMIT recorded hints, until it is replayed).
     """
-    candidates = [run_root, (run_root / RUN_SUBDIR / "derivatives").resolve().parent.parent]
-    for root in candidates:
-        try:
-            fields = read_sidecars(source_of(root))
-        except (OSError, ValueError):
-            continue
-        return str(fields.get("language") or "")
-    return ""
+    recording = view.last("stream", name=RECORDING_STREAM)
+    record = admit_choice(
+        recording.attributes if recording is not None else None,
+        [activity["parameters"] for activity in view.activities if activity.get("node") == ADMIT_NODE],
+    )
+    hint = record[0].get(HINT) if record is not None else None
+    metadata = hint.get("metadata") if isinstance(hint, Mapping) else None
+    return str(metadata.get("language") or "") if isinstance(metadata, Mapping) else ""
 
 
 def language_name(code: str) -> str:
     """The facet a language code falls under: English, Spanish, the code itself, or ``unknown``.
 
     Args:
-        code: A sidecar ``language`` value.
+        code: A declared ``language`` value.
 
     Returns:
         ``English`` for ``en`` and its regional forms, ``Spanish`` for ``es`` and its regional forms
@@ -717,6 +743,17 @@ def language_name(code: str) -> str:
     """
     base = code.strip().lower().replace("_", "-").split("-")[0]
     return {"en": "English", "es": "Spanish"}.get(base, code.strip() or "unknown")
+
+
+def _recorded_family(task: Any, identity: Any) -> str | None:  # noqa: ANN401 -- a ResolvedTask and an identity
+    """The task ADMIT recorded, as a family name.
+
+    Its name; for a store from before ADMIT recorded the task, the family its task id collapses into; None where the
+    run records no identity.
+    """
+    if task is not None:
+        return str(task.name) if task.name else UNKNOWN_TASK
+    return task_family(identity.task_id) if identity is not None else None
 
 
 def recording_record(run_root: Path, families: frozenset[str] | None) -> dict[str, Any] | None:
@@ -730,17 +767,14 @@ def recording_record(run_root: Path, families: frozenset[str] | None) -> dict[st
         The row, or None when the recording declares no family or one outside ``families``.
     """
     stem = stem_of(run_root)
-    task = task_id_of(stem)
-    if families is not None and task_family(task) not in families:
-        return None
     view = read_store_light(run_root / RUN_SUBDIR / STORE_NAME)
     verdict = view.last("verdict", node=VERDICT_NODE)
     attributes = verdict.attributes if verdict is not None else {}
-    declared = attributes.get("declared_family") or task_family(task)
-    if not declared or (families is not None and declared not in families):
+    recorded = view_identity(view)
+    declared = attributes.get("declared_family") or _recorded_family(view_task(view), recorded)
+    if not declared or declared == UNKNOWN_TASK or (families is not None and declared not in families):
         return None
     declared = str(declared)
-    recorded = view_identity(view)
     participant = participant_group(recorded, stem) if recorded is not None else stem
     session = recorded.session if recorded is not None else None
     marked = marked_words(view)
@@ -783,10 +817,10 @@ def recording_record(run_root: Path, families: frozenset[str] | None) -> dict[st
     return {
         "p": participant or "",
         "ses": session or "",
-        "task": task,
+        "task": recorded.task_id if recorded is not None else UNKNOWN_TASK,
         "stem": stem,
         "fam": declared,
-        "lang": recording_language(run_root),
+        "lang": recording_language(view),
         "rel": str(attributes.get("release") or ""),
         "rg": attributes.get("release_ground"),
         "tri": str(attributes.get("triage") or attributes.get("outcome") or ""),
@@ -958,6 +992,9 @@ def _worker(payload: tuple[str, list[str]]) -> dict[str, Any] | None:
         The row, an error record, or None.
     """
     run_root, families = payload
+    failed = worker_failure()
+    if failed is not None:
+        return {"error": failed, "run_dir": run_root}
     try:
         return recording_record(Path(run_root), frozenset(families))
     except Exception as error:  # noqa: BLE001 -- one unreadable store must not stop the sweep
@@ -967,7 +1004,11 @@ def _worker(payload: tuple[str, list[str]]) -> dict[str, Any] | None:
 def candidates_under(
     corpus: Path, families: frozenset[str], *, walk_threads: int = fastio.DEFAULT_THREADS
 ) -> list[Path]:
-    """The run directories whose stem names a free-response family.
+    """The run directories whose recorded task, read at admission, is in ``families``.
+
+    A recording's task is the one its run recorded, never its name (plan step 8). Only the head of each store is
+    read, up to ADMIT's ``recording`` stream (:func:`admitted_family`); :func:`recording_record` reads the whole
+    store of each candidate and decides from its latest record.
 
     Args:
         corpus: The run tree.
@@ -980,16 +1021,66 @@ def candidates_under(
     return [
         run_root
         for run_root in recording_dirs(corpus, threads=walk_threads)
-        if task_family(task_id_of(stem_of(run_root))) in families
+        if admitted_family(run_root / RUN_SUBDIR / STORE_NAME) in families
     ]
 
 
-def _rows(payloads: Sequence[tuple[str, list[str]]], workers: int) -> Iterator[dict[str, Any] | None]:
+def admitted_family(store: Path) -> str | None:
+    """The task family ADMIT recorded, read from the store's head: its first ``recording`` stream.
+
+    Args:
+        store: The run's ``store.jsonl``.
+
+    Returns:
+        The family, or None where the store is unreadable or holds no such record before its end (a refused
+        recording's ADMIT activity is read where no stream follows).
+    """
+    refused: str | None = None
+    try:
+        with store.open(encoding="utf-8") as handle:
+            for line in handle:
+                if DECLARED_TASK_ID not in line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if (
+                    record.get("record") == "entity"
+                    and (record.get("attributes") or {}).get("name") == RECORDING_STREAM
+                ):
+                    return _admitted_task(record["attributes"])
+                if record.get("record") == "activity" and record.get("node") == ADMIT_NODE:
+                    refused = _admitted_task(record.get("parameters") or {})
+    except OSError:
+        return None
+    return refused
+
+
+def _admitted_task(attributes: Mapping[str, Any]) -> str:
+    """The task one of ADMIT's records names, as a family name.
+
+    Its name (:func:`~senselab.audio.workflows.triage.task_catalogue.task_from_attributes`), :data:`UNKNOWN_TASK`
+    where it names none; for a record from before ADMIT recorded the task, the family its task id collapses into.
+    """
+    task = task_from_attributes(attributes)
+    if task is not None:
+        return str(task.name) if task.name else UNKNOWN_TASK
+    return task_family(str(attributes.get(DECLARED_TASK_ID) or UNKNOWN_TASK))
+
+
+def _rows(
+    payloads: Sequence[tuple[str, list[str]]],
+    workers: int,
+    worker_config: WorkerConfig | None = None,
+) -> Iterator[dict[str, Any] | None]:
     """Read every candidate store, in a pool or in this process.
 
     Args:
         payloads: One ``(run directory, family names)`` per candidate.
         workers: How many processes to read with; one reads serially.
+        worker_config: The config override and profile each worker activates; None, the profile active here
+            (:func:`~senselab.audio.workflows.triage.extend.worker_arguments`): a spawned worker starts with none.
 
     Yields:
         Each row, error record or None.
@@ -997,11 +1088,18 @@ def _rows(payloads: Sequence[tuple[str, list[str]]], workers: int) -> Iterator[d
     if workers <= 1:
         yield from (_worker(payload) for payload in payloads)
         return
-    with Pool(workers) as pool:
+    with Pool(workers, initializer=activate_in_worker, initargs=pool_initargs(worker_config)) as pool:
         yield from pool.imap_unordered(_worker, list(payloads), chunksize=8)
 
 
-def extract(corpus: Path, out: Path, workers: int, *, walk_threads: int = fastio.DEFAULT_THREADS) -> dict[str, Any]:
+def extract(
+    corpus: Path,
+    out: Path,
+    workers: int,
+    *,
+    walk_threads: int = fastio.DEFAULT_THREADS,
+    worker_config: WorkerConfig | None = None,
+) -> dict[str, Any]:
     """Walk a corpus and write one JSON line per free-response recording.
 
     Args:
@@ -1009,6 +1107,7 @@ def extract(corpus: Path, out: Path, workers: int, *, walk_threads: int = fastio
         out: The JSONL to write.
         workers: How many processes to read stores with.
         walk_threads: How many participants are listed at once while finding run directories.
+        worker_config: As :func:`_rows`.
 
     Returns:
         The sweep's counts.
@@ -1022,7 +1121,7 @@ def extract(corpus: Path, out: Path, workers: int, *, walk_threads: int = fastio
     payloads = [(str(run_root), sorted(families)) for run_root in candidates]
     with out.open("w") as handle:
         handle.write(json.dumps({"schema": EXTRACT_SCHEMA, "version": EXTRACT_VERSION}) + "\n")
-        for row in _rows(payloads, workers):
+        for row in _rows(payloads, workers, worker_config):
             if row is None:
                 counts["skipped"] += 1
                 continue
@@ -2461,7 +2560,7 @@ const POLICY_WHY={date:'a date element the policy always masks',age:'an age the 
 function cardAccount(a,card){
   const out=['<h4>on this card</h4>'];
   if(a.why)out.push('<p class="note">deciding reason: '+esc(a.why)+'</p>');
-  out.push('<p>language: '+(a.lang?esc(a.lang):'none declared in the sidecar')+'</p>');
+  out.push('<p>language: '+(a.lang?esc(a.lang):'none declared in the hint')+'</p>');
   if(a.ss){
     out.push('<p><b>'+esc(a.ss.src)+' only.</b> The consensus transcript carries no words, so the card '
       +'shows this recogniser\\'s own transcript ('+esc(a.ss.n)+' recogniser(s) left words; the '
@@ -3043,7 +3142,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         argv: The command line, or None for ``sys.argv``.
 
     Returns:
-        The exit status.
+        The exit status: 0; for ``extract``, 1 where a recording could not be read (its error line is in the
+        extract); 2 where the profile cannot be loaded or lacks a value.
     """
     parser = argparse.ArgumentParser(description="Free-speech transcript review page.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -3053,6 +3153,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     extractor.add_argument("--out", type=Path, required=True)
     extractor.add_argument("--workers", type=int, default=8)
     extractor.add_argument("--walk-threads", type=int, default=fastio.DEFAULT_THREADS)
+    add_config_arguments(extractor)
 
     renderer = sub.add_parser("render", help="turn an extract into a self-contained HTML page")
     renderer.add_argument("data", type=Path)
@@ -3060,7 +3161,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     renderer.add_argument("--title", default="Free-speech review")
     renderer.add_argument("--shard-size", type=int, default=0, help="participants per file; 0 for one file")
 
-    sub.add_parser("families", help="print the free-response family names the graph declares")
+    add_config_arguments(sub.add_parser("families", help="print the free-response family names the graph declares"))
 
     census_parser = sub.add_parser("census", help="what one extract holds, in counts")
     census_parser.add_argument("data", type=Path)
@@ -3070,18 +3171,28 @@ def main(argv: Sequence[str] | None = None) -> int:
     compare_parser.add_argument("after", type=Path)
 
     arguments = parser.parse_args(argv)
+    config = None
+    if arguments.command in ("families", "extract"):
+        try:
+            config = driver_config(arguments)
+        except (OSError, ValueError, RuntimeError) as error:
+            print(f"ERROR: {error}", file=sys.stderr)
+            return 2
     if arguments.command == "families":
         for name in sorted(free_response_families()):
             print(name)
         return 0
     if arguments.command == "extract":
-        print(
-            json.dumps(
-                extract(arguments.corpus, arguments.out, arguments.workers, walk_threads=arguments.walk_threads),
-                indent=2,
-            )
+        assert config is not None
+        summary = extract(
+            arguments.corpus,
+            arguments.out,
+            arguments.workers,
+            walk_threads=arguments.walk_threads,
+            worker_config=worker_arguments(arguments, config),
         )
-        return 0
+        print(json.dumps(summary, indent=2))
+        return 1 if summary["counts"].get("errors") else 0
     if arguments.command == "census":
         print(json.dumps(census(arguments.data), indent=2))
         return 0

@@ -1,0 +1,37 @@
+workflow:
+  stages:
+  - ADMIT
+  - PREPROCESS
+  - SESSION
+  - BACKGROUND
+  - TAXONOMY
+  - routing
+  - AIRWAY
+  - SPEECH
+  - VOICE
+  - QUALITY
+  - COHORT
+  - REDACT
+  - VERDICT
+branch:
+  phoneme_place_classes:
+    alveolar:
+    - t
+    - d
+pii:
+  name_words_max: 1
+redaction:
+  fill: silence
+  name_approvals: {}
+taxonomy:
+  ruleset:
+    emptiness:
+      active_s_max: 0.0
+verdict:
+  person_name_review_flags: true
+  trim_protected_categories:
+  - PERSON
+  - NAME
+  - LOCATION
+  - LOC
+  uncomputed_reading_flags: true

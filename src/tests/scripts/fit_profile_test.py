@@ -12,7 +12,7 @@ import pyarrow.parquet as pq
 import pytest
 import yaml  # type: ignore[import-untyped]
 
-from senselab.audio.workflows.triage.dataset_profile import deactivate_profile, load_profile
+from senselab.audio.workflows.triage.dataset_profile import deactivate_profile, load_profile, set_run_data
 from senselab.audio.workflows.triage.fit import columns_read
 
 SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "fit_profile.py"
@@ -52,11 +52,11 @@ def _table(path: Path, rows: list[dict[str, Any]], columns: list[str] | None = N
     return path
 
 
-def _rows() -> list[dict[str, Any]]:
-    """Twelve recordings of four participants: chat responses, cough medians and count-in gaps."""
+def _rows(recordings: int = 600, participants: int = 150) -> list[dict[str, Any]]:
+    """Chat responses, cough medians and count-in gaps of participants (by default, enough for every n_min)."""
     return [
         {
-            "participant": f"p{i % 4}",
+            "participant": f"p{i % participants}",
             "session": f"s{i % 2}",
             "declared_family": "chat",
             "gate_response_min_s": 20.0 + i,
@@ -65,15 +65,16 @@ def _rows() -> list[dict[str, Any]]:
             "count_in_gap_s": 0.5 + 0.1 * i,
             "cohort_participant_rms_dbfs_median": -30.0 + (i % 4),
         }
-        for i in range(12)
+        for i in range(recordings)
     ]
 
 
 @pytest.fixture
 def no_profile(without_triage_profile: None) -> Any:  # noqa: ANN401
-    """No profile active before the test, and none after it."""
+    """No profile active before the test, and none (nor a run data section) after it."""
     yield
     deactivate_profile()
+    set_run_data(None)
 
 
 def test_a_pilot_table_is_fitted_into_the_profile(no_profile: None, tmp_path: Path) -> None:
@@ -82,10 +83,12 @@ def test_a_pilot_table_is_fitted_into_the_profile(no_profile: None, tmp_path: Pa
     table = _table(tmp_path / "rv.parquet", _rows())
     assert cli.main([str(table), "--profile", str(root)]) == 0
     written = yaml.safe_load((root / "fitted.yaml").read_text())
-    assert written["fitted_on"]["rows"] == 12
+    assert written["fitted_on"]["rows"] == 600
     fits = {entry["value"]: entry for entry in written["fits"]}
-    assert fits["cohort_stage.yaml condition.hot_rms_dbfs_min"]["n"] == 4, "one per participant"
-    assert fits["discard_replaced_task.yaml short_response.family_median_s"]["fitted"] == {"chat": 25.5}
+    assert fits["cohort_stage.yaml condition.hot_rms_dbfs_min"]["n"] == 150, "one per participant"
+    assert fits["cohort_stage.yaml condition.hot_rms_dbfs_min"]["n_min"] == 50
+    assert fits["discard_replaced_task.yaml short_response.family_median_s"]["fitted"] == {"chat": 319.5}
+    assert not any("below_n_min" in entry for entry in written["fits"])
     deactivate_profile()
     values = load_profile(root).fitted
     assert (
@@ -100,7 +103,7 @@ def test_a_pilot_table_is_fitted_into_the_profile(no_profile: None, tmp_path: Pa
 def test_a_value_the_profile_sets_itself_is_named_as_winning(
     no_profile: None, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """B2AI's count-in gap: fitted at the percentile, kept at the profile's own value."""
+    """A dataset's count-in gap: fitted at the percentile, kept at the profile's own value."""
     root = _profile(tmp_path / "lab", {"task_extent.yaml": "count_in:\n  gap_max_s: 3.0\n"})
     assert cli.main([str(_table(tmp_path / "rv.parquet", _rows())), "--profile", str(root)]) == 0
     line = next(line for line in capsys.readouterr().out.splitlines() if "count_in.gap_max_s" in line)
@@ -160,3 +163,92 @@ def test_a_broken_fit_is_replaced_with_force_and_kept_aside(no_profile: None, tm
     assert (root / "fitted.yaml.previous").read_text().startswith("values: [not")
     deactivate_profile()
     assert load_profile(root).fitted["task_extent.yaml"]["count_in"]["gap_max_s"] is not None
+
+
+def test_any_failure_of_a_refit_puts_the_earlier_fit_back(
+    no_profile: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review K9: the earlier fitted.yaml is restored whatever stops the refit, an interrupt or an unexpected error."""
+    root = _profile(tmp_path / "lab")
+    table = _table(tmp_path / "rv.parquet", _rows())
+    assert cli.main([str(table), "--profile", str(root)]) == 0
+    earlier = (root / "fitted.yaml").read_bytes()
+    for stop in (KeyboardInterrupt, TypeError, RuntimeError):
+
+        def _stops(args: object, stop: type[BaseException] = stop) -> None:
+            raise stop("stopped")
+
+        monkeypatch.setattr(cli, "_fit", _stops)
+        if stop is RuntimeError:
+            assert cli.main([str(table), "--profile", str(root), "--force"]) == 2
+        else:
+            with pytest.raises(stop):
+                cli.main([str(table), "--profile", str(root), "--force"])
+        assert (root / "fitted.yaml").read_bytes() == earlier, stop.__name__
+        assert not (root / "fitted.yaml.previous").exists()
+        deactivate_profile()
+
+
+def test_a_table_too_small_for_a_value_is_refused_unless_allowed(
+    no_profile: None, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Satra review 2026-11-14 (#637-1): twelve recordings of four participants are below every n_min.
+
+    The fit is refused, naming each value and its count, and an earlier fit is kept; --allow-small-n writes them,
+    marked below_n_min.
+    """
+    root = _profile(tmp_path / "lab")
+    assert cli.main([str(_table(tmp_path / "rv.parquet", _rows())), "--profile", str(root)]) == 0
+    earlier = (root / "fitted.yaml").read_bytes()
+    deactivate_profile()
+    small = _table(tmp_path / "small.parquet", _rows(12, 4))
+    assert cli.main([str(small), "--profile", str(root), "--force"]) == 2
+    err = capsys.readouterr().err
+    assert "cohort_stage.yaml condition.hot_rms_dbfs_min: n = 4 < n_min 50" in err
+    assert "discard_replaced_task.yaml short_response.family_median_s: chat n = 12 < n_min 30" in err
+    assert "task_extent.yaml count_in.gap_max_s: n = 12 < n_min 500" in err
+    assert (root / "fitted.yaml").read_bytes() == earlier and not (root / "fitted.yaml.previous").exists()
+    deactivate_profile()
+    assert cli.main([str(small), "--profile", str(root), "--force", "--allow-small-n"]) == 0
+    assert "below n_min 50: n = 4" in capsys.readouterr().out
+    written = yaml.safe_load((root / "fitted.yaml").read_text())
+    fits = {entry["value"]: entry for entry in written["fits"]}
+    assert fits["cohort_stage.yaml condition.hot_rms_dbfs_min"]["below_n_min"] is True
+    assert fits["discard_replaced_task.yaml short_response.family_median_s"]["below_n_min"] == ["chat"]
+    assert fits["discard_replaced_task.yaml short_response.family_median_s"]["fitted"] == {"chat": 25.5}
+    assert "below_n_min" not in fits["task_extent.yaml atypical.ddk_rate_hz"], "no values: unfitted, not short"
+
+
+def test_a_short_value_the_profile_sets_itself_is_not_refused(
+    no_profile: None, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Satra review 2026-11-14, verifier rounds 1 and 2: only a real value in the profile's own files exempts a fit.
+
+    300 recordings of 150 participants are enough for every value but the count-in gap (n_min 500). A profile that
+    sets that gap itself wins over the fit, so the fit is written. One that writes it blank, one that leaves it to the
+    run's --config data section, and one that does not set it at all are refused.
+    """
+    table = _table(tmp_path / "rv.parquet", _rows(300, 150))
+    root = _profile(tmp_path / "sets", {"task_extent.yaml": "count_in:\n  gap_max_s: 3.0\n"})
+    assert cli.main([str(table), "--profile", str(root)]) == 0
+    line = next(line for line in capsys.readouterr().out.splitlines() if "count_in.gap_max_s" in line)
+    assert "below n_min 500: n = 300" in line and "the profile sets 3.0 itself" in line
+    deactivate_profile()
+    override = tmp_path / "override.yaml"
+    override.write_text("data:\n  task_extent.yaml:\n    count_in:\n      gap_max_s: 3.0\n")
+    for name, own, extra in (
+        ("blanks", {"task_extent.yaml": "count_in:\n  gap_max_s:\n"}, []),
+        ("overrides", None, ["--config", str(override)]),
+        ("fits", None, []),
+    ):
+        root = _profile(tmp_path / name, own)
+        assert cli.main([str(table), "--profile", str(root), *extra]) == 2, name
+        err = capsys.readouterr().err
+        assert "task_extent.yaml count_in.gap_max_s: n = 300 < n_min 500" in err, name
+        assert err.count("< n_min") == 1, (name, err)
+        assert not (root / "fitted.yaml").exists(), name
+        deactivate_profile()
+    root = tmp_path / "overrides"
+    assert cli.main([str(table), "--profile", str(root), "--config", str(override), "--allow-small-n"]) == 0
+    line = next(line for line in capsys.readouterr().out.splitlines() if "count_in.gap_max_s" in line)
+    assert "--config data section sets 3.0" in line and "the profile sets" not in line

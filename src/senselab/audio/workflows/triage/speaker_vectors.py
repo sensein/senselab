@@ -26,7 +26,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Optional
 
@@ -34,7 +34,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from senselab.audio.workflows.triage.dataset_profile import PACKAGED_DATA, data_values
+from senselab.audio.workflows.triage.dataset_profile import data_path, data_values, newest_member
 
 SCHEMA_VERSION = 3
 """Bumped whenever a column is added, removed or retyped, or the pooling rule changes."""
@@ -74,7 +74,6 @@ TABLE_COLUMNS = ("participant", "session", "task", "stem", "run_dir")
 TARGET_SPEAKER_COLUMN = "target_speaker"
 """The corpus-table column naming a declared target speaker; a table from before plan step 9 has none."""
 
-_PROFILE_PATH = Path(__file__).parent / "data" / "speaker_vector_profile" / "2026-09-22.yaml"
 _PROFILE_VERSION = "1"
 
 
@@ -85,7 +84,8 @@ def load_min_extent_s(path: Optional[Path] = None) -> float:
     """Load the shortest extent this module will embed, in seconds.
 
     Args:
-        path: Profile path, or ``None`` for the bundled default.
+        path: Profile path, or ``None`` for the newest dated file senselab or the active profile holds
+            (:func:`~senselab.audio.workflows.triage.dataset_profile.newest_member`).
 
     Returns:
         The floor in seconds.
@@ -97,8 +97,8 @@ def load_min_extent_s(path: Optional[Path] = None) -> float:
     """
     import yaml  # type: ignore[import-untyped]
 
-    relative = "speaker_vector_profile/2026-09-22.yaml"
-    target = Path(path) if path is not None else PACKAGED_DATA / relative
+    relative = newest_member("speaker_vector_profile")
+    target = Path(path) if path is not None else data_path(relative)
     if not target.exists():
         raise ValueError(
             f"speaker-vector profile {target} is missing from this install. Refusing to "
@@ -144,6 +144,14 @@ class Extent:
     end_s: float
     family: Optional[str]
     production: Optional[str]
+    stem_shared: bool = False
+    """Whether another run of the same speaker has this stem (:func:`tell_shared_stems_apart`): the extent's id then
+    names its run directory too."""
+
+    @property
+    def recording(self) -> tuple[str, str]:
+        """The recording the extent is of: its stem and run directory, which a stem shared by two runs is not alone."""
+        return self.stem, self.run_dir
 
     @property
     def duration_s(self) -> float:
@@ -153,7 +161,23 @@ class Extent:
     @property
     def extent_id(self) -> str:
         """A stable id for this extent, used as the file id in the pooled distribution."""
-        return f"{self.stem}@{self.start_s:.3f}-{self.end_s:.3f}"
+        where = f"{self.run_dir}/" if self.stem_shared else ""
+        return f"{where}{self.stem}@{self.start_s:.3f}-{self.end_s:.3f}"
+
+
+def tell_shared_stems_apart(extents: Sequence[Extent]) -> list[Extent]:
+    """One speaker's extents, each whose stem another run of the speaker shares marked so its id names its run.
+
+    Args:
+        extents: The speaker's extents.
+
+    Returns:
+        The extents, in order; unchanged where every stem is one run's.
+    """
+    runs: dict[str, set[str]] = {}
+    for extent in extents:
+        runs.setdefault(extent.stem, set()).add(extent.run_dir)
+    return [replace(e, stem_shared=True) if len(runs[e.stem]) > 1 else e for e in extents]
 
 
 def read_task_extents(run_root: Path, recording: Mapping[str, Any]) -> list[Extent]:
@@ -231,8 +255,8 @@ def read_task_extents(run_root: Path, recording: Mapping[str, Any]) -> list[Exte
 def table_recordings(table: Path, report: ScanReport) -> dict[str, list[dict[str, Any]]]:
     """The recordings a corpus table names, grouped by speaker.
 
-    A recording is a stem in one folder; where the table names more than one run directory for it (tables
-    concatenated across builds), the lexically latest is kept, as
+    A recording is a recording id (the table's ``recording_id``, else its stem) in one folder; where the table names
+    more than one run directory for it (tables concatenated across builds), the lexically latest is kept, as
     :func:`~senselab.audio.workflows.triage.recording_vectors.latest_recordings` keeps it.
 
     Args:
@@ -250,7 +274,7 @@ def table_recordings(table: Path, report: ScanReport) -> dict[str, list[dict[str
     absent = [name for name in TABLE_COLUMNS if name not in names]
     if absent:
         raise ValueError(f"{table} carries no {', '.join(absent)} column; rebuild the corpus table")
-    columns = [*TABLE_COLUMNS, *([TARGET_SPEAKER_COLUMN] if TARGET_SPEAKER_COLUMN in names else [])]
+    columns = [*TABLE_COLUMNS, *(name for name in (TARGET_SPEAKER_COLUMN, "recording_id") if name in names)]
     latest: dict[tuple[str, str], dict[str, Any]] = {}
     for row in pq.read_table(table, columns=columns).to_pylist():
         if not row["run_dir"]:
@@ -260,7 +284,7 @@ def table_recordings(table: Path, report: ScanReport) -> dict[str, list[dict[str
             report.recordings_without_participant += 1
             continue
         run_dir = Path(row["run_dir"])
-        key = (str(run_dir.parent), str(row["stem"]))
+        key = (str(run_dir.parent), str(row.get("recording_id") or row["stem"]))
         previous = latest.get(key)
         if previous is None or run_dir.name > Path(previous["run_dir"]).name:
             latest[key] = row
@@ -355,7 +379,7 @@ def gather(
                     continue
                 admitted.append(extent)
         if admitted:
-            grouped[subject] = admitted
+            grouped[subject] = tell_shared_stems_apart(admitted)
             report.extents_admitted += len(admitted)
         elif saw_any:
             report.subjects_all_refused.append(subject)
@@ -405,7 +429,7 @@ def row_for(subject: str, extents: Sequence[Extent], embedding: Any, root: Path)
         "window_s": provenance.window_s,
         "hop_s": provenance.hop_s,
         "n_extents": len(contributed),
-        "n_recordings": len({by_id[eid].stem for eid in contributed if eid in by_id}),
+        "n_recordings": len({by_id[eid].recording for eid in contributed if eid in by_id}),
         "n_sessions": len({by_id[eid].session for eid in contributed if eid in by_id}),
         "extent_seconds": float(seconds),
         "n_windows_used": int(provenance.n_windows_used),
@@ -629,7 +653,7 @@ def embed_subject(
     window_vectors: list[np.ndarray] = []
     window_extent_ids: list[str] = []
     window_starts: list[float] = []
-    extent_centroids: list[tuple[str, np.ndarray]] = []
+    extent_centroids: list[tuple[tuple[str, str], np.ndarray]] = []
     extraction_failures: dict[str, str] = {}
     kept: list[Extent] = []
     for extent in extents:
@@ -665,7 +689,7 @@ def embed_subject(
             window_vectors.append(vector)
             window_extent_ids.append(extent.extent_id)
             window_starts.append(float(w.start_s))
-        extent_centroids.append((extent.stem, _unit(np.vstack([_unit(v) for v in live]).mean(axis=0))))
+        extent_centroids.append((extent.recording, _unit(np.vstack([_unit(v) for v in live]).mean(axis=0))))
 
     if not kept:
         raise ValueError(f"{subject}: every extent decoded to zero samples")
@@ -676,9 +700,9 @@ def embed_subject(
     # One vote per recording, not per extent. On the replayed tree AIRWAY mints two nested or
     # overlapping extents on 3,309 recordings; weighting per extent would give that recording's
     # audio two votes. See design.md D-9.
-    per_recording: dict[str, list[np.ndarray]] = {}
-    for stem, vector in extent_centroids:
-        per_recording.setdefault(stem, []).append(vector)
+    per_recording: dict[tuple[str, str], list[np.ndarray]] = {}
+    for recording, vector in extent_centroids:
+        per_recording.setdefault(recording, []).append(vector)
     recording_centroids = [_unit(np.vstack(v).mean(axis=0)) for _, v in sorted(per_recording.items())]
     centroid = _unit(np.vstack(recording_centroids).mean(axis=0))
     _, distribution = describe_embedding_distribution(

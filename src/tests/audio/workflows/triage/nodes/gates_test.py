@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from senselab.audio.workflows.triage.config import (
+    ACTIVE,
     DATA_MAP_PATHS,
     TriageConfig,
     UnknownConfigKey,
@@ -130,7 +131,7 @@ def _layered(tmp_path: Path, body: str) -> TriageConfig:
     """
     path = tmp_path / f"override-{abs(hash(body)) % 10**10}.yaml"
     path.write_text(body)
-    return load_triage_config(path)
+    return load_triage_config(path, profile=ACTIVE)
 
 
 class TestTheSplitIsTheDesignsTable:
@@ -578,7 +579,7 @@ class TestABranchReadsItsOwnGroupsGates:
         """A bound nobody has measured is an ask the report carries, under its full path."""
         path = tmp_path / "over.yaml"
         path.write_text("verdict:\n  gates:\n    by_group:\n      SUSTAINED:\n        production_min_s:\n")
-        params = branch_params(load_triage_config(path)).bind(Pattern.SUSTAINED)
+        params = branch_params(load_triage_config(path, profile=ACTIVE)).bind(Pattern.SUSTAINED)
         assert params.gate("production_min_s") is None
         assert params.missing == ["verdict.gates.by_group.SUSTAINED.production_min_s"]
 

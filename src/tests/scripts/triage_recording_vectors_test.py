@@ -10,6 +10,9 @@ import pytest
 
 from senselab.audio.workflows.triage import recording_vectors as rv
 
+pytestmark = pytest.mark.usefixtures("triage_profile")
+"""The drivers' internals these tests call read the fixture profile's data; a driver run is given ``--profile``."""
+
 SCRIPT = Path(__file__).parents[3] / "scripts" / "triage_recording_vectors.py"
 
 
@@ -42,3 +45,12 @@ def test_shards_from_different_dictionaries_are_refused(tmp_path: Path) -> None:
     script.write_private(other, tmp_path / "recording_vectors.001.parquet")
     with pytest.raises(SystemExit, match="different data dictionaries"):
         script.merge(tmp_path, tmp_path / "merged" / "recording_vectors.parquet")
+
+
+def test_without_a_profile_a_shard_exits_2_naming_it(
+    tmp_path: Path, without_triage_profile: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Review A1: a shard reads the profile's data; with none it exits 2 and writes nothing. A merge needs none."""
+    assert _script().main([str(tmp_path), "--out", str(tmp_path / "out")]) == 2
+    assert "dataset profile" in capsys.readouterr().err
+    assert not (tmp_path / "out").exists()

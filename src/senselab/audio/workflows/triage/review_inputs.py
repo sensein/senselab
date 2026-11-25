@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import hashlib
 
-from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
+from senselab.audio.workflows.triage.dataset_profile import content_digest, data_path, profile_cache
 from senselab.text.tasks.pii_detection.redaction_policy import Lexicon, load_lexicon, version
 from senselab.text.tasks.pii_detection.redaction_review import ReviewPolicy, load_review_policy, redaction_policy_text
 
@@ -60,7 +60,22 @@ def policy_fingerprint() -> str:
     The cache key itself leaves them out, so a dataset's readings keep their keys while its policy is unchanged.
 
     Returns:
-        The hex digest over the policy text as the reviewer is given it and the word-list file's bytes.
+        The hex digest over the policy text as the reviewer is given it and the word lists' parsed values
+        (:func:`~senselab.audio.workflows.triage.dataset_profile.content_digest`), so a ``#`` comment in the word
+        lists changes nothing.
+    """
+    digest = hashlib.sha256(redaction_policy_text(review_policy()).encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(content_digest(data_path(LEXICON_FILE)).encode())
+    return digest.hexdigest()
+
+
+@profile_cache
+def legacy_policy_fingerprint() -> str:
+    """:func:`policy_fingerprint` as senselab took it before 2026-11-14: over the word-list file's bytes.
+
+    Returns:
+        The hex digest.
     """
     digest = hashlib.sha256(redaction_policy_text(review_policy()).encode("utf-8"))
     digest.update(b"\0")

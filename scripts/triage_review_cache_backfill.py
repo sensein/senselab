@@ -2,7 +2,7 @@
 r"""Seed the reviewer's result cache from finished runs whose readings were made with the current prompt.
 
     uv run python scripts/triage_review_cache_backfill.py RUN_ROOT [RUN_ROOT ...] [--manifest FILE] \
-        [--config OVERRIDE.yaml] [--log FILE]
+        --profile PROFILE [--config OVERRIDE.yaml] [--log FILE]
 
 Each run root's store is read, and a reading made with the current ``PROMPT_VERSION`` by the configured
 model is stored under the key REVIEW would compute for it (``nodes/review.py:review_cache_key``), so the
@@ -22,8 +22,12 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from senselab.audio.workflows.triage.config import load_triage_config
-from senselab.audio.workflows.triage.extend import read_store, require_recorded_identity
+from senselab.audio.workflows.triage.extend import (
+    add_config_arguments,
+    driver_config,
+    read_store,
+    require_recorded_identity,
+)
 from senselab.audio.workflows.triage.nodes.review import BACKFILL_SKIPPED, backfill_from_store
 
 
@@ -34,18 +38,22 @@ def main(argv: list[str] | None = None) -> int:
         argv: The command line, without the program name.
 
     Returns:
-        0 when every root was read, 1 when any could not be.
+        0 when every root was read, 1 when any could not be, 2 when the profile cannot be loaded or lacks a value.
     """
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("roots", nargs="*", type=Path, help="Run roots")
     parser.add_argument("--manifest", type=Path, default=None, help="File of run roots, one per line")
-    parser.add_argument("--config", type=Path, default=None, help="The run's config override")
+    add_config_arguments(parser)
     parser.add_argument("--log", type=Path, default=None, help="Where the per-root JSON lines go")
     args = parser.parse_args(argv)
     roots = list(args.roots)
     if args.manifest is not None:
         roots += [Path(line.strip()) for line in args.manifest.read_text().splitlines() if line.strip()]
-    config = load_triage_config(args.config) if args.config is not None else load_triage_config()
+    try:
+        config = driver_config(args)
+    except (OSError, ValueError, RuntimeError) as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 2
     states: Counter[str] = Counter()
     failed = 0
     out = args.log.open("w", encoding="utf-8") if args.log is not None else sys.stdout

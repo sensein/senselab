@@ -10,6 +10,9 @@ from types import ModuleType
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("triage_profile")
+"""The drivers' internals these tests call read the fixture profile's data; a driver run is given ``--profile``."""
+
 ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -64,13 +67,13 @@ def test_a_listen_set_renders_only_its_stems_with_their_checks(tmp_path: Path, c
     script.extract(corpus, extract, 1)
     header, line = extract.read_text().splitlines()[:2]
     other = json.loads(line)
-    other["stem"] = other["recording_id"] = "sub-ffff_ses-02_task-harvard-sentences"
+    other["stem"] = other["recording_id"] = "rec-9002"
     extract.write_text("\n".join([header, line, json.dumps(other)]) + "\n")
     listed = tmp_path / "extent_check_listen.tsv"
     listed.write_text(
         "stem\textent_start_s\tlex_cov\towner_extent_holds_task\towner_note\n"
         f"{fixtures.STEM}\t0.5\t0.9\t\t\n"
-        "sub-gggg_ses-01_task-absent\t1.0\t\t\t\n"
+        "rec-9003\t1.0\t\t\t\n"
     )
     page_dir = tmp_path / "page"
     argv = ["render", str(extract), "--out", str(page_dir), "--stems", str(listed), "--listen-set", "extent_check"]
@@ -91,9 +94,9 @@ def test_a_listen_set_renders_only_its_stems_with_their_checks(tmp_path: Path, c
 def test_a_plain_stem_list_is_a_listen_set_without_checks(tmp_path: Path) -> None:
     """One stem per line, no header: the recordings are kept and no check columns are shown."""
     listed = tmp_path / "stems.txt"
-    listed.write_text("sub-a_ses-1_task-x\nsub-b_ses-1_task-y\n")
+    listed.write_text("rec-0001\nrec-0002\n")
     listen = script.listen_set(listed, "stems", ["pass", "review", "discard"], "your decision")
-    assert listen.columns == () and set(listen.checks) == {"sub-a_ses-1_task-x", "sub-b_ses-1_task-y"}
+    assert listen.columns == () and set(listen.checks) == {"rec-0001", "rec-0002"}
 
 
 def test_a_listen_set_marks_a_proposed_extent_and_asks_its_direction(tmp_path: Path) -> None:
@@ -274,8 +277,8 @@ def test_a_listen_set_naming_a_labelled_participant_is_refused(
 ) -> None:
     """r37 round 3 let two labelled participants through; the build now fails unless one is allowed on purpose.
 
-    The participants are the extract's, its runs' recorded identity: no stem is parsed, so a stem that names
-    no ``sub-`` entity is checked as well as one that does.
+    The participants are the extract's, its runs' recorded identity: no stem is parsed, so a plain stem that
+    names no participant is checked as well as a BIDS-like one.
     """
     labels = tmp_path / "owner_labels"
     labels.mkdir()
@@ -326,3 +329,31 @@ def test_a_record_carries_the_recording_id_its_run_recorded(tmp_path: Path) -> N
     script.extract(corpus, extract, 1)
     (record,) = script.load(extract)
     assert record["recording_id"] == "p01/s2/recording.wav" and record["stem"] == fixtures.STEM
+
+
+def test_without_a_profile_extract_exits_2_naming_it(
+    tmp_path: Path, without_triage_profile: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Review A1: the records read the profile's data; with none extract exits 2 and writes nothing."""
+    extract = tmp_path / "review.jsonl"
+    assert script.main(["extract", str(tmp_path), "--out", str(extract), "--workers", "1"]) == 2
+    assert "dataset profile" in capsys.readouterr().err
+    assert not extract.exists()
+
+
+def test_extract_in_worker_processes_reads_the_drivers_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Review A5: a spawned worker activates the profile the driver was given, so its rows are the serial ones."""
+    from tests.conftest import FIXTURE_PROFILE
+
+    monkeypatch.syspath_prepend(str(ROOT / "scripts"))  # a spawned worker imports the page by its module name, as run
+
+    from senselab.audio.workflows.triage.dataset_profile import deactivate_profile
+
+    corpus = tmp_path / "corpus"
+    fixtures._run_root(corpus)
+    deactivate_profile()  # the corpus is built; the driver activates its own
+    serial, pooled = tmp_path / "serial.jsonl", tmp_path / "pooled.jsonl"
+    profile = ["--profile", str(FIXTURE_PROFILE)]
+    assert script.main(["extract", str(corpus), "--out", str(serial), "--workers", "1", *profile]) == 0
+    assert script.main(["extract", str(corpus), "--out", str(pooled), "--workers", "2", *profile]) == 0
+    assert pooled.read_text() == serial.read_text()

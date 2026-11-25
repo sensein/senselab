@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 from senselab.audio.workflows.triage.decision import ANNOTATION, REVIEW
 from senselab.audio.workflows.triage.vocabulary import (
     DECLINED,
@@ -92,7 +92,7 @@ def _fold(
         cohort=cohort,
         task=task or TaskEvidence(owning_branches=("SPEECH",)),
         flag_gates=flag_gates,
-        policy=FoldPolicy.from_config(load_triage_config()),
+        policy=FoldPolicy.from_config(load_triage_config(profile=ACTIVE)),
     )
 
 

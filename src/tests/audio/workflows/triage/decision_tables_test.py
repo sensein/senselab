@@ -9,7 +9,6 @@ from typing import Any
 import pyarrow.parquet as pq
 
 from senselab.audio.workflows.triage import decision_tables
-from senselab.audio.workflows.triage.b2ai_hints import identity_from_name
 from senselab.audio.workflows.triage.identity import RecordingIdentity, identity_of
 from senselab.audio.workflows.triage.vocabulary import (
     ROUTED,
@@ -20,10 +19,11 @@ from senselab.audio.workflows.triage.vocabulary import (
     Triage,
     fold_file_verdict,
 )
+from tests.audio.workflows.triage.conftest import hint_for
 
-STEM = "sub-SUBJ13_ses-01_task-respiration-and-cough-breath"
-RECORDED = identity_from_name(STEM)
-"""What ADMIT records for the stem when no hint declares an identity."""
+STEM = "rec-0013"
+RECORDED = identity_of(hint_for("p13", "s01", "respiration-and-cough-breath"))
+"""What ADMIT records for the recording, as its hint declares it."""
 
 
 def _fold(**task: Any) -> dict[str, Any]:  # noqa: ANN401 -- TaskEvidence fields
@@ -56,7 +56,7 @@ def _run_root(root: Path, decision: dict[str, Any], identity: RecordingIdentity 
     Returns:
         The run root.
     """
-    run_root = root / "sub-SUBJ13" / "ses-01" / f"{STEM}_20261007-120000"
+    run_root = root / "p13" / "s01" / f"{STEM}_20261007-120000"
     (run_root / "run").mkdir(parents=True)
     (run_root / "summary").mkdir()
     (run_root / "summary" / "summary.pdf").write_bytes(b"%PDF")
@@ -160,6 +160,19 @@ def test_the_identity_is_the_one_the_run_recorded_not_the_stem_s(tmp_path: Path)
     row, _ = decision_tables.decision_rows(_run_root(tmp_path / "b", fold, None), tmp_path)  # type: ignore[misc]
     assert (row["participant"], row["session"], row["task"]) == (None, None, None)
     assert row["stem"] == STEM
+
+
+def test_both_tables_carry_the_recording_id_and_target_speaker_they_join_on(tmp_path: Path) -> None:
+    """Review D4: the recorded id and target speaker ride on every decision and evidence row; else the stem."""
+    sources = {"participant": "hint", "task_id": "hint", "recording_id": "corpus_path"}
+    declared = RecordingIdentity("P1", "visit-1", "breath-2", sources, target_speaker="P1:child", recording_id="a/rec")
+    fold = _fold(**_breath(24.0, 20.0))
+    row, evidence = decision_tables.decision_rows(_run_root(tmp_path / "a", fold, declared), tmp_path)  # type: ignore[misc]
+    assert (row["recording_id"], row["target_speaker"]) == ("a/rec", "P1:child")
+    assert {(item["recording_id"], item["target_speaker"]) for item in evidence} == {("a/rec", "P1:child")}
+    row, _ = decision_tables.decision_rows(_run_root(tmp_path / "b", fold, None), tmp_path)  # type: ignore[misc]
+    assert (row["recording_id"], row["target_speaker"]) == (STEM, None)
+    assert decision_tables.decisions_schema().get_field_index("recording_id") >= 0
 
 
 def test_a_discard_row_names_the_one_reading_that_discarded_it(tmp_path: Path) -> None:

@@ -1,0 +1,55 @@
+# The lab corpus's own time words (made up for the tests, plan step 8c).
+time_of_day:
+- morning
+- afternoon
+- evening
+- night
+weekdays:
+- monday
+- tuesday
+- wednesday
+- thursday
+- friday
+- saturday
+- sunday
+relative_days:
+- today
+- tomorrow
+- yesterday
+seasons:
+- spring
+- summer
+- autumn
+- winter
+relative_modifiers:
+- last
+- next
+- this
+clock_markers:
+- oclock
+- am
+- pm
+units:
+- second
+- minute
+- hour
+plural_units:
+- seconds
+- minutes
+- hours
+quantities:
+- a
+- an
+- couple
+modifiers:
+- past
+- last
+- next
+ordinal_words:
+- first
+- second
+- third
+blockers:
+- january
+- february
+- march

@@ -14,7 +14,6 @@ import pytest
 import soundfile as sf
 
 from senselab.audio.workflows.triage import review_page
-from senselab.audio.workflows.triage.b2ai_hints import identity_from_name
 from senselab.audio.workflows.triage.identity import identity_of
 from senselab.audio.workflows.triage.recording_vectors import read_store
 from senselab.audio.workflows.triage.review_page import page as page_module
@@ -28,9 +27,11 @@ from senselab.audio.workflows.triage.vocabulary import (
     TaskEvidence,
     fold_file_verdict,
 )
+from tests.audio.workflows.triage.conftest import hint_for
 
 RATE = 16000
-STEM = "sub-SUBJ13_ses-01_task-respiration-and-cough-breath"
+STEM = "rec-0013"
+TASK = "respiration-and-cough-breath"
 
 
 def _fold() -> dict[str, Any]:
@@ -70,7 +71,7 @@ def _tone(seconds: float, hz: float) -> np.ndarray:
 
 def _run_root(root: Path) -> Path:
     """A finished run directory: a fold, streams on disk, a breath reading and a background reading."""
-    run_root = root / "sub-SUBJ13" / "ses-01" / f"{STEM}_20261007-120000"
+    run_root = root / "p13" / "s1" / f"{STEM}_20261007-120000"
     (run_root / "run" / "streams").mkdir(parents=True)
     (run_root / "released").mkdir()
     sf.write(run_root / "run" / "streams" / "plain.flac", _tone(4.0, 1000.0), RATE)
@@ -83,7 +84,11 @@ def _run_root(root: Path) -> Path:
         entity(
             "rec",
             "stream",
-            {"name": "recording", "path": "streams/recording.flac", **identity_from_name(STEM).as_attributes()},
+            {
+                "name": "recording",
+                "path": "streams/recording.flac",
+                **identity_of(hint_for("p13", "s1", TASK)).as_attributes(),
+            },
             [0.0, 4.0],
         ),
         entity("plain", "stream", {"name": "plain", "path": "streams/plain.flac"}, [0.0, 4.0]),
@@ -149,7 +154,7 @@ def test_a_record_carries_decision_evidence_streams_and_a_spectrogram(tmp_path: 
     record = review_page.review_record(run_root, tmp_path, speech=lambda _: None)
     assert record is not None
     assert (record["verdict"], record["release"], record["branch"]) == ("pass", "as_is", "AIRWAY")
-    assert (record["participant"], record["session"]) == ("sub-SUBJ13", "ses-01")
+    assert (record["participant"], record["session"]) == ("p13", "s1")
     assert record["extent"] == [0.5, 3.5] and record["duration_s"] == 4.0
     decisive = {item["name"] for item in record["evidence"] if item["decisive"]}
     assert "breath_event_db_over_local" in decisive
@@ -200,8 +205,8 @@ def test_the_page_inlines_its_index_and_writes_side_files(tmp_path: Path) -> Non
     assert record is not None
     other = {
         **record,
-        "stem": "sub-SUBJ36_ses-01_task-harvard-sentences",
-        "participant": "sub-SUBJ36",
+        "stem": "rec-0036",
+        "participant": "p36",
         "verdict": "review",
         "reason": "weak_events",
         "evidence": [],
@@ -241,8 +246,8 @@ def _speech_record(record: dict[str, Any]) -> dict[str, Any]:
     """A speech record over ``record``: two consensus words, the second masked, and every speech field."""
     return {
         **record,
-        "stem": "sub-SUBJ36_ses-01_task-harvard-sentences",
-        "participant": "sub-SUBJ36",
+        "stem": "rec-0036",
+        "participant": "p36",
         "speech": {
             "html": "unused",
             "entries": [["hi", 0, -1], ["Ada", 0, 0]],
@@ -342,23 +347,23 @@ def test_each_participant_is_summarised_for_the_grouped_list() -> None:
     """Recordings, sessions, verdicts, issues and the reasons and annotations across a participant's recordings."""
     records = [
         {
-            "participant": "sub-a",
-            "session": "ses-1",
+            "participant": "p01",
+            "session": "s1",
             "verdict": "review",
             "reasons": ["other_speaker"],
             "annotations": ["task_mismatch"],
         },
         {
-            "participant": "sub-a",
-            "session": "ses-2",
+            "participant": "p01",
+            "session": "s2",
             "verdict": "review",
             "reasons": ["other_speaker", "weak_events"],
             "annotations": [],
         },
-        {"participant": "sub-b", "session": "ses-1", "verdict": "pass", "reasons": [], "annotations": []},
+        {"participant": "p02", "session": "s1", "verdict": "pass", "reasons": [], "annotations": []},
     ]
     summaries = page_module.participant_summaries(records)
-    assert summaries["sub-a"] == {
+    assert summaries["p01"] == {
         "recordings": 2,
         "sessions": 2,
         "verdicts": {"review": 2},
@@ -366,6 +371,6 @@ def test_each_participant_is_summarised_for_the_grouped_list() -> None:
         "reasons": {"other_speaker": 2, "weak_events": 1},
         "annotations": {"task_mismatch": 1},
     }
-    assert summaries["sub-b"]["issues"] == 0
+    assert summaries["p02"]["issues"] == 0
     index = page_module.index_of([{"stem": f"s{i}", **r} for i, r in enumerate(records)], title="t", audio_base="../")
-    assert set(index["participants"]) == {"sub-a", "sub-b"}
+    assert set(index["participants"]) == {"p01", "p02"}

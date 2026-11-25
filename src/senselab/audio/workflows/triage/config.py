@@ -12,22 +12,28 @@ whose keys are names the code reads, and a key it does not already have is refus
 A dataset profile (:mod:`~senselab.audio.workflows.triage.dataset_profile`) sits between the two: its own
 override is merged over the packaged file before a run's override, and the data files it supplies are read
 instead of the packaged ones. A configuration loaded with a profile carries it, and its hash covers the profile's
-name, version and every byte the profile lists; one loaded without a profile hashes exactly as before.
+name, version and digest (each YAML file by its parsed values, any other file by its bytes); one loaded without a
+profile hashes exactly as before. A caller names the profile, or passes :data:`ACTIVE` for the one already active: a
+load naming none while one is active is refused.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import re
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import yaml  # type: ignore[import-untyped]
 
 from senselab.audio.workflows.triage.dataset_profile import (
+    ACTIVE,
+    ActiveProfile,
     DatasetProfile,
+    ProfileNotNamed,
     activate_profile,
     active_profile,
     check_run_data,
@@ -107,6 +113,9 @@ class TriageConfig:
             configuration can be named.
         values: The merged mapping.
         profile: The dataset profile it was loaded with, or None.
+        legacy_config_hash: The hash as senselab took it before 2026-11-14, over the profile's legacy digest
+            (:attr:`~senselab.audio.workflows.triage.dataset_profile.DatasetProfile.legacy_digest`); None where it
+            equals ``config_hash``.
     """
 
     name: str
@@ -114,6 +123,12 @@ class TriageConfig:
     config_hash: str
     values: dict[str, Any]
     profile: DatasetProfile | None = None
+    legacy_config_hash: str | None = None
+
+    @property
+    def config_hashes(self) -> frozenset[str]:
+        """The hashes a record of this configuration may carry: ``config_hash``, and ``legacy_config_hash``."""
+        return frozenset(hash_ for hash_ in (self.config_hash, self.legacy_config_hash) if hash_)
 
     def get(self, path: str, default: Any = None) -> Any:  # noqa: ANN401
         """Read a value, returning ``default`` when it is absent or null.
@@ -265,9 +280,34 @@ def _validate_recognizers(recognizers: Any) -> None:  # noqa: ANN401 -- parsed Y
         raise ValueError(f"asr.recognizers names a recognizer twice: {names}")
 
 
+_GLINER_KEYS = frozenset({"model", "revision"})
+
+_COMMIT_SHA = re.compile(r"[0-9a-f]{40}")
+"""A full commit SHA, the only revision a pinned detector may name."""
+
+
+def _validate_gliner(gliner: Any) -> None:  # noqa: ANN401 -- parsed YAML
+    """Reject a ``pii.gliner`` setting that names no checkpoint, or names it by a ref rather than a commit.
+
+    A ref is refused rather than resolved: resolving ``main`` per run lets two slices of one campaign scan with
+    different detector commits under one configuration hash, and cannot be done offline.
+    """
+    if not isinstance(gliner, dict):
+        raise ValueError("pii.gliner must be a mapping with a model and a revision")
+    unknown = sorted(set(gliner) - _GLINER_KEYS)
+    if unknown:
+        raise ValueError(f"pii.gliner has unknown keys {unknown}; the keys are {sorted(_GLINER_KEYS)}")
+    if not gliner.get("model"):
+        raise ValueError("pii.gliner needs a model")
+    revision = gliner.get("revision")
+    if not isinstance(revision, str) or not _COMMIT_SHA.fullmatch(revision):
+        raise ValueError(f"pii.gliner.revision must be a full 40-hex commit, never a ref; received {revision!r}")
+
+
 def _validate(values: dict[str, Any]) -> None:
-    """Reject resolved settings that would misrepresent AST's temporal resolution, or name no recognizer."""
+    """Reject settings that misrepresent AST's resolution, name no recognizer, or leave the PII detector unpinned."""
     _validate_recognizers((values.get("asr") or {}).get("recognizers"))
+    _validate_gliner((values.get("pii") or {}).get("gliner"))
     try:
         hop_s = float(values["windows"]["ast"]["hop_s"])
     except (KeyError, TypeError, ValueError) as error:
@@ -276,33 +316,24 @@ def _validate(values: dict[str, Any]) -> None:
         raise ValueError(f"windows.ast.hop_s must be at least {MIN_AST_HOP_S:g} s; received {hop_s:g} s")
 
 
-def load_triage_config(
-    override: str | Path | None = None, *, profile: str | Path | DatasetProfile | None = None
-) -> TriageConfig:
-    """Load the packaged configuration, then a dataset profile's override, then a run's override.
+def profile_config_values(profile: DatasetProfile | None) -> dict[str, Any]:
+    """The packaged configuration with each profile layer's override merged over it, the base first.
+
+    Reads files only: no profile is activated and the run's ``data`` section is left as it is, so a loader may
+    ask it what the active profile configures without resetting the run (:func:`load_triage_config` sets both).
 
     Args:
-        override: Path to a partial YAML. Its keys must already exist in the packaged file,
-            except inside a mapping named in :data:`DATA_MAP_PATHS`, which may gain entries.
-        profile: A dataset profile, or its directory. When None and a profile is already active
-            (:func:`~senselab.audio.workflows.triage.dataset_profile.active_profile`), that profile is used, so the
-            configuration always names the profile its data files are read from. The profile's own override, if
-            it has one, is merged under ``override`` by the same rules, and the profile is activated only once
-            the merged configuration has validated.
+        profile: The profile, or None for the packaged configuration alone.
 
     Returns:
-        The resolved configuration, carrying the hash of the merged mapping and of the profile.
+        The merged mapping, before a run's override and before validation.
 
     Raises:
-        ValueError: If an override introduces a key the packaged file does not have, outside a
-            data mapping, or the profile is malformed.
-        RuntimeError: If a different profile is already active in this process.
+        ValueError: If a layer introduces a key the packaged file does not have, outside a data mapping, or
+            carries a ``data`` section.
     """
-    loaded = load_profile(profile) if isinstance(profile, (str, Path)) else profile
-    if loaded is None:
-        loaded = active_profile()
     values = yaml.safe_load(_DEFAULT.read_text())
-    for layer in loaded.chain() if loaded is not None else ():
+    for layer in profile.chain() if profile is not None else ():
         if layer.config is not None:
             layer_values = yaml.safe_load(layer.config.read_text()) or {}
             if layer_values.get(DATA_SECTION):
@@ -311,17 +342,79 @@ def load_triage_config(
                     "which is a run's (it would apply after every profile's files, out of the chain's order)"
                 )
             values = _merge(values, layer_values)
+    return values
+
+
+PROFILE_ONLY_KEYS: tuple[tuple[str, str], ...] = (("taxonomy", "airway_ontology_roots"),)
+"""Settings a dataset profile may set and a run's override may not: the routing labels are built from the packaged
+configuration and the profile's layers (:func:`profile_config_values`), once per profile, so a run's value would be
+recorded in its configuration and never applied."""
+
+
+def load_triage_config(
+    override: str | Path | None = None,
+    *,
+    profile: str | Path | DatasetProfile | ActiveProfile | None = None,
+) -> TriageConfig:
+    """Load the packaged configuration, then a dataset profile's override, then a run's override.
+
+    Args:
+        override: Path to a partial YAML. Its keys must already exist in the packaged file,
+            except inside a mapping named in :data:`DATA_MAP_PATHS`, which may gain entries.
+        profile: A dataset profile, or its directory; :data:`ACTIVE` for the profile already active in this process
+            (:func:`~senselab.audio.workflows.triage.dataset_profile.active_profile`), or none where none is; None
+            for no profile, refused while one is active, since the configuration would not name the profile its
+            data files are read from. The profile's own override, if it has one, is merged under ``override`` by
+            the same rules, and the profile is activated only once the merged configuration has validated.
+
+    Returns:
+        The resolved configuration, carrying the hash of the merged mapping and of the profile.
+
+    Raises:
+        ValueError: If an override introduces a key the packaged file does not have, outside a
+            data mapping, or the profile is malformed.
+        ProfileNotNamed: If ``profile`` is None and a profile is active. A ``RuntimeError`` subclass.
+        RuntimeError: If a different profile is already active in this process.
+    """
+    if profile is None and (active := active_profile()) is not None:
+        raise ProfileNotNamed(
+            f"dataset profile {active.name} {active.version} ({active.root}) is active and this load names no "
+            "profile: pass profile=ACTIVE to load with it, the profile itself, or deactivate it first"
+        )
+    if profile is ACTIVE:
+        loaded = active_profile()
+    elif isinstance(profile, (str, Path)):
+        loaded = load_profile(profile)
+    else:
+        loaded = profile
+    values = profile_config_values(loaded)
     if override is not None:
-        values = _merge(values, yaml.safe_load(Path(override).read_text()) or {})
+        run_values = yaml.safe_load(Path(override).read_text()) or {}
+        for section, key in PROFILE_ONLY_KEYS:
+            if isinstance(run_values.get(section), Mapping) and key in run_values[section]:
+                raise ValueError(
+                    f"{override}: {section}.{key} is read when the routing labels are built from the dataset "
+                    "profile, so a run's override cannot change it; set it in the dataset profile's config"
+                )
+        values = _merge(values, run_values)
     _validate(values)
     hashed = json.dumps(values, sort_keys=True, default=str)
     listed_stages(values)  # an unknown stage, or one that may not be off, is refused here
     run_data = check_run_data(values.get(DATA_SECTION))
+    legacy = None
     if loaded is not None:
         activate_profile(loaded)
-        hashed += f"\0profile\0{loaded.name}\0{loaded.version}\0{loaded.digest}"
+        named = f"\0profile\0{loaded.name}\0{loaded.version}\0"
+        if loaded.legacy_digest and loaded.legacy_digest != loaded.digest:
+            legacy = hashlib.sha256((hashed + named + loaded.legacy_digest).encode()).hexdigest()[:16]
+        hashed += named + loaded.digest
     set_run_data(run_data)
     digest = hashlib.sha256(hashed.encode()).hexdigest()[:16]
     return TriageConfig(
-        name=values["name"], version=int(values["version"]), config_hash=digest, values=values, profile=loaded
+        name=values["name"],
+        version=int(values["version"]),
+        config_hash=digest,
+        values=values,
+        profile=loaded,
+        legacy_config_hash=legacy,
     )

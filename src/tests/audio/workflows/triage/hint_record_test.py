@@ -18,6 +18,7 @@ from senselab.audio.workflows.triage.hint_record import (
     hint_digest,
     recorded_hint,
     recorded_hint_digest,
+    recorded_voice,
 )
 from senselab.utils.prov_store import ProvStore
 
@@ -155,3 +156,16 @@ def test_a_declared_target_speakers_voice_is_stored_only_as_its_digest() -> None
     assert "vector" not in stored["target_speakers"][0]["embedding"]
     assert stored["target_speakers"][0]["embedding"]["vector_dim"] == 2
     assert carries_voice(stored) and not carries_voice(hint_attributes(AudioHints())[HINT])
+
+
+def test_a_recorded_target_speakers_voice_is_not_rebuilt_and_is_flagged() -> None:
+    """Review K5: the reduced embedding cannot be rebuilt; the speaker is kept without it, and the record says so."""
+    from senselab.audio.data_structures import TargetSpeaker
+
+    hint = AudioHints(target_speakers=[TargetSpeaker(id="sub-07:child", embedding=_speaker([0.6, 0.8]))])
+    store = _store(**hint_attributes(hint))
+    rebuilt = recorded_hint(store)
+    assert rebuilt is not None
+    assert [(speaker.id, speaker.embedding) for speaker in rebuilt.target_speakers] == [("sub-07:child", None)]
+    assert recorded_voice(store)
+    assert not recorded_voice(_store(**hint_attributes(HINT_A))) and not recorded_voice(_store())

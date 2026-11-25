@@ -2,7 +2,7 @@
 r"""Write the replay manifest: every recording of the AIRWAY families, and every recording whose run is incomplete.
 
     uv run python scripts/select_replay_manifest.py RECORDING_VECTORS.parquet --out-root DIR OUT.jsonl \
-        [--branch AIRWAY] [--no-incomplete]
+        [--branch AIRWAY] [--no-incomplete] --profile PROFILE [--config OVERRIDE.yaml]
 
 ``RECORDING_VECTORS.parquet`` is the corpus table ``recording_vectors.py`` writes; its ``run_dir``
 is relative to ``--out-root``, the directory the corpus runs live under. Each selected row becomes
@@ -15,7 +15,8 @@ refused: rebuild the corpus table.
 
 ``--branch`` names the branch whose in-family rows are selected (``AIRWAY`` by default); a row is
 also selected where its ``run_status`` is ``incomplete``, unless ``--no-incomplete``. The selection is in
-``specs/20261006-airway-move/design.md``.
+``specs/20261006-airway-move/design.md``. A branch's families are its tasks in the profile's task list, so
+``--profile`` names the profile the corpus was run with.
 
 Install:
     uv sync --all-extras --group dev
@@ -31,6 +32,7 @@ from pathlib import Path
 import pandas as pd
 import pyarrow.parquet as pq
 
+from senselab.audio.workflows.triage.extend import add_config_arguments, driver_config
 from senselab.audio.workflows.triage.identity import (
     RECORDING_ID_COLUMN,
     ROW_PARTICIPANT,
@@ -77,11 +79,14 @@ def _null(value: object) -> object:
     return None if value is None or (isinstance(value, float) and pd.isna(value)) else value
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     """Write the manifest and print what it holds.
 
+    Args:
+        argv: The command line, or None to read ``sys.argv``.
+
     Returns:
-        0; 2 when the table carries no identity columns.
+        0; 2 when the table carries no identity columns, or the profile cannot be loaded or lacks a value.
     """
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n", maxsplit=1)[0] if __doc__ else None)
     parser.add_argument("table", type=Path, help="recording_vectors.parquet")
@@ -91,7 +96,13 @@ def main() -> int:
     parser.add_argument(
         "--no-incomplete", action="store_true", help="Do not also select every recording whose run is incomplete"
     )
-    args = parser.parse_args()
+    add_config_arguments(parser)
+    args = parser.parse_args(argv)
+    try:
+        driver_config(args)
+    except (OSError, ValueError, RuntimeError) as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 2
 
     present = set(pq.read_schema(args.table).names)
     absent = [name for name in IDENTITY_COLUMNS if name not in present]

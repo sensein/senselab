@@ -8,8 +8,12 @@ and how it is rounded. :func:`fit_values` computes every one from the table ``re
 (:data:`~senselab.audio.workflows.triage.dataset_profile.FITTED_FILE`).
 
 The order for a new dataset: a pilot run (a profile with ``pilot: true`` may leave these values empty), the COHORT
-pass, the corpus table, the fit, the COHORT pass again, then a replay of the pilot so its verdicts read the fitted
-values (``scripts/fit_profile.py`` lists the steps).
+pass, the corpus table, the fit, a replay of the pilot so its branches read the fitted values, the COHORT pass again
+over the replayed runs, then a second replay so its verdicts fold the new COHORT readings (``scripts/fit_profile.py``
+lists the steps).
+
+Each statistic is fitted over at least its ``n_min`` values (:func:`n_min_of`); a value with fewer is not fitted
+unless the caller allows it, and its :attr:`Fit.short` names it either way.
 """
 
 from __future__ import annotations
@@ -21,8 +25,15 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
+import yaml  # type: ignore[import-untyped]
 
-from senselab.audio.workflows.triage.dataset_profile import CONFIG_FILE, FITTED_KIND, profile_values
+from senselab.audio.workflows.triage.dataset_profile import (
+    CONFIG_FILE,
+    FITTED_KIND,
+    PACKAGED_DATA,
+    PROFILE_VALUES_FILE,
+    profile_values,
+)
 
 METHOD_KEY = "method"
 """The ``data/profile_values.yaml`` entry key holding a corpus statistic's method."""
@@ -33,9 +44,39 @@ TUKEY_K = 1.5
 STATISTICS = ("median", "percentile", "percentile_band", "tukey_upper", "tukey_lower")
 """The statistics a method may name."""
 
+N_MIN_KEY = "n_min"
+"""The key of a method's minimum count, and of the per-statistic defaults at the top of ``data/profile_values.yaml``."""
+
+WHOLE = ""
+"""How :attr:`Fit.short` names a value without ``by`` that has too few values."""
+
 PER = {"recording": (), "session": ("participant", "session"), "participant": ("participant",)}
 """The columns a method's ``per`` groups rows by: one value per group (COHORT repeats a group's reading on each of
-its recordings)."""
+its recordings). COHORT groups by target speaker, so a row that declares one (:data:`SPEAKER_COLUMN`) is grouped
+under it in place of its participant (:func:`group_of`)."""
+
+SPEAKER_COLUMN = "target_speaker"
+"""The corpus-table column naming a recording's declared target speaker; null where the target is the participant."""
+
+
+def group_of(row: Mapping[str, Any], keys: Sequence[str]) -> tuple[Any, ...]:
+    """The group a ``per`` method files a row under: :data:`PER`'s columns, with the speaker COHORT read.
+
+    Args:
+        row: A corpus-table row.
+        keys: The method's :data:`PER` columns.
+
+    Returns:
+        One value per key; ``participant`` is the declared target speaker where the row names one, so recordings of
+        two target speakers of one participant are two groups, as COHORT reads them (plan step 9a). A session is
+        then its speaker's session: ``(speaker, session)``, with the participant kept beside it.
+    """
+    speaker = row.get(SPEAKER_COLUMN)
+    if not _present(speaker):
+        return tuple(row.get(key) for key in keys)
+    group = tuple(speaker if key == "participant" else row.get(key) for key in keys)
+    return (*group, row.get("participant")) if "session" in keys else group
+
 
 OPERATORS: Mapping[str, Callable[[Any, Any], bool]] = {
     "eq": lambda cell, value: cell == value,
@@ -62,6 +103,9 @@ class Fit:
             table held nothing to fit it from.
         n: How many values it was computed over (per family, for a value by family).
         method: The method it followed.
+        n_min: The fewest values it may be fitted over (:func:`n_min_of`).
+        short: What had some values but fewer than ``n_min``: the families of a value by family, else
+            ``(WHOLE,)``; empty when nothing did. Unless the fit allowed it, these are left out of ``value``.
     """
 
     file: str
@@ -69,11 +113,51 @@ class Fit:
     value: Any
     n: int | dict[str, int]
     method: Mapping[str, Any]
+    n_min: int = 0
+    short: tuple[str, ...] = ()
 
     @property
     def key(self) -> str:
         """``<file> <dotted key path>``."""
         return f"{self.file} {'.'.join(self.path)}"
+
+
+@functools.cache
+def n_min_defaults() -> dict[str, int]:
+    """Each statistic's default minimum count, from the top of ``data/profile_values.yaml``.
+
+    Returns:
+        ``{statistic: count}``.
+
+    Raises:
+        ValueError: If a statistic has no default, or one that is not a positive whole number.
+    """
+    document = yaml.safe_load((PACKAGED_DATA / PROFILE_VALUES_FILE).read_text()) or {}
+    defaults = dict(document.get(N_MIN_KEY) or {})
+    for name in STATISTICS:
+        if not isinstance(defaults.get(name), int) or isinstance(defaults[name], bool) or defaults[name] < 1:
+            raise ValueError(f"{PROFILE_VALUES_FILE} {N_MIN_KEY}.{name} is {defaults.get(name)!r}, not a count >= 1")
+    return {name: int(defaults[name]) for name in STATISTICS}
+
+
+def n_min_of(method: Mapping[str, Any]) -> int:
+    """The fewest values a method's statistic may be fitted over: its own ``n_min``, else its statistic's default.
+
+    Args:
+        method: The method.
+
+    Returns:
+        The count.
+
+    Raises:
+        ValueError: If the method's own ``n_min`` is not a positive whole number.
+    """
+    own = method.get(N_MIN_KEY)
+    if own is None:
+        return n_min_defaults()[str(method["statistic"])]
+    if not isinstance(own, int) or isinstance(own, bool) or own < 1:
+        raise ValueError(f"method {dict(method)}: {N_MIN_KEY} {own!r} is not a count >= 1")
+    return own
 
 
 def fit_methods() -> list[tuple[str, tuple[str, ...], dict[str, Any]]]:
@@ -83,7 +167,8 @@ def fit_methods() -> list[tuple[str, tuple[str, ...], dict[str, Any]]]:
         The kind-``b`` entries of ``data/profile_values.yaml`` that carry a ``method``, in the file's order.
 
     Raises:
-        ValueError: If a method names a statistic or ``per`` this module does not compute.
+        ValueError: If a method names a statistic or ``per`` this module does not compute, or an ``n_min`` that is
+            not a count.
     """
     out = []
     for relative, entries in profile_values().items():
@@ -94,6 +179,7 @@ def fit_methods() -> list[tuple[str, tuple[str, ...], dict[str, Any]]]:
             path = tuple(str(part) for part in entry["path"])
             if method.get("statistic") not in STATISTICS or method.get("per", "recording") not in PER:
                 raise ValueError(f"{relative} {'.'.join(path)}: method {dict(method)} is not one fit.py computes")
+            n_min_of(method)
             out.append((relative, path, dict(method)))
     return out
 
@@ -159,7 +245,7 @@ def select(
         seen: set[tuple[Any, ...]] = set()
         grouped = []
         for row in chosen:
-            group = tuple(row.get(key) for key in keys)
+            group = group_of(row, keys)
             if any(not _present(part) for part in group) or group in seen:
                 continue
             seen.add(group)
@@ -213,6 +299,7 @@ def fit_value(
     *,
     tasks: Mapping[str, Any],
     setting: Callable[[Sequence[str]], Any],
+    allow_short: bool = False,
 ) -> Fit:
     """One corpus statistic, fitted.
 
@@ -223,10 +310,14 @@ def fit_value(
         method: Its method.
         tasks: The task list's ``tasks`` mapping.
         setting: Reads another value of ``relative`` by key path.
+        allow_short: Fit a value (or a family) over fewer than its ``n_min`` values too; it is named in
+            :attr:`Fit.short` either way.
 
     Returns:
-        The fit.
+        The fit. No values at all leave the value (or family) unfitted, as before; between one and ``n_min - 1``
+        leave it unfitted unless ``allow_short``.
     """
+    n_min = n_min_of(method)
     chosen = select(rows, method, tasks=tasks, setting=setting)
     if method.get("by"):
         by = str(method["by"])
@@ -235,13 +326,22 @@ def fit_value(
             groups.setdefault(str(row.get(by)), []).append(row)
         value: dict[str, Any] = {}
         counts: dict[str, int] = {}
+        short: list[str] = []
         for group in sorted(groups):
             values = _values(groups[group], method)
-            if values.size:
-                value[group], counts[group] = statistic(values, method), int(values.size)
-        return Fit(relative, path, value or None, counts, method)
+            if not values.size:
+                continue
+            counts[group] = int(values.size)
+            if values.size < n_min:
+                short.append(group)
+                if not allow_short:
+                    continue
+            value[group] = statistic(values, method)
+        return Fit(relative, path, value or None, counts, method, n_min, tuple(short))
     values = _values(chosen, method)
-    return Fit(relative, path, statistic(values, method), int(values.size), method)
+    too_few = 0 < values.size < n_min
+    fitted = None if too_few and not allow_short else statistic(values, method)
+    return Fit(relative, path, fitted, int(values.size), method, n_min, (WHOLE,) if too_few else ())
 
 
 def fit_values(
@@ -249,6 +349,7 @@ def fit_values(
     *,
     tasks: Mapping[str, Any],
     setting: Callable[[str, Sequence[str]], Any],
+    allow_short: bool = False,
 ) -> list[Fit]:
     """Every corpus statistic, fitted from a corpus table.
 
@@ -257,6 +358,7 @@ def fit_values(
             the columns needed).
         tasks: The task list's ``tasks`` mapping.
         setting: Reads a value of the active profile by data file and key path.
+        allow_short: Fit values over fewer than their ``n_min`` values too (:func:`fit_value`).
 
     Returns:
         One fit per method, in ``data/profile_values.yaml``'s order.
@@ -269,6 +371,7 @@ def fit_values(
             method,
             tasks=tasks,
             setting=functools.partial(setting, relative),
+            allow_short=allow_short,
         )
         for relative, path, method in fit_methods()
     ]
@@ -300,7 +403,7 @@ def columns_read() -> list[str]:
     Returns:
         The columns, sorted.
     """
-    names = {"participant", "session", "declared_family"}
+    names = {"participant", "session", SPEAKER_COLUMN, "declared_family"}
     for _, _, method in fit_methods():
         names.add(str(method["column"]))
         names.update(str(condition["column"]) for condition in method.get("where") or ())

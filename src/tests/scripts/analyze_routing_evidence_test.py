@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.conftest import FIXTURE_PROFILE
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI = _REPO_ROOT / "scripts" / "analyze_routing_evidence.py"
 _spec = importlib.util.spec_from_file_location("analyze_routing_evidence_under_test", _CLI)
@@ -40,7 +42,7 @@ def _manifest(out_dir: Path, stores: list[Path]) -> Path:
         "".join(
             json.dumps(
                 {
-                    "stem": f"sub-{index:02d}",
+                    "stem": f"rec-{index:04d}",
                     "run_root": str(store.parent.parent),
                     "store": str(store),
                     "task_id": "1",
@@ -77,7 +79,7 @@ class TestAReusedManifest:
         """This is the relocated corpus: every row intact, every path pointing at nothing."""
         out_dir = tmp_path / "analysis"
         manifest = _manifest(
-            out_dir, [tmp_path / "moved" / f"sub-{index:02d}" / "run" / "store.jsonl" for index in range(200)]
+            out_dir, [tmp_path / "moved" / f"rec-{index:04d}" / "run" / "store.jsonl" for index in range(200)]
         )
 
         with pytest.raises(FileNotFoundError, match="none of the"):
@@ -87,7 +89,7 @@ class TestAReusedManifest:
     def test_a_manifest_that_still_resolves_is_reused(self, tmp_path: Path) -> None:
         """The guard must not cost a legitimate resume its manifest."""
         out_dir = tmp_path / "analysis"
-        stores = [_store(tmp_path / "runs" / f"sub-{index:02d}") for index in range(4)]
+        stores = [_store(tmp_path / "runs" / f"rec-{index:04d}") for index in range(4)]
         manifest = _manifest(out_dir, stores)
 
         assert cli.build_manifest(tmp_path / "runs", out_dir) == manifest
@@ -95,7 +97,7 @@ class TestAReusedManifest:
     def test_a_few_missing_recordings_do_not_refuse_the_manifest(self, tmp_path: Path) -> None:
         """A recording deleted since the manifest was built is the extract's ``missing``, not a refusal."""
         out_dir = tmp_path / "analysis"
-        stores = [_store(tmp_path / "runs" / f"sub-{index:02d}") for index in range(4)]
+        stores = [_store(tmp_path / "runs" / f"rec-{index:04d}") for index in range(4)]
         stores[0].unlink()
         _manifest(out_dir, stores)
 
@@ -121,10 +123,10 @@ class TestAnExtractThatReadsNothing:
         incident, and reading them is what the shard directory being empty already says.
         """
         run_dir = tmp_path / "runs"
-        summary_dir = run_dir / "sub-00"
+        summary_dir = run_dir / "p00"
         summary_dir.mkdir(parents=True)
-        (summary_dir / "sub-00_task-1.summary.json").write_text(
-            json.dumps({"stem": "sub-00_task-1", "run_root": str(summary_dir / "sub-00_task-1_20260912-000000")}),
+        (summary_dir / "rec-0001.summary.json").write_text(
+            json.dumps({"stem": "rec-0001", "run_root": str(summary_dir / "rec-0001_20260912-000000")}),
             encoding="utf-8",
         )
         shard_dir = tmp_path / "analysis" / cli.SHARD_DIR
@@ -136,4 +138,50 @@ class TestAnExtractThatReadsNothing:
         monkeypatch.setattr(cli, "extract_all", _extracted_nothing)
 
         with pytest.raises(SystemExit, match="extracted 0 features"):
-            cli.main([str(run_dir), str(tmp_path / "analysis"), "--workers", "1"])
+            cli.main([str(run_dir), str(tmp_path / "analysis"), "--workers", "1", "--profile", str(FIXTURE_PROFILE)])
+
+
+def test_the_task_is_the_one_the_run_recorded(tmp_path: Path, triage_profile: object) -> None:
+    """Review of step 8: the extractor takes the task from the run's identity record, not from any name."""
+    from tests.audio.workflows.triage.conftest import declared_identity_attributes
+
+    store = tmp_path / "store.jsonl"
+    attributes = {
+        "name": "recording",
+        "path": "rec-0001.wav",
+        **declared_identity_attributes("p01", "s1", "rainbow-passage"),
+    }
+    store.write_text(
+        json.dumps({"record": "entity", "id": "s", "prov_type": "stream", "extent": None, "attributes": attributes})
+        + "\n"
+    )
+    assert cli.recorded_task(store) == ("rainbow-passage", "rainbow-passage")
+    (tmp_path / "bare.jsonl").write_text("")
+    assert cli.recorded_task(tmp_path / "bare.jsonl") == ("unknown", "unknown")
+
+
+def test_the_family_is_the_task_admit_recorded_not_the_token(tmp_path: Path, triage_profile: object) -> None:
+    """Review B2: a token that is not the task's name scores the recording under the recorded task."""
+    from senselab.audio.data_structures import AudioHints
+    from senselab.audio.workflows.triage.task_catalogue import task_attributes
+    from tests.audio.workflows.triage.conftest import declared_identity_attributes
+
+    store = tmp_path / "store.jsonl"
+    attributes = {
+        "name": "recording",
+        "path": "rec-0001.wav",
+        **declared_identity_attributes("p01", "s1", "rainbow-passage", token="reading-7"),
+        **task_attributes(AudioHints(task="rainbow-passage")),
+    }
+    store.write_text(
+        json.dumps({"record": "entity", "id": "s", "prov_type": "stream", "extent": None, "attributes": attributes})
+        + "\n"
+    )
+    assert cli.recorded_task(store) == ("reading-7", "rainbow-passage")
+
+
+def test_without_a_profile_the_driver_exits_2_naming_it(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Review A2: the start check runs after the profile is activated, and a run with none is refused, exit 2."""
+    assert cli.main([str(tmp_path), str(tmp_path / "analysis")]) == 2
+    assert "dataset profile" in capsys.readouterr().err
+    assert not (tmp_path / "analysis").exists()

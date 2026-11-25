@@ -11,7 +11,7 @@ import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.redaction.api import RedactionExtent, apply_redactions
-from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes.common import find_measurement, path_attributes, write_stream
 from senselab.audio.workflows.triage.task_audio import (
     DEFINITION,
@@ -26,7 +26,7 @@ from senselab.audio.workflows.triage.task_audio import (
 )
 from senselab.audio.workflows.triage.vocabulary import Release
 from senselab.utils.prov_store import ProvStore
-from tests.audio.workflows.triage.conftest import b2ai_identity_attributes
+from tests.audio.workflows.triage.conftest import declared_identity_attributes
 
 RECORDING_HZ = 44_100
 PLAIN_HZ = 16_000
@@ -38,7 +38,7 @@ OUTSIDE = RedactionExtent(start=0.3, end=0.6, category="DATE_TIME")
 @pytest.fixture
 def config() -> TriageConfig:
     """The packaged triage configuration."""
-    return load_triage_config()
+    return load_triage_config(profile=ACTIVE)
 
 
 def _tone(rate: int, seconds: float, channels: int = 1) -> Audio:
@@ -59,7 +59,7 @@ def _stream(store: ProvStore, run_dir: Path, name: str, audio: Audio, *, source:
             "sampling_rate": audio.sampling_rate,
             "channels": int(audio.waveform.shape[0]),
             "write_gain": report.gain,
-            **(b2ai_identity_attributes("sub-a_ses-b_task-rainbow-passage") if name == "recording" else {}),
+            **(declared_identity_attributes("p01", "s1", "rainbow-passage") if name == "recording" else {}),
         },
     )
     if source is not None:

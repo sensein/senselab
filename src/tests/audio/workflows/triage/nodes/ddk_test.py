@@ -15,6 +15,7 @@ import pytest
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.tasks.features_extraction.ppg import PHONEME_LABELS
 from senselab.audio.workflows.triage.config import (
+    ACTIVE,
     DATA_MAP_PATHS,
     TriageConfig,
     UnknownConfigKey,
@@ -22,10 +23,8 @@ from senselab.audio.workflows.triage.config import (
 )
 from senselab.audio.workflows.triage.ddk_task import DDK_READING
 from senselab.audio.workflows.triage.nodes.branches import (
-    BUTTERCUP,
     DEVIATION_TYPES,
     PARAM_KEYS,
-    PATAKA,
     SPEECH_EXPECTATIONS,
     UNDETERMINED,
     UNMEASURED_POINTS,
@@ -144,6 +143,10 @@ def _cv_raster(
     return _raster(sequence)
 
 
+PATAKA = ("p", "aa", "t", "aa", "k", "aa")
+BUTTERCUP = ("b", "ah", "t", "er", "k", "ah", "p")
+"""The phoneme sequences the fixture's ``diadochokinesis-pataka`` and ``-buttercup`` entries prescribe, in ARPAbet."""
+
 BUTTERCUP_NUCLEI = ("ah", "er", "ah")
 """/bʌ-tər-kʌp/: the nucleus of each of its three syllables, in the posteriorgram's ARPAbet."""
 
@@ -205,7 +208,7 @@ def ddk_config(tmp_path: Path) -> TriageConfig:
         "        train_min_s: 1.5\n"
         "        rate_prominence_min: 2.0\n"
     )
-    return load_triage_config(override)
+    return load_triage_config(override, profile=ACTIVE)
 
 
 def _train_envelope(duration_s: float, carrier: tuple[float, float], rate_hz: float, phase_s: float) -> np.ndarray:
@@ -253,8 +256,8 @@ def seed_ddk_store(tmp_path: Path) -> Callable[..., dict[str, str]]:
 
     Every argument defaults to writing nothing for that derivative, which is how a test sets up an
     absence. A seeded posteriorgram brings a background view whose level follows its phonemes unless
-    ``background`` is False. ``task`` is the task ADMIT records the hint naming (``record_task``), also written
-    into the stem as its ``task-`` entity, which no stage reads; None records none.
+    ``background`` is False. ``task`` is the task ADMIT records the hint naming (``record_task``); the stem names
+    no task. None records none.
     """
 
     def _seed(
@@ -285,8 +288,6 @@ def seed_ddk_store(tmp_path: Path) -> Callable[..., dict[str, str]]:
             store.was_attributed_to(entity_id, agent)
             return entity_id
 
-        if task is not None:
-            stem = f"sub-a_ses-1_task-{task}"
         for name in ("recording", "plain"):
             ids[name] = _write(
                 "stream",
@@ -834,7 +835,7 @@ class TestAnAbsentInstrumentIsNotANegativeReading:
         override = tmp_path / "cleared.yaml"
         override.write_text("branch:\n  phoneme_place_classes: null\n")
         seed_ddk_store(store, task="diadochokinesis-pa", posteriorgram=_cv_raster(["labial"] * 8, [0.25] * 7))
-        _run(store, load_triage_config(override), tmp_path, PA)
+        _run(store, load_triage_config(override, profile=ACTIVE), tmp_path, PA)
         reading = _reading(store)
         assert reading["decision"] is None
         assert reading["absent"] == ["branch.phoneme_place_classes"]
@@ -1186,7 +1187,7 @@ class TestTheClassMappingsAreCampaignOverridable:
         """A campaign may add a class without editing the installed package."""
         override = tmp_path / "campaign.yaml"
         override.write_text("branch:\n  phoneme_place_classes:\n    palatal: [ch, jh]\n")
-        classes = branch_params(load_triage_config(override)).point("phoneme_place_classes")
+        classes = branch_params(load_triage_config(override, profile=ACTIVE)).point("phoneme_place_classes")
         assert classes is not None
         assert classes["palatal"] == ("ch", "jh")
         assert classes["labial"] == ("p", "b")
@@ -1195,7 +1196,7 @@ class TestTheClassMappingsAreCampaignOverridable:
         """The same idiom, and the same reason."""
         override = tmp_path / "campaign.yaml"
         override.write_text("branch:\n  phoneme_vowel_classes:\n    nasalised: [ah]\n")
-        classes = branch_params(load_triage_config(override)).point("phoneme_vowel_classes")
+        classes = branch_params(load_triage_config(override, profile=ACTIVE)).point("phoneme_vowel_classes")
         assert classes is not None
         assert "nasalised" in classes
 
@@ -1206,7 +1207,7 @@ class TestTheClassMappingsAreCampaignOverridable:
             "branch:\n  label_sets:\n    cough: [Cough]\n  modulation_band_hz: [1.0, 10.0]\n  nope: 1\n"
         )
         with pytest.raises(ValueError):
-            load_triage_config(override)
+            load_triage_config(override, profile=ACTIVE)
 
 
 class TestThereIsNoSecondBranchForASyllableTask:

@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from senselab.utils.dependencies import hf_subprocess_env
+from senselab.utils.reproduce.host import WORKER_DEVICE_PROBE
 from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, venv_python
 
 VLLM_VENV = "pii-review-vllm"
@@ -129,7 +130,9 @@ def _server_log_path() -> str | None:
 # Load payload (stdin), sent once:
 #   {"model_id": str, "model_path": str, "revision": str, "vllm": str, "server_args": [str],
 #    "served_model_name": str, "start_lock": str, "startup_timeout_s": int, "server_log": str | None}
-# Load reply: {"ready": True, "revision": str, "load_s": float, "engine": {...}}
+# Load reply: {"ready": True, "revision": str, "load_s": float, "engine": {...}, "device": {...}}, "device" being
+# the worker process's own report (senselab.utils.reproduce.host.WORKER_DEVICE_PROBE, with cuda=False: no CUDA
+# beside the server), taken once the server is healthy.
 # Review request and reply: as the transformers worker's. A request the server cannot take (a prompt that
 # with its max_new_tokens exceeds max_model_len) is answered {"error": {...}, "recoverable": True} and the
 # worker carries on; any other error ends it, and the server with it.
@@ -145,6 +148,9 @@ SERVER = None
 def emit(payload):
     _replies.write(MARKER + json.dumps(payload) + "\n")
     _replies.flush()
+
+
+%s
 
 
 def stop_server():
@@ -301,7 +307,15 @@ def main():
     started = time.monotonic()
     args = json.loads(sys.stdin.readline())
     state = start(args)
-    emit({"ready": True, "revision": state[4], "load_s": round(time.monotonic() - started, 3), "engine": state[3]})
+    emit(
+        {
+            "ready": True,
+            "revision": state[4],
+            "load_s": round(time.monotonic() - started, 3),
+            "engine": state[3],
+            "device": senselab_worker_device(cuda=False),
+        }
+    )
     while True:
         line = sys.stdin.readline()
         if not line:
@@ -328,7 +342,7 @@ finally:
 
 
 def worker_script(marker: str) -> str:
-    """The vLLM worker's source, with the reply marker filled in.
+    """The vLLM worker's source, with the reply marker and the device probe filled in.
 
     Args:
         marker: The reply-line prefix the host reads.
@@ -336,7 +350,7 @@ def worker_script(marker: str) -> str:
     Returns:
         The script.
     """
-    return _VLLM_WORKER_SCRIPT % marker
+    return _VLLM_WORKER_SCRIPT % (marker, WORKER_DEVICE_PROBE)
 
 
 def vllm_executable(venv_dir: Path) -> str:
@@ -429,3 +443,4 @@ def start_vllm_worker(worker: Any, timeout_s: int) -> None:  # noqa: ANN401 — 
     worker.engine = {key: live[key] for key in ("name", "version", "server_args", "concurrency")}
     worker.engine_details = live
     worker.load_s = round(time.monotonic() - began, 3)
+    worker.runtime = review.reviewer_runtime(worker.engine, reply.get("device"))

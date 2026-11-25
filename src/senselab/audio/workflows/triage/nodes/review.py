@@ -52,7 +52,12 @@ from senselab.audio.workflows.triage.nodes.redact import (
 )
 from senselab.audio.workflows.triage.nodes.redact import STREAM_NAME as REDACTED_STREAM
 from senselab.audio.workflows.triage.residue import VOCAL, is_non_lexical
-from senselab.audio.workflows.triage.review_inputs import policy_fingerprint, redaction_lexicon, review_policy
+from senselab.audio.workflows.triage.review_inputs import (
+    legacy_policy_fingerprint,
+    policy_fingerprint,
+    redaction_lexicon,
+    review_policy,
+)
 from senselab.audio.workflows.triage.task_lexicon import TaskLexicon, task_lexicon
 from senselab.audio.workflows.triage.task_speech import item_set_family, lexical_voice_family, non_lexical_family
 from senselab.audio.workflows.triage.vocabulary import PII_SCAN, PII_SCAN_MISSING, REDACTION_LLM_ANNOTATION, SCANNED
@@ -168,6 +173,10 @@ class _Reading:
         other_speaker_quotes: The passages it attributed to the other speaker.
         task_content_quotes: The PII-annotated words it judged task content.
         engine: The engine that answered the last round, as the worker reported it; empty where none did.
+        runtime: The machine and software the last answering round ran on
+            (:func:`~senselab.text.tasks.pii_detection.redaction_review.reviewer_runtime`); empty where none answered,
+            and on a cached reading the machine that first produced it. Recorded on the ``llm_check`` activity, not on
+            the annotation (:func:`reading_runtime`).
         phrase_quotes_unplaced_n: How many of the last answering round's phrase quotes place on no run of the
             timed consensus words (:func:`~senselab.text.tasks.pii_detection.redaction_review.unplaced_phrase_quotes`).
         bypass_reason: One of :data:`BYPASS_REASONS` where the status is :data:`BYPASSED`, else None.
@@ -198,6 +207,7 @@ class _Reading:
     other_speaker_quotes: tuple[str, ...] = ()
     task_content_quotes: tuple[str, ...] = ()
     engine: dict[str, Any] = field(default_factory=dict)
+    runtime: dict[str, Any] = field(default_factory=dict)
     phrase_quotes_unplaced_n: int = 0
     bypass_reason: str | None = None
     absent_reason: str | None = None
@@ -796,12 +806,48 @@ def reading_from_cache(payload: Mapping[str, Any]) -> tuple[_Reading, list[dict[
     fields_["instructions_spoken"] = tuple(str(text) for text in fields_.get("instructions_spoken") or ())
     fields_["conditions"] = tuple(dict(entry) for entry in fields_.get("conditions") or ())
     fields_["engine"] = dict(fields_.get("engine") or {})
+    fields_["runtime"] = dict(fields_.get("runtime") or {})
     fields_.update(_task_reading(fields_))
     return _Reading(**fields_), [dict(review) for review in payload.get("reviews") or ()]
 
 
 POLICY_FINGERPRINT = "policy_fingerprint"
-"""The cached reading's record of the policy and word lists it was read under (:func:`policy_fingerprint`)."""
+"""The record of the policy and word lists a reading was read under (:func:`policy_fingerprint`), kept on the cached
+reading and on the annotation. The cache key leaves it out, so a dataset's readings keep their keys while its policy
+is unchanged; a reading recorded under another fingerprint is read again and replaces the cached one."""
+
+POLICY_REPLACED = "policy_fingerprints_replaced"
+"""The cached reading's record of the fingerprints of the readings it replaced (:func:`cache_reading`)."""
+
+
+def _this_policy(recorded: object) -> bool:
+    """Whether a recorded fingerprint is :func:`policy_fingerprint` or, over unchanged files, the legacy one.
+
+    The legacy one is :func:`~senselab.audio.workflows.triage.review_inputs.legacy_policy_fingerprint`, as senselab
+    took it before 2026-11-14. An empty record is neither.
+    """
+    return bool(recorded) and recorded in (policy_fingerprint(), legacy_policy_fingerprint())
+
+
+def migrated_fingerprint(recorded: object) -> str | None:
+    """The fingerprint to record from now on for a reading that recorded ``recorded``.
+
+    A reading recorded under the legacy fingerprint, over files unchanged since, is recorded under
+    :func:`policy_fingerprint`, so a later ``#`` comment edit in the word lists, which changes the legacy one, does not
+    read it again. Any other record is kept as it is.
+
+    Args:
+        recorded: The fingerprint the reading or annotation records, or None.
+
+    Returns:
+        :func:`policy_fingerprint` for a legacy record, else ``recorded`` (None where it is None).
+    """
+    if recorded is None:
+        return None
+    current = policy_fingerprint()
+    if recorded != current and recorded and recorded == legacy_policy_fingerprint():
+        return current
+    return str(recorded)
 
 
 def read_under_this_policy(payload: Mapping[str, Any]) -> bool:
@@ -810,40 +856,164 @@ def read_under_this_policy(payload: Mapping[str, Any]) -> bool:
     A reading cached before the fingerprint was recorded carries none; it was read under the policy senselab held in
     code until plan step 6, which B2AI's profile carries unchanged, so it stands.
 
+    It stands under any profile, not only one whose policy is that step-6 text: nothing records which policy an
+    unfingerprinted reading was read under, so a profile that later changes its policy text or word lists still
+    gets these readings back unchanged, and so does every annotation that holds one
+    (:func:`annotation_read_under_this_policy`). Only readings that record a fingerprint are read again on a change.
+    To re-read the older ones under a changed policy, run ``scripts/extend_llm_review.py --force`` over those
+    recordings with ``SENSELAB_RESULT_CACHE`` set to an empty directory (the result cache is
+    ``<SENSELAB_CACHE>/results`` when it is unset), so REVIEW finds no cached reading and reads each again; each new
+    reading records the fingerprint, and the new directory then holds them.
+
     Args:
         payload: The cached result.
 
     Returns:
-        False only where the reading records another fingerprint.
+        False only where the reading records another fingerprint; one taken before 2026-11-14 over the same files
+        is the same (:func:`_this_policy`).
     """
     recorded = payload.get(POLICY_FINGERPRINT)
-    return recorded is None or recorded == policy_fingerprint()
+    return recorded is None or _this_policy(recorded)
 
 
-def cache_reading(key: str, reading: _Reading, reviews: Sequence[Mapping[str, Any]]) -> bool:
+def annotation_read_under_this_policy(attributes: Mapping[str, Any]) -> bool:
+    """Whether a stored annotation's reading was read under the active profile's policy and word lists.
+
+    The annotation's own record decides. An annotation written before it kept one is judged by the cached reading
+    its key names, which is the reading it holds unless a reading under another policy has since replaced it: then
+    which policy the annotation was read under is unknown, and it does not stand. With no cached reading to ask,
+    nothing says otherwise and it stands, as :func:`read_under_this_policy` lets an unrecorded reading stand: as read
+    under the step-6 policy, whatever the active profile's policy now is.
+
+    Args:
+        attributes: The ``redaction_llm_annotation`` entity's attributes.
+
+    Returns:
+        False where the annotation, or the cached reading standing in for it, records another fingerprint.
+    """
+    recorded = attributes.get(POLICY_FINGERPRINT)
+    if recorded is not None:
+        return _this_policy(recorded)
+    key = (attributes.get("result_cache") or {}).get("key")
+    cached = result_lookup(str(key)) if key else None
+    if cached is None:
+        return True
+    return not cached["result"].get(POLICY_REPLACED) and read_under_this_policy(cached["result"])
+
+
+def cache_reading(
+    key: str,
+    reading: _Reading,
+    reviews: Sequence[Mapping[str, Any]],
+    *,
+    fingerprint: str | None,
+    replacing: Mapping[str, Any] | None = None,
+) -> bool:
     """Keep one answered reading under its key; an absent one is never kept.
 
     Args:
         key: From :func:`review_cache_key`.
         reading: The loop's summary.
         reviews: Its per-round payloads.
+        fingerprint: The policy fingerprint the reading was read under, or None where nothing recorded it (a
+            reading seeded from a store that predates the record); none is then stamped.
+        replacing: The held cached result this reading replaces, read under another policy; None writes only
+            where the key is free.
 
     Returns:
         True when this call wrote the entry.
     """
     if reading.status not in READ_STATES or reading.revision is None:
         return False
+    result: dict[str, Any] = {"reading": asdict(reading), "reviews": [dict(review) for review in reviews]}
+    if fingerprint is not None:
+        result[POLICY_FINGERPRINT] = fingerprint
+    if replacing is not None:
+        result[POLICY_REPLACED] = [
+            *(replacing.get(POLICY_REPLACED) or ()),
+            replacing.get(POLICY_FINGERPRINT),
+        ]
     return result_store(
         key,
-        {
-            "reading": asdict(reading),
-            "reviews": [dict(review) for review in reviews],
-            POLICY_FINGERPRINT: policy_fingerprint(),
-        },
+        result,
         process=REVIEW_PROCESS,
         model_id=reading.model_id,
         commit_sha=reading.revision,
+        replace=replacing is not None,
     )
+
+
+def restamp_reading(key: str, result: Mapping[str, Any], *, fingerprint: str) -> bool:
+    """Keep a cached reading under its key with ``fingerprint`` as its record, its reading and rounds unchanged.
+
+    For a reading recorded under the legacy fingerprint (:func:`migrated_fingerprint`): the entry records the
+    current one from then on. It is the same reading, so nothing records it as replaced (:data:`POLICY_REPLACED`).
+    The rewrite replaces the entry's own ``provenance`` block (computed_at, host, senselab version and run id become
+    the rewrite's; model and commit stay the reading's). The reading itself is kept whole, its ``engine`` and its
+    ``runtime`` (the machine and software that read it) included, and that record also stays on the activity that
+    generated the reading in a store (:data:`RUNTIME`, :func:`reading_runtime`).
+
+    Args:
+        key: The entry's key.
+        result: The held cached result.
+        fingerprint: The fingerprint to record.
+
+    Returns:
+        True when this call rewrote the entry.
+    """
+    reading = result.get("reading") or {}
+    return result_store(
+        key,
+        {**result, POLICY_FINGERPRINT: fingerprint},
+        process=REVIEW_PROCESS,
+        model_id=reading.get("model_id"),
+        commit_sha=reading.get("revision"),
+        replace=True,
+    )
+
+
+RUNTIME = "runtime"
+"""The ``llm_check`` activity parameter naming the machine and software its reading was produced on
+(:func:`~senselab.text.tasks.pii_detection.redaction_review.reviewer_runtime`); absent where no round answered. It is
+on the activity and not on the ``redaction_llm_annotation`` so that the annotation's content-addressed id is the
+reading's alone: the same reading taken on another machine is the same annotation, generated by a second activity."""
+
+
+def reading_runtime(store: ProvStore, annotation_id: str) -> dict[str, Any]:
+    """The machine and software a ``redaction_llm_annotation``'s reading was produced on.
+
+    Read off the activity that generated it; a reading carried forward by a replay is followed back to the annotation
+    it was derived from. An annotation written while the record sat on the annotation itself is read there.
+
+    Args:
+        store: The provenance store.
+        annotation_id: The annotation's id.
+
+    Returns:
+        :func:`~senselab.text.tasks.pii_detection.redaction_review.reviewer_runtime`'s record; empty where none is
+        recorded.
+    """
+    seen: set[str] = set()
+    current: str | None = annotation_id
+    while current is not None and current not in seen:
+        seen.add(current)
+        activity_id = store.generated_by(current)
+        if activity_id is not None:
+            try:
+                recorded = store.get_activity(activity_id).parameters.get(RUNTIME)
+            except KeyError:
+                recorded = None
+            if recorded:
+                return dict(recorded)
+        try:
+            legacy = store.get_entity(current).attributes.get(RUNTIME)
+        except KeyError:
+            legacy = None
+        if legacy:
+            return dict(legacy)
+        origins = store.derived_from(current)
+        current = origins[0] if origins else None
+    return {}
 
 
 BACKFILL_STORED = "stored"
@@ -856,7 +1026,9 @@ def backfill_from_store(store: ProvStore, config: TriageConfig) -> tuple[str, st
 
     The key is rebuilt from what the store says the loop read -- its transcript texts, the annotation's
     task context, the model and commit the reading loaded -- under the configuration's generation
-    settings, which must be the ones the run used.
+    settings, which must be the ones the run used. The seeded reading carries the policy fingerprint the
+    annotation records, and none where it records none: the policy active now need not be the one it was
+    read under.
 
     Args:
         store: A finished run's store.
@@ -900,6 +1072,7 @@ def backfill_from_store(store: ProvStore, config: TriageConfig) -> tuple[str, st
         instructions_spoken=tuple(str(text) for text in held.get("instructions_spoken") or ()),
         conditions=tuple(dict(entry) for entry in held.get("conditions") or ()),
         engine=engine,
+        runtime=reading_runtime(store, annotation.id),
         phrase_quotes_unplaced_n=int(held.get("phrase_quotes_unplaced_n") or 0),
         **_task_reading(held),
     )
@@ -916,7 +1089,9 @@ def backfill_from_store(store: ProvStore, config: TriageConfig) -> tuple[str, st
         reading.revision or "",
         placeable_tokens(store),
     )
-    return (BACKFILL_STORED, key) if cache_reading(key, reading, reviews) else (BACKFILL_HELD, key)
+    fingerprint = held.get(POLICY_FINGERPRINT)
+    stored = cache_reading(key, reading, reviews, fingerprint=None if fingerprint is None else str(fingerprint))
+    return (BACKFILL_STORED, key) if stored else (BACKFILL_HELD, key)
 
 
 def _resolved(settings: Mapping[str, Any]) -> str | None:
@@ -986,6 +1161,7 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
     started = _stamp()
     reviews: list[dict[str, Any]] = []
     cache: dict[str, Any] = {"key": None, "hit": False}
+    read_under: str | None = None
     if not settings["enabled"]:
         reading = _Reading(DISABLED, 0, (), "", "", "", (), "", None, None)
     elif not original.strip():
@@ -1001,11 +1177,17 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
         revision = _resolved(settings)
         key = None if revision is None else review_cache_key(original, redacted, context, settings, revision, placeable)
         held = None if key is None else result_lookup(key)
+        stale = None
         if held is not None and not read_under_this_policy(held["result"]):
-            held = None
+            stale, held = held["result"], None
         if held is not None:
             reading, reviews = reading_from_cache(held["result"])
             cache = {"key": key, "hit": True}
+            recorded = held["result"].get(POLICY_FINGERPRINT)
+            read_under = migrated_fingerprint(recorded)
+            if read_under != recorded:
+                cache["legacy_fingerprint"] = recorded
+                cache["restamped"] = restamp_reading(str(key), held["result"], fingerprint=str(read_under))
         else:
             reading, reviews = _read(original, redacted, settings, context, placeable)
             answered = [review for review in reviews if review.get("available")]
@@ -1019,9 +1201,15 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
                     instructions_spoken=spoken,
                     conditions=conditions,
                     engine=dict(answered[-1].get("engine") or {}),
+                    runtime=dict(answered[-1].get("runtime") or {}),
                     **_task_reading(answered[-1]),
                 )
-            stored = key is not None and reading.revision == revision and cache_reading(key, reading, reviews)
+            read_under = policy_fingerprint() if reading.status in READ_STATES else None
+            stored = (
+                key is not None
+                and reading.revision == revision
+                and cache_reading(key, reading, reviews, fingerprint=read_under, replacing=stale)
+            )
             cache = {"key": key, "hit": False, "stored": stored}
 
     software = software_agent(store)
@@ -1037,6 +1225,7 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
             "context_keys": sorted(context),
             "prompt_version": PROMPT_VERSION,
             "engine": review_engine(settings),
+            **({RUNTIME: dict(reading.runtime)} if reading.runtime else {}),
         },
         started=started,
         ended=_stamp(),
@@ -1118,6 +1307,7 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
             "task_context": dict(context),
             "review_inputs": dict(inputs),
             "result_cache": cache,
+            POLICY_FINGERPRINT: read_under,
         },
     )
     store.was_generated_by(annotation_id, activity)

@@ -21,7 +21,7 @@ from senselab.audio.data_structures import (
 )
 from senselab.audio.tasks.features_extraction.ppg import PHONEME_LABELS
 from senselab.audio.workflows.audio_analysis.level import integrated_lufs
-from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.enrollment import Enrollment
 from senselab.audio.workflows.triage.nodes import speech as speech_module
 from senselab.audio.workflows.triage.nodes.branches import (
@@ -121,7 +121,7 @@ def _override(tmp_path: Path, yaml_text: str = "") -> TriageConfig:
     _deep_merge(values, yaml.safe_load(yaml_text) or {})
     path = tmp_path / f"override-{abs(hash(yaml_text)) % 10**10}.yaml"
     path.write_text(yaml.safe_dump(values))
-    return load_triage_config(path)
+    return load_triage_config(path, profile=ACTIVE)
 
 
 def _speech_config(tmp_path: Path) -> TriageConfig:
@@ -954,7 +954,7 @@ class TestTheUnmeasuredKeyAndTheHintThatContradictsTheFile:
         """
         _seed_speech_store(store, tmp_path, words=["hello", "world"])
 
-        result = speech(store, "plain", load_triage_config(), run_dir=tmp_path, enrollment=None)
+        result = speech(store, "plain", load_triage_config(profile=ACTIVE), run_dir=tmp_path, enrollment=None)
 
         assert result.report.conformance == UNDETERMINED
 
@@ -1306,7 +1306,7 @@ class TestAFreeResponseIsReadOffTheWords:
         Returns:
             The hints.
         """
-        return AudioHints(metadata={"task_token": family})
+        return AudioHints(task=family, metadata={"task_token": family})
 
     def test_a_spoken_response_conforms_when_no_asr_span_survived_deduplication(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1430,7 +1430,9 @@ class TestAFreeResponseIsReadOffTheWords:
         Returns:
             The hints.
         """
-        return AudioHints(metadata={"task_token": family}, expected_speech=[ExpectedSpeech(text=self.SOURCE_STORY)])
+        return AudioHints(
+            task=family, metadata={"task_token": family}, expected_speech=[ExpectedSpeech(text=self.SOURCE_STORY)]
+        )
 
     def _retelling(self) -> list[str]:
         """Forty-nine words of a retelling that reuses none of the source's own words.
@@ -1532,7 +1534,7 @@ class TestTheSpeakersInsideTheTaskExtent:
         Returns:
             The hints.
         """
-        return AudioHints(metadata={"task_token": family})
+        return AudioHints(task=family, metadata={"task_token": family})
 
     def _readings(self, store: ProvStore) -> dict[str, Entity]:
         """The two within-extent readings, by name.
@@ -2367,7 +2369,7 @@ class TestTheMultiSpeakerInstrument:
         Returns:
             The hints.
         """
-        return AudioHints(metadata={"task_token": "picture-description"})
+        return AudioHints(task="picture-description", metadata={"task_token": "picture-description"})
 
 
 class TestPiiOnTheConsensus:
@@ -2861,6 +2863,69 @@ class TestWhatAPiiFailureMayCarry:
         scan = find_measurement(store, "pii_scan")
         assert scan is not None and scan.attributes["missing"] == []
 
+    def test_the_scan_loads_the_configured_detector_commit_and_records_it(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``pii.gliner`` reaches the detector, and the commit it loaded is on the record (Satra review, decision 6).
+
+        The record carries what the backend reports it loaded, not the setting: a scan whose GLiNER did not load
+        records None.
+        """
+        pinned = "a" * 40
+        config = _override(tmp_path, f"pii:\n  gliner:\n    revision: {pinned}\n")
+        asked: list[dict[str, Any]] = []
+
+        def _fake(inputs: Any, **kw: Any) -> list[PiiScan]:  # noqa: ANN401
+            asked.append(kw)
+            texts = [inputs] if isinstance(inputs, str) else list(inputs)
+            return [
+                PiiScan(spans=[], detectors_used=default_detectors(), failures={}, gliner_revision=pinned)
+                for _ in texts
+            ]
+
+        monkeypatch.setattr(speech_module, "scan_for_pii", _fake)
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        speech(store, "plain", config, run_dir=tmp_path, enrollment=None)
+        assert [(kw["gliner_model"], kw["gliner_revision"]) for kw in asked] == [("nvidia/gliner-pii", pinned)]
+        scan = find_measurement(store, "pii_scan")
+        assert scan is not None
+        assert scan.attributes["gliner_model"] == "nvidia/gliner-pii"
+        assert scan.attributes["gliner_revision"] == pinned
+
+    def test_the_record_is_the_commit_the_backend_reports_not_the_setting(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A backend reporting another commit than the configured one: the record names what it reported."""
+        configured, reported = "a" * 40, "b" * 40
+        config = _override(tmp_path, f"pii:\n  gliner:\n    revision: {configured}\n")
+
+        def _fake(inputs: Any, **kw: Any) -> list[PiiScan]:  # noqa: ANN401
+            assert kw["gliner_revision"] == configured
+            texts = [inputs] if isinstance(inputs, str) else list(inputs)
+            return [
+                PiiScan(spans=[], detectors_used=default_detectors(), failures={}, gliner_revision=reported)
+                for _ in texts
+            ]
+
+        monkeypatch.setattr(speech_module, "scan_for_pii", _fake)
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        speech(store, "plain", config, run_dir=tmp_path, enrollment=None)
+        scan = find_measurement(store, "pii_scan")
+        assert scan is not None and scan.attributes["gliner_revision"] == reported
+
+    def test_a_scan_whose_detector_did_not_load_records_no_commit(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No GLiNER, no commit: the record never names a commit that did not run."""
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        _stub_pii(monkeypatch, findings=[], detectors_used=["presidio", "rules"])
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        scan = find_measurement(store, "pii_scan")
+        assert scan is not None and scan.attributes["gliner_revision"] is None
+
 
 class TestWhatTheBranchRecordsAboutItsOwnReads:
     """F8e, F8f, F8k: the used edges, the view, and the PREPROCESS span a speech span refines."""
@@ -2960,6 +3025,7 @@ class TestTheNodeRunsOneModeAndProposesWhatItFinds:
             The hints.
         """
         return AudioHints(
+            task=family,
             metadata={"task_token": family},
             expected_speech=[ExpectedSpeech(text=self.HARVARD)] if read else [],
         )
@@ -3149,7 +3215,7 @@ class TestADeclaredSyllableTaskIsEvaluatedBySpeech:
         Returns:
             The hints.
         """
-        return AudioHints(metadata={"task_token": family})
+        return AudioHints(task=family, metadata={"task_token": family})
 
     def test_a_declared_diadochokinesis_pa_gets_a_syllable_train_conformance(
         self, store: ProvStore, syllable_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -3242,7 +3308,7 @@ class TestADeclaredSyllableTaskIsEvaluatedBySpeech:
             store,
             "plain",
             syllable_config,
-            AudioHints(metadata={"task_token": "harvard-sentences-list"}),
+            AudioHints(task="harvard-sentences-list", metadata={"task_token": "harvard-sentences-list"}),
             run_dir=tmp_path,
         )
         detail = _report_entity(store, "SPEECH").attributes
@@ -3279,7 +3345,7 @@ class TestADeclaredSyllableTaskIsEvaluatedBySpeech:
         assert marks, "redact.py selects on exactly this verb and label pair"
 
 
-_NEAR = near_match(load_triage_config())
+_NEAR = near_match(load_triage_config(profile=ACTIVE))
 
 
 class TestANearSpellingIsStillTheStimulusWord:
@@ -3419,6 +3485,7 @@ class TestPiiRunsOnlyOnWordsTheTaskDidNotAskFor:
         scanned = _stub_pii(monkeypatch, findings=[("PERSON", "day")])
         hint = AudioHints(
             expected_speech=[ExpectedSpeech(text="tell me about your day")],
+            task="free-speech-v2",
             metadata={"task_token": "free-speech-v2"},
         )
         speech(store, "plain", speech_config, hint, run_dir=tmp_path, enrollment=None)
@@ -3456,9 +3523,9 @@ class TestEveryDiarizedStreamHasAReader:
 
     def test_the_shipped_config_diarizes_only_what_is_read(self) -> None:
         """Each configured stream costs a pyannote pass per recording; an unread one is pure cost."""
-        from senselab.audio.workflows.triage.config import load_triage_config
+        from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 
-        streams = tuple(load_triage_config(None).require("diarization.streams"))
+        streams = tuple(load_triage_config(None, profile=ACTIVE).require("diarization.streams"))
         assert len(streams) == 1, f"{len(streams)} streams configured; SPEECH reads only the first: {streams}"
         assert streams == ("enhanced",)
 
@@ -3497,7 +3564,7 @@ class TestTheCarrierIsPartOfWhatTheTaskAskedFor:
         _seed_speech_store(store, tmp_path, words=["pa", "pa", "pa"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         scanned = _stub_pii(monkeypatch, findings=[("PERSON", "pa")])
-        hint = AudioHints(metadata={"task_token": "diadochokinesis-pa"})
+        hint = AudioHints(task="diadochokinesis-pa", metadata={"task_token": "diadochokinesis-pa"})
         speech(store, "plain", speech_config, hint, run_dir=tmp_path, enrollment=None)
         assert scanned == [], "a carrier train must not reach the detector"
         assert live_entities(store, "pii") == []
@@ -3509,7 +3576,7 @@ class TestTheCarrierIsPartOfWhatTheTaskAskedFor:
         _seed_speech_store(store, tmp_path, words=["pa", "pa", "alice"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         scanned = _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
-        hint = AudioHints(metadata={"task_token": "diadochokinesis-pa"})
+        hint = AudioHints(task="diadochokinesis-pa", metadata={"task_token": "diadochokinesis-pa"})
         speech(store, "plain", speech_config, hint, run_dir=tmp_path, enrollment=None)
         assert scanned, "one word outside the carrier must bring the scan"
         assert len(live_entities(store, "pii")) == 1

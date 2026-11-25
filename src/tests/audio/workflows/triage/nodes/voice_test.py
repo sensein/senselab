@@ -17,7 +17,7 @@ import numpy as np
 import pytest
 import soundfile
 
-from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes import voice as voice_module
 from senselab.audio.workflows.triage.nodes.branches import (
     PARAM_SECTION,
@@ -64,7 +64,7 @@ COUGH_TASK = "voluntary-cough"
 LOUDNESS_TASK = "loudness"
 CAPEV_TASK = "cape-v-sentences"
 HARVARD_TASK = "harvard-sentences-list"
-"""The B2AI tasks the fixtures declare, by their names in the profile's task list."""
+"""The tasks the fixtures declare, by their names in the profile's task list."""
 
 SETTINGS = {
     "voiced_strength_min": 0.5,
@@ -119,7 +119,7 @@ def config(**overrides: Any) -> TriageConfig:  # noqa: ANN401
     Returns:
         The configuration.
     """
-    packaged = load_triage_config()
+    packaged = load_triage_config(profile=ACTIVE)
     merged = dict(packaged.values)
     settings = {**SETTINGS, **{k: v for k, v in overrides.items() if k not in GATES}}
     gates = {**GATES, **{k: v for k, v in overrides.items() if k in GATES}}
@@ -273,8 +273,8 @@ def seed(
 
     Args:
         tmp_path: The run directory.
-        task: The task ADMIT records the hint naming (``record_task``), also written into the ``recording``
-            stream's BIDS stem, which no stage reads; None records no task, at a path that is not a BIDS stem.
+        task: The task ADMIT records the hint naming (``record_task``); None records no task. The ``recording``
+            stream's path is a plain name either way.
         recording: Whether to write the ``recording`` stream at all.
         duration_s: The recording's duration.
         amplitude: The extents PREPROCESS's ``amplitude`` spans cover.
@@ -301,7 +301,7 @@ def seed(
             attributes={"name": "plain", "path": "streams/plain.flac", "sampling_rate": RATE},
         )
     if recording:
-        path = f"sub-abc_ses-1_task-{task}.wav" if task is not None else "not-a-bids-stem.wav"
+        path = "rec-0001.wav"
         ids["recording"] = store.entity(
             prov_type="stream",
             extent=(0.0, duration_s),

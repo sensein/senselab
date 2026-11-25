@@ -13,10 +13,13 @@ import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.workflows.triage import task_squim
-from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, load_triage_config
 from senselab.audio.workflows.triage.nodes.common import find_measurement, path_attributes, write_stream
 from senselab.utils.prov_store import ProvStore
-from tests.audio.workflows.triage.conftest import b2ai_identity_attributes
+from tests.audio.workflows.triage.conftest import declared_identity_attributes
+
+pytestmark = pytest.mark.usefixtures("triage_profile")
+"""The drivers' internals these tests call read the fixture profile's data; a driver run is given ``--profile``."""
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI = _REPO_ROOT / "scripts" / "extend_task_squim.py"
@@ -27,7 +30,8 @@ sys.modules["extend_task_squim_under_test"] = cli
 _spec.loader.exec_module(cli)
 
 RATE = 16_000
-STEM = "sub-a_ses-b_task-caterpillar-passage"
+STEM = "rec-0001"
+TASK = "caterpillar-passage"
 
 
 def _fake(audios: Sequence[Audio]) -> list[dict[str, float]]:
@@ -35,7 +39,7 @@ def _fake(audios: Sequence[Audio]) -> list[dict[str, float]]:
 
 
 def _run(tree: Path) -> Path:
-    run_root = tree / "sub-a" / "ses-b" / f"{STEM}_20000101-000000"
+    run_root = tree / "p01" / "s1" / f"{STEM}_20000101-000000"
     run_dir = run_root / "run"
     (run_dir / "streams").mkdir(parents=True)
     (run_dir / "derivatives").mkdir()
@@ -51,7 +55,7 @@ def _run(tree: Path) -> Path:
             attributes={
                 "name": name,
                 **path_attributes(relative, run_dir),
-                **(b2ai_identity_attributes(run_root.name) if name == "recording" else {}),
+                **(declared_identity_attributes("p01", "s1", TASK) if name == "recording" else {}),
             },
         )
     store.entity(prov_type="span", extent=(1.0, 11.0), attributes={"role": "task_extent", "branch": "SPEECH"})
@@ -68,11 +72,11 @@ def test_in_place_the_store_gains_the_measurement(tmp_path: Path) -> None:
     """The run's own store holds a task_squim measurement afterwards, and a second pass writes nothing."""
     run_root = _run(tmp_path / "out")
     row = {"stem": STEM, "enhanced": str(run_root / "run" / "streams" / "enhanced.flac")}
-    [first] = cli.process([row], load_triage_config())
+    [first] = cli.process([row], load_triage_config(profile=ACTIVE))
     assert first["status"] == "ok" and first["windows_n"] == 1
     store = ProvStore.read_jsonl(run_root / "run" / "store.jsonl", run_id=run_root.name)
     assert find_measurement(store, task_squim.MEASUREMENT) is not None
-    [second] = cli.process([row], load_triage_config())
+    [second] = cli.process([row], load_triage_config(profile=ACTIVE))
     assert second["status"] == "present"
 
 
@@ -81,10 +85,10 @@ def test_out_root_leaves_the_finished_store_untouched(tmp_path: Path) -> None:
     run_root = _run(tmp_path / "out")
     before = (run_root / "run" / "store.jsonl").read_bytes()
     row = {"stem": STEM, "enhanced": str(run_root / "run" / "streams" / "enhanced.flac")}
-    [record] = cli.process([row], load_triage_config(), out_root=tmp_path / "mirror")
+    [record] = cli.process([row], load_triage_config(profile=ACTIVE), out_root=tmp_path / "mirror")
     assert record["status"] == "ok"
     assert (run_root / "run" / "store.jsonl").read_bytes() == before
-    mirrored = tmp_path / "mirror" / "sub-a" / "ses-b" / run_root.name
+    mirrored = tmp_path / "mirror" / "p01" / "s1" / run_root.name
     assert (mirrored / "run" / "streams").is_symlink() and (mirrored / "summary").is_symlink()
     assert not (mirrored / "run" / "store.jsonl").is_symlink()
     store = ProvStore.read_jsonl(mirrored / "run" / "store.jsonl", run_id=run_root.name)

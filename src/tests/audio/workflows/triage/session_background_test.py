@@ -61,7 +61,7 @@ def _task(room_db: float, seed: int, speech_db: float = -25.0) -> tuple[np.ndarr
 def _reading(room_db: float, seed: int, family: str, *, words: int = 6, **kw: Any) -> dict[str, Any]:  # noqa: ANN401
     plain, enhanced, residual = _task(room_db, seed, **kw)
     return {
-        "stem": f"sub-a_ses-1_task-{family}-{seed}",
+        "stem": f"rec-{seed:04d}",
         **speech_residual_of(
             (plain, RATE),
             (enhanced, RATE),
@@ -97,7 +97,7 @@ def test_a_session_of_speech_tasks_takes_their_median_residual() -> None:
     session = session_background_of(readings)
     assert session["source"] == SPEECH_RESIDUAL_SOURCE and session["fallback"] is None
     assert session["candidates_n"] == 3 and session["members_n"] == 3
-    assert "sub-a_ses-1_task-breath-sounds-4" not in session["members"]
+    assert "rec-0004" not in session["members"]
     assert session["level_db"] == pytest.approx(-60.4, abs=1.0)
     assert session["spread_db"]["members_iqr"] == pytest.approx(6.0, abs=1.5)
     assert session["quality"]["foreground_minus_residual_db"]["whole"] == pytest.approx(35.0, abs=3.0)
@@ -183,19 +183,19 @@ def _store(tmp_path: Path, stem: str, room_db: float, seed: int, *, task: str) -
 
 def test_session_writes_the_reading_and_background_reads_the_reference(tmp_path: Path) -> None:
     """SESSION writes each recording's reading and the session background; BACKGROUND records which floor it used."""
-    speech = _store(tmp_path, "sub-a_ses-1_task-rainbow-passage", -60.0, 1, task="rainbow-passage")
-    breath = _store(tmp_path, "sub-a_ses-1_task-breath-sounds", -60.0, 2, task="breath-sounds")
+    speech = _store(tmp_path, "rec-0001", -60.0, 1, task="rainbow-passage")
+    breath = _store(tmp_path, "rec-0002", -60.0, 2, task="breath-sounds")
     readings = [write_speech_residual(store, tmp_path) for store in (speech, breath)]
     assert readings[0]["family"] == "rainbow-passage" and readings[1]["kind"] == "airway"
     for store in (speech, breath):
         write_own_floor(store, tmp_path)
     for store in (speech, breath):
-        write_session_floor(store, (), session="sub-a_ses-1", background_members=readings)
+        write_session_floor(store, (), session="p01/s1", background_members=readings)
         write_background(store, tmp_path, clips=())
     found = find_measurement(breath, SESSION_FLOOR)
     assert found is not None
     background = found.attributes["session_background"]
-    assert background["members"] == ["sub-a_ses-1_task-rainbow-passage"]
+    assert background["members"] == ["rec-0001"]
     model = find_measurement(breath, "background_model")
     assert model is not None and model.attributes["floor_reference"]["used"] == "session_floor"
     assert model.attributes["floor_reference"]["decides"] is False

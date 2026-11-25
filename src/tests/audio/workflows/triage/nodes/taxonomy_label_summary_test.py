@@ -10,7 +10,7 @@ from typing import Any, Callable
 
 import pytest
 
-from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.config import ACTIVE, TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes.common import find_measurement
 from senselab.audio.workflows.triage.nodes.taxonomy import taxonomy
 from senselab.utils.prov_store import ProvStore
@@ -28,7 +28,7 @@ def _floors(tmp_path: Path) -> TriageConfig:
     """
     path = tmp_path / "summary-floors.yaml"
     path.write_text("taxonomy:\n  speech_labels: [Speech]\n")
-    return load_triage_config(path)
+    return load_triage_config(path, profile=ACTIVE)
 
 
 def _sidecar(tmp_path: Path, classifier: str, windows: list[dict[str, Any]]) -> None:

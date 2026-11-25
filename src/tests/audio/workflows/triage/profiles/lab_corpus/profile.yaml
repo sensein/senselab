@@ -1,0 +1,24 @@
+# The lab corpus: a made-up dataset's profile for senselab's tests (plan step 8c), written from senselab's
+# template and filled in; its tasks are invented, one per kind of task triage reads, and fitted.yaml holds
+# made-up corpus statistics.
+name: lab-corpus
+version: '0'
+pilot: false
+extends: senselab:adult_clinical_speech
+provenance:
+  made_up: a made-up dataset for the tests, written from senselab's template (plan
+    step 8c)
+config: config.yaml
+files:
+  airway_event_tokens.yaml: airway_event_tokens.yaml
+  cohort_stage.yaml: cohort_stage.yaml
+  decision_reasons.yaml: decision_reasons.yaml
+  discard_replaced_task.yaml: discard_replaced_task.yaml
+  quality_join.yaml: quality_join.yaml
+  session_background.yaml: session_background.yaml
+  task_extent.yaml: task_extent.yaml
+  task_minimum_duration.yaml: task_minimum_duration.yaml
+  task_speech.yaml: task_speech.yaml
+  tasks.yaml: tasks.yaml
+  time_release.yaml: time_release.yaml
+  task_lexicon: task_lexicon

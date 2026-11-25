@@ -14,7 +14,13 @@ import pytest
 import senselab.audio.tasks
 from senselab.audio.tasks.phonation import derive_f0_range
 from senselab.audio.workflows.triage import config as config_module
-from senselab.audio.workflows.triage.config import DATA_MAP_PATHS, TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.config import (
+    ACTIVE,
+    DATA_MAP_PATHS,
+    ProfileNotNamed,
+    TriageConfig,
+    load_triage_config,
+)
 from senselab.audio.workflows.triage.dataset_profile import deactivate_profile
 from senselab.audio.workflows.triage.nodes.common import (
     CPPS_SCALAR_KEYS,
@@ -56,7 +62,7 @@ class TestMeasuredValues:
 
     def test_the_measured_values_are_present(self) -> None:
         """Each measured value reads back exactly as the file states it."""
-        cfg = load_triage_config()
+        cfg = load_triage_config(profile=ACTIVE)
         assert cfg.require("envelope.lowpass_hz") == 40.0
         assert cfg.require("spans.transition_window_ms") == 30
         assert cfg.require("spans.k_db") == 6.0
@@ -71,7 +77,7 @@ class TestMeasuredValues:
         unpadded extents and still read as configured, and a fill that silently became bleep would
         write a tone where the design says zeros.
         """
-        cfg = load_triage_config()
+        cfg = load_triage_config(profile=ACTIVE)
         assert cfg.require("redaction.padding_ms") == 250
         assert cfg.require("redaction.fill") == "silence"
 
@@ -82,12 +88,24 @@ class TestMeasuredValues:
         runs but the config does not require would stop being missed when it silently stops running,
         and one the config requires but the scan never runs would make every scan incomplete.
         """
-        cfg = load_triage_config()
+        cfg = load_triage_config(profile=ACTIVE)
         assert cfg.require("pii.required_detectors") == default_detectors()
+
+    def test_the_pii_detector_is_pinned_to_a_commit(self) -> None:
+        """``pii.gliner`` names the checkpoint and the commit every scan loads (Satra review 2026-11-14, decision 6).
+
+        The default is the commit the 2026-11-10 canary resolved ``main`` to; a profile or a run may name another
+        commit, and the configuration hash then differs.
+        """
+        cfg = load_triage_config(profile=ACTIVE)
+        assert cfg.require("pii.gliner") == {
+            "model": "nvidia/gliner-pii",
+            "revision": "bd23e8ef4425fd04e34c5204ab49ffaa706eae79",
+        }
 
     def test_identity_travels_with_the_config(self) -> None:
         """The config carries its name, version and hash."""
-        cfg = load_triage_config()
+        cfg = load_triage_config(profile=ACTIVE)
         assert cfg.name == "senselab-triage/default"
         assert isinstance(cfg.version, int)
         assert len(cfg.config_hash) == 16
@@ -98,31 +116,31 @@ class TestUnsetValues:
 
     def test_reading_an_unset_value_raises_and_names_it(self) -> None:
         """Requiring a null value raises, naming the parameter."""
-        cfg = load_triage_config()
+        cfg = load_triage_config(profile=ACTIVE)
         with pytest.raises(ValueError, match="phonation.hnr_floor_interval_db"):
             cfg.require("phonation.hnr_floor_interval_db")
 
     def test_a_typo_is_an_unknown_key_not_an_unmeasured_value(self) -> None:
         """An absent key is a typo, and the error says so instead of citing open.md."""
-        cfg = load_triage_config()
+        cfg = load_triage_config(profile=ACTIVE)
         with pytest.raises(ValueError, match="unknown configuration key"):
             cfg.require("phonation.hnr_flor_interval_db")
 
     def test_a_null_key_is_unmeasured_not_unknown(self) -> None:
         """A present-null key still points at open.md, never at the typo message."""
-        cfg = load_triage_config()
+        cfg = load_triage_config(profile=ACTIVE)
         with pytest.raises(ValueError, match="benchmarks/open.md"):
             cfg.require("phonation.rms_floor_interval")
 
     def test_the_error_points_at_what_would_settle_it(self) -> None:
         """The error names the open-questions file."""
-        cfg = load_triage_config()
+        cfg = load_triage_config(profile=ACTIVE)
         with pytest.raises(ValueError, match="benchmarks/open.md"):
             cfg.require("quality.stoi_floor")
 
     def test_every_unset_value_is_null_rather_than_absent(self) -> None:
         """Absent is a typo; null is a decision not yet taken."""
-        cfg = load_triage_config()
+        cfg = load_triage_config(profile=ACTIVE)
         for path in (
             "phonation.hnr_floor_interval_db",
             "phonation.rms_floor_interval",
@@ -138,7 +156,7 @@ class TestUnsetValues:
 
     def test_get_returns_a_default_instead_of_raising(self) -> None:
         """A caller that can proceed without the value may ask politely."""
-        cfg = load_triage_config()
+        cfg = load_triage_config(profile=ACTIVE)
         assert cfg.get("phonation.hnr_floor_interval_db", 8.0) == 8.0
 
 
@@ -149,29 +167,57 @@ class TestOverrides:
         """An override can supply what nobody had measured."""
         override = tmp_path / "o.yaml"
         override.write_text("quality:\n  stoi_floor: 0.75\n")
-        cfg = load_triage_config(override)
+        cfg = load_triage_config(override, profile=ACTIVE)
         assert cfg.require("quality.stoi_floor") == 0.75
 
     def test_an_override_changes_the_hash(self, tmp_path: Path) -> None:
         """Two different merged mappings never share a hash."""
         override = tmp_path / "o.yaml"
         override.write_text("spans:\n  k_db: 8.0\n")
-        assert load_triage_config(override).config_hash != load_triage_config().config_hash
+        assert (
+            load_triage_config(override, profile=ACTIVE).config_hash != load_triage_config(profile=ACTIVE).config_hash
+        )
+
+    def test_another_pii_detector_commit_changes_the_hash(self, tmp_path: Path) -> None:
+        """The detector commit is configuration: two runs scanning with different commits never share a hash."""
+        override = tmp_path / "o.yaml"
+        override.write_text("pii:\n  gliner:\n    revision: " + "a" * 40 + "\n")
+        changed = load_triage_config(override, profile=ACTIVE)
+        assert changed.require("pii.gliner.revision") == "a" * 40
+        assert changed.require("pii.gliner.model") == "nvidia/gliner-pii", "the model is kept from the default"
+        assert changed.config_hash != load_triage_config(profile=ACTIVE).config_hash
+
+    @pytest.mark.parametrize(
+        ("gliner", "match"),
+        [
+            ("{model: nvidia/gliner-pii, revision: main}", "full 40-hex commit, never a ref"),
+            ("{model: nvidia/gliner-pii, revision: bd23e8ef}", "full 40-hex commit, never a ref"),
+            ("{model: nvidia/gliner-pii, revision: null}", "full 40-hex commit, never a ref"),
+            ("{model: null, revision: " + "a" * 40 + "}", "needs a model"),
+            ("nvidia/gliner-pii", "must be a mapping"),
+        ],
+    )
+    def test_an_unpinned_pii_detector_is_refused(self, tmp_path: Path, gliner: str, match: str) -> None:
+        """A ref, a short SHA or no commit at all would let the detector move between slices; each is refused."""
+        override = tmp_path / "o.yaml"
+        override.write_text(f"pii:\n  gliner: {gliner}\n")
+        with pytest.raises(ValueError, match=match):
+            load_triage_config(override, profile=ACTIVE)
 
     def test_an_unknown_key_is_refused_rather_than_ignored(self, tmp_path: Path) -> None:
         """A typo in an override key is an error, not a no-op."""
         override = tmp_path / "o.yaml"
         override.write_text("spans:\n  k_bd: 8.0\n")
         with pytest.raises(ValueError, match="k_bd"):
-            load_triage_config(override)
+            load_triage_config(override, profile=ACTIVE)
 
 
 class TestNamedModels:
     """The model choices PREPROCESS once fixed in code are settings (plan step 11c)."""
 
     def test_the_defaults_are_the_models_triage_has_always_run(self) -> None:
-        """B2AI's runs are unchanged: the two recognizers, AST and FRCRN, at the same refs."""
-        cfg = load_triage_config()
+        """The fixture's runs are unchanged: the two recognizers, AST and FRCRN, at the same refs."""
+        cfg = load_triage_config(profile=ACTIVE)
         recognizers = cfg.require("asr.recognizers")
         assert [(r["name"], r["model"], r["timestamps"]) for r in recognizers] == [
             ("asr_crisperwhisper", "nyralabs/CrisperWhisper2.0_turbo", "native"),
@@ -189,7 +235,7 @@ class TestNamedModels:
             "asr:\n  recognizers:\n    - {name: asr_q, model: Qwen/Qwen3-ASR-1.7B, revision: main, "
             "timestamps: bundled_aligner, timestamp_model: a/b, options: {forced_aligner: a/b}}\n"
         )
-        assert load_triage_config(override).require("asr.recognizers")[0]["timestamp_model"] == "a/b"
+        assert load_triage_config(override, profile=ACTIVE).require("asr.recognizers")[0]["timestamp_model"] == "a/b"
 
     def test_one_recognizer_is_a_valid_list(self, tmp_path: Path) -> None:
         """A profile replaces the whole list; the consensus runs over what is left."""
@@ -197,7 +243,9 @@ class TestNamedModels:
         override.write_text(
             "asr:\n  recognizers:\n    - {name: asr_child, model: org/child-asr, revision: main, timestamps: native}\n"
         )
-        assert [r["name"] for r in load_triage_config(override).require("asr.recognizers")] == ["asr_child"]
+        assert [r["name"] for r in load_triage_config(override, profile=ACTIVE).require("asr.recognizers")] == [
+            "asr_child"
+        ]
 
     @pytest.mark.parametrize(
         ("recognizers", "match"),
@@ -233,7 +281,7 @@ class TestNamedModels:
         override = tmp_path / "o.yaml"
         override.write_text(f"asr:\n  recognizers: {recognizers}\n")
         with pytest.raises(ValueError, match=match):
-            load_triage_config(override)
+            load_triage_config(override, profile=ACTIVE)
 
 
 class TestDatasetProfileLayer:
@@ -279,12 +327,70 @@ class TestDatasetProfileLayer:
         assert profiled.values == packaged.values
         assert profiled.config_hash != packaged.config_hash
 
+    def test_a_comment_in_the_profile_keeps_the_hash_and_a_value_changes_it(
+        self, without_triage_profile: None, tmp_path: Path
+    ) -> None:
+        """``config_hash`` follows the profile's values, not its comments; the hash taken before stays known."""
+        root = self._profile(tmp_path / "p", "spans:\n  k_db: 7.0\n")
+
+        def loaded() -> TriageConfig:
+            try:
+                return load_triage_config(profile=root)
+            finally:
+                deactivate_profile()
+
+        first = loaded()
+        assert first.profile is not None
+        legacy = json.dumps(first.values, sort_keys=True, default=str)
+        legacy += "\0".join(("", "profile", "demo", "1", first.profile.legacy_digest))
+        assert first.legacy_config_hash == hashlib.sha256(legacy.encode()).hexdigest()[:16]
+        assert first.config_hashes == {first.config_hash, first.legacy_config_hash}
+        (root / "override.yaml").write_text("# the span threshold\nspans:\n  k_db: 7.0  # dB\n")
+        (root / "profile.yaml").write_text("# a dataset\nname: demo\nversion: '1'\nconfig: override.yaml\n")
+        commented = loaded()
+        assert commented.config_hash == first.config_hash
+        assert commented.legacy_config_hash != first.legacy_config_hash
+        (root / "override.yaml").write_text("spans:\n  k_db: 8.0\n")
+        assert loaded().config_hash != first.config_hash
+
+    def test_a_load_naming_no_profile_while_one_is_active_is_refused(
+        self, without_triage_profile: None, tmp_path: Path
+    ) -> None:
+        """No implicit adoption (#609-2): a caller names the profile, or ``ACTIVE`` for the one already active."""
+        root = self._profile(tmp_path / "p", "{}\n")
+        try:
+            named = load_triage_config(profile=root)
+            with pytest.raises(ProfileNotNamed, match="demo"):
+                load_triage_config()
+            active = load_triage_config(profile=ACTIVE)
+            assert active.profile is named.profile
+            assert active.config_hash == named.config_hash
+        finally:
+            deactivate_profile()
+        assert load_triage_config(profile=ACTIVE).profile is None, "ACTIVE with none active is no profile"
+        assert load_triage_config().profile is None
+
     def test_a_profile_override_obeys_the_same_key_rules(self, without_triage_profile: None, tmp_path: Path) -> None:
         """A key the packaged file lacks is refused in a profile override too."""
         root = self._profile(tmp_path / "p", "spans:\n  k_bd: 8.0\n")
         try:
             with pytest.raises(ValueError, match="k_bd"):
                 load_triage_config(profile=root)
+        finally:
+            deactivate_profile()
+
+    def test_a_setting_only_a_profile_reaches_is_refused_in_a_run_override(
+        self, without_triage_profile: None, tmp_path: Path
+    ) -> None:
+        """The airway ontology roots feed labels built per profile, so a run's value is refused, not ignored."""
+        run = tmp_path / "run.yaml"
+        run.write_text("taxonomy:\n  airway_ontology_roots: [Breathing]\n")
+        with pytest.raises(ValueError, match="airway_ontology_roots.*dataset profile"):
+            load_triage_config(run)
+        root = self._profile(tmp_path / "p", "taxonomy:\n  airway_ontology_roots: [Respiratory sounds]\n")
+        try:
+            cfg = load_triage_config(profile=root)
+            assert cfg.require("taxonomy.airway_ontology_roots") == ["Respiratory sounds"]
         finally:
             deactivate_profile()
 
@@ -296,47 +402,47 @@ class TestOverridesMayExtendADataMap:
         """A campaign adding a gate value for one pattern group must not have to edit the package."""
         override = tmp_path / "o.yaml"
         override.write_text("verdict:\n  gates:\n    by_group:\n      EVENT_SERIES:\n        events_max: 9\n")
-        cfg = load_triage_config(override)
+        cfg = load_triage_config(override, profile=ACTIVE)
         assert cfg.require("verdict.gates.by_group.EVENT_SERIES")["events_max"] == 9
 
     def test_the_packaged_entries_of_a_non_null_data_map_survive_the_addition(self, tmp_path: Path) -> None:
         """An additive override that silently dropped a packaged entry would disable it."""
-        packaged = dict(load_triage_config().require("verdict.gates.by_group.EVENT_SERIES"))
+        packaged = dict(load_triage_config(profile=ACTIVE).require("verdict.gates.by_group.EVENT_SERIES"))
         override = tmp_path / "o.yaml"
         override.write_text("verdict:\n  gates:\n    by_group:\n      EVENT_SERIES:\n        events_max: 9\n")
-        resolved = load_triage_config(override).require("verdict.gates.by_group.EVENT_SERIES")
+        resolved = load_triage_config(override, profile=ACTIVE).require("verdict.gates.by_group.EVENT_SERIES")
         assert resolved == {**packaged, "events_max": 9}
 
     def test_an_existing_entry_is_replaced_not_merged(self, tmp_path: Path) -> None:
         """The value under a data-map key is data; the override replaces what it names."""
         override = tmp_path / "o.yaml"
         override.write_text("verdict:\n  gates:\n    by_group:\n      EVENT_SERIES:\n        score_min: 0.7\n")
-        resolved = load_triage_config(override).require("verdict.gates.by_group.EVENT_SERIES")
+        resolved = load_triage_config(override, profile=ACTIVE).require("verdict.gates.by_group.EVENT_SERIES")
         assert resolved["score_min"] == 0.7
 
     def test_a_null_data_map_still_takes_a_whole_mapping(self, tmp_path: Path) -> None:
         """The control: the paths that ship null must keep accepting the mapping that fills them."""
         override = tmp_path / "o.yaml"
         override.write_text("routing:\n  hint_branch_map:\n    cough: AIRWAY\n")
-        assert load_triage_config(override).require("routing.hint_branch_map") == {"cough": "AIRWAY"}
+        assert load_triage_config(override, profile=ACTIVE).require("routing.hint_branch_map") == {"cough": "AIRWAY"}
 
     def test_a_schema_key_is_still_refused(self, tmp_path: Path) -> None:
         """The whole point of the refusal: a section the code reads by name cannot grow a key."""
         override = tmp_path / "o.yaml"
         override.write_text("taxonomy:\n  nonsense: 1\n")
         with pytest.raises(ValueError, match="nonsense"):
-            load_triage_config(override)
+            load_triage_config(override, profile=ACTIVE)
 
     def test_a_schema_key_inside_a_section_holding_a_data_map_is_still_refused(self, tmp_path: Path) -> None:
         """The exemption is the map, not the section it sits in."""
         override = tmp_path / "o.yaml"
         override.write_text("airway:\n  corroboratoin_overrides:\n    Sneeze: [Sneeze]\n")
         with pytest.raises(ValueError, match="corroboratoin_overrides"):
-            load_triage_config(override)
+            load_triage_config(override, profile=ACTIVE)
 
     def test_every_declared_data_map_path_exists_in_the_packaged_file(self) -> None:
         """A path that has been renamed away would exempt nothing and refuse silently."""
-        cfg = load_triage_config()
+        cfg = load_triage_config(profile=ACTIVE)
         for path in DATA_MAP_PATHS:
             node: object = cfg.values
             for part in path.split("."):
@@ -368,7 +474,7 @@ class TestDocstringKeysResolve:
 
     def test_every_docstring_key_resolves_in_the_default_config(self) -> None:
         """A key a docstring tells the caller to read must be present in default.yaml, even if null."""
-        cfg = load_triage_config()
+        cfg = load_triage_config(profile=ACTIVE)
         for name, keys in _docstring_config_keys().items():
             for key in sorted(keys):
                 node: object = cfg.values
@@ -402,7 +508,7 @@ class TestTheV2OpenKeys:
         message — "unknown configuration key" for a typo, "has no value" for a null — so asserting on
         which message fires is what tells "the key is missing" from "the key is null".
         """
-        config = load_triage_config()
+        config = load_triage_config(profile=ACTIVE)
         for path in self.OPEN_KEYS:
             with pytest.raises(ValueError, match="has no value") as raised:
                 config.require(path)
@@ -411,7 +517,7 @@ class TestTheV2OpenKeys:
 
     def test_the_v1_keys_the_v2_specs_replaced_are_gone(self) -> None:
         """Pre-alpha: a replaced key is deleted, not left beside its replacement."""
-        config = load_triage_config()
+        config = load_triage_config(profile=ACTIVE)
         for path in (
             "phonation.f0_min_hz",
             "phonation.f0_max_hz",
@@ -442,7 +548,7 @@ class TestTheV2OpenKeys:
         lost along with the threshold fold V3 exists to let it survive. Both now ship non-overlapping,
         which is a declared choice the config_hash names.
         """
-        config = load_triage_config()
+        config = load_triage_config(profile=ACTIVE)
         assert config.require("windows.ast.hop_s") == 10.24
         assert config.require("windows.ast.win_length_s") == 10.24
         assert config.require("windows.hear.hop_s") == 2.0
@@ -451,7 +557,7 @@ class TestTheV2OpenKeys:
 
     def test_the_span_label_membership_pair_is_declared_for_both_span_classifiers(self) -> None:
         """One pair of values, so PREPROCESS and the routing analysis cannot drift apart."""
-        config = load_triage_config()
+        config = load_triage_config(profile=ACTIVE)
         for classifier in ("yamnet", "hear"):
             assert config.require(f"windows.{classifier}.default_threshold") == 0.2
             assert config.require(f"windows.{classifier}.label_top_k") == 4
@@ -461,21 +567,21 @@ class TestTheV2OpenKeys:
         override = tmp_path / "ast-hop.yaml"
         override.write_text("windows:\n  ast:\n    hop_s: 7.99\n")
         with pytest.raises(ValueError, match=r"windows\.ast\.hop_s must be at least 8 s"):
-            load_triage_config(override)
+            load_triage_config(override, profile=ACTIVE)
 
         override.write_text("windows:\n  ast:\n    hop_s: 8.0\n")
-        assert load_triage_config(override).require("windows.ast.hop_s") == 8.0
+        assert load_triage_config(override, profile=ACTIVE).require("windows.ast.hop_s") == 8.0
 
     def test_the_wide_search_replaces_the_declared_range(self) -> None:
         """One wide search, read by PREPROCESS and VOICE alike, each narrowing it the same way."""
-        config = load_triage_config()
+        config = load_triage_config(profile=ACTIVE)
         assert config.require("voice.f0_search_range_hz") == [50.0, 600.0]
         with pytest.raises(ValueError, match="unknown configuration key"):
             config.require("voice.f0_range_hz")
 
     def test_every_f0_range_parameter_comes_from_the_config(self) -> None:
         """``derive_f0_range`` has no defaults, so each of its parameters must resolve to a key."""
-        resolved = f0_range_parameters(load_triage_config())
+        resolved = f0_range_parameters(load_triage_config(profile=ACTIVE))
         assert set(resolved) == set(F0_RANGE_PARAMETER_NAMES)
         assert (resolved["search_floor_hz"], resolved["search_ceiling_hz"]) == (50.0, 600.0)
         assert resolved["pitch_floor_divisor"] == 1.5
@@ -488,7 +594,7 @@ class TestTheV2OpenKeys:
         """The helper reads the merged mapping, so an override is what the three call sites get."""
         override = tmp_path / "pinned.yaml"
         override.write_text("praat_features:\n  pitch_pinned_octave_ratio: 2.5\n")
-        assert f0_range_parameters(load_triage_config(override))["pitch_pinned_octave_ratio"] == 2.5
+        assert f0_range_parameters(load_triage_config(override, profile=ACTIVE))["pitch_pinned_octave_ratio"] == 2.5
 
     def test_the_helper_names_exactly_the_parameters_derive_f0_range_requires(self) -> None:
         """A parameter added to the signature without a config key fails here, not in a corpus pass."""
@@ -513,8 +619,8 @@ class TestEverySettingCppsIsComputedUnderIsAKey:
 
     def test_every_field_of_the_settings_resolves_to_a_key(self) -> None:
         """A field added without a key would silently take the library default on every run."""
-        settings = cpps_settings(load_triage_config())
-        packaged = load_triage_config().require("praat_features.cpps")
+        settings = cpps_settings(load_triage_config(profile=ACTIVE))
+        packaged = load_triage_config(profile=ACTIVE).require("praat_features.cpps")
         named = set(CPPS_SCALAR_KEYS) | {
             "peak_search_range_hz",
             "trend_range_s",
@@ -529,7 +635,7 @@ class TestEverySettingCppsIsComputedUnderIsAKey:
 
     def test_the_packaged_values_are_the_ones_step_4_declares(self) -> None:
         """The band is 60-700, the two smoothing windows are the incumbent's, and nothing is derived."""
-        settings = cpps_settings(load_triage_config())
+        settings = cpps_settings(load_triage_config(profile=ACTIVE))
         assert (settings.peak_search_floor_hz, settings.peak_search_ceiling_hz) == (60.0, 700.0)
         assert (settings.time_averaging_s, settings.quefrency_averaging_s) == (0.01, 0.001)
         assert (settings.trend_start_s, settings.trend_end_s) == (0.001, 0.0)
@@ -542,11 +648,11 @@ class TestEverySettingCppsIsComputedUnderIsAKey:
         """The helper reads the merged mapping, so an override is what the extractor gets."""
         override = tmp_path / "cpps.yaml"
         override.write_text("praat_features:\n  cpps:\n    peak_search_range_hz: [60.0, 500.0]\n")
-        assert cpps_settings(load_triage_config(override)).peak_search_ceiling_hz == 500.0
+        assert cpps_settings(load_triage_config(override, profile=ACTIVE)).peak_search_ceiling_hz == 500.0
 
     def test_the_trend_range_and_the_peak_band_are_separate_keys(self) -> None:
         """Conflating them is the error step 4 names: the fit range is not the search band."""
-        settings = cpps_settings(load_triage_config())
+        settings = cpps_settings(load_triage_config(profile=ACTIVE))
         assert settings.trend_start_s < 1.0 / settings.peak_search_ceiling_hz
         assert settings.trend_end_s == 0.0, "the fit runs to the end of the axis, past the peak band"
 
@@ -563,7 +669,7 @@ class TestTheHashNamesParametersOnly:
         if prose returns to a value.
         """
         offenders = []
-        for path, value in _leaves(load_triage_config().values).items():
+        for path, value in _leaves(load_triage_config(profile=ACTIVE).values).items():
             if isinstance(value, str) and ("\n" in value or len(value) > _MAX_VALUE_CHARS):
                 offenders.append(f"{path} ({len(value)} chars)")
         assert not offenders, (
@@ -573,4 +679,4 @@ class TestTheHashNamesParametersOnly:
 
     def test_the_derivation_key_is_gone(self) -> None:
         """Its prose moved to the spec; nothing in the package reads the key."""
-        assert "derivation" not in load_triage_config().values
+        assert "derivation" not in load_triage_config(profile=ACTIVE).values

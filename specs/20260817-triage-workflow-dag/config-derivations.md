@@ -45,6 +45,39 @@ value is the record:
 - The content-omission gate is `content_omission_fraction_max`, not `omissions_max`; `branch.sweep_*` and
   `glide_extent_min_semitones` have their derivations in specs/20260929-task-check-alignment/design.md.
 
+## profile fit: n_min (2026-11-14, Satra review of #637)
+
+`scripts/fit_profile.py` fits each corpus statistic (kind b in `data/profile_values.yaml`) over at least `n_min`
+values and refuses a table with fewer unless `--allow-small-n`; a value with no values at all stays unfitted, as
+before. `n` counts what the method's `per` counts (recordings, sessions or participants), and for a `by` value each
+family separately. These are **defaults, chosen conservatively**: a minimum below which the statistic is mostly
+sampling noise, not a proof that a larger `n` is enough. Recordings of one participant are not independent, so a
+`per: recording` count overstates the information in it. A method may set its own `n_min` higher.
+
+The rationale is the statistic's sampling error, not any one dataset's counts:
+
+- **median, 30.** The sample median's standard error is about 1.253 sigma / sqrt(n) for a normal sample (sampling
+  variance pi sigma^2 / 2n); at n = 30 that is 0.23 sigma (0.225 sigma in a 20,000-draw simulation), small next to
+  the spread the value is compared against.
+- **tukey_upper / tukey_lower, 50.** The fence Q3 + 1.5 IQR sits at 2.70 sigma for a normal sample. From the
+  quartiles' asymptotic variances and covariance (density 0.318 at +/-0.674 sigma), its standard error is about
+  3.34 sigma / sqrt(n): 0.47 sigma at n = 50 (0.455 simulated), 0.61 at n = 30 (0.58 simulated). A fence is a
+  cut-off that flags recordings, so it gets the stricter minimum of the two.
+- **percentile and percentile_band, 200; the 99th-percentile count-in gap, 500.** A tail percentile is only
+  estimated when values lie beyond it: below n = 100 / (100 - q) the linearly interpolated percentile lies between
+  the two largest values, so it is the sample's extreme. The minimum asks for five expected values beyond each cut,
+  n >= 5 * 100 / min(q, 100 - q): 200 at q = 97.5 (and the band [2.5, 97.5]), 500 at q = 99, which is why
+  `task_extent.yaml count_in.gap_max_s` sets its own. `fit_test.py` checks this holds for every shipped percentile.
+
+Rejected: one `n_min` for every statistic (a tail percentile needs several times what a median does) and a
+`--force` that also replaces an earlier `fitted.yaml` (refitting over an earlier fit would then silently accept
+small counts too), hence the separate `--allow-small-n`. Written with `below_n_min` in `fitted.yaml`, a value
+fitted under it stays visibly a small-sample value.
+
+Check against a whole-chain refit (2026-11-05) on the dataset the reference profile was fitted on, 62,550
+recordings: every fitted value clears its default (smallest: a free-response family median over 199 recordings; the
+count-in gap over 1,232). That table carried no COHORT readings, so the fences' counts were not checked there.
+
 ## How to find a key
 
 Sections appear in the config's own order. A key's derivation is in its section; where one
@@ -2228,6 +2261,16 @@ neither scanned nor failed recorded as missing. Narrowing the list is how an ope
 fewer detectors says so; the config_hash then names that choice. The local-LLM detector is
 deliberately absent for the same reason it is absent from default_detectors(): it is never
 default-on, so requiring it would make every scan incomplete.
+
+pii.gliner {model: nvidia/gliner-pii, revision: bd23e8ef4425fd04e34c5204ab49ffaa706eae79} -- a pin,
+not a fit (Satra review 2026-11-14, decision 6). The commit is the one the 2026-11-10 canary
+resolved `main` to. Before the pin the scan resolved `main` once per run id (recorded in
+$SENSELAB_CACHE/runs/<run_id>/resolutions.json and in the PII result-cache key), so two slices of
+one campaign started on different days could scan with different detector commits under one
+config_hash, and an offline host could not resolve it at all. A full 40-hex commit is the only
+value accepted; it is in config_hash with every other setting, and every pii_scan record carries
+`gliner_model` and the `gliner_revision` the worker reports it loaded (None where GLiNER did not
+load).
 
 ### No duration bound on a finding -- REJECTED 2026-09-22
 

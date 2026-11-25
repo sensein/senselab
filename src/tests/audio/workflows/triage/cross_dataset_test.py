@@ -163,6 +163,17 @@ def test_hot_or_clipped_reads_the_data_bounds() -> None:
     assert hot_or_clipped({}) is None and hot_or_clipped(quiet, "session") is None
 
 
+def test_one_unset_bound_leaves_hot_or_clipped_unmeasured_unless_the_other_fires(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review J3: a set bound a reading reaches still decides; an unset one leaves an otherwise quiet reading None."""
+    bounds = dict(cohort_fold._parameters()["condition"])
+    monkeypatch.setattr(cohort_fold, "_parameters", lambda: {"condition": {**bounds, "clipped_fraction_min": None}})
+    hot = {CONDITION: {"participant": {"rms_dbfs_median": bounds["hot_rms_dbfs_min"], "clipped_fraction": 0.0}}}
+    quiet = {CONDITION: {"participant": {"rms_dbfs_median": -60.0, "clipped_fraction": 0.0}}}
+    assert hot_or_clipped(hot) is True and hot_or_clipped(quiet) is None
+
+
 def _inconsistent(level_shift: float) -> dict[str, list[dict[str, Any]]]:
     sessions = [
         ("sub-a_ses-1", [_speech("sub-a_ses-1", i, rms=-30.0, snr=30.0) for i in range(2)]),
@@ -376,7 +387,7 @@ def test_a_bound_a_pilot_has_not_fitted_reads_nothing(monkeypatch: pytest.Monkey
     }
     monkeypatch.setattr(cohort_fold, "_parameters", lambda: unfitted)
     hot = {CONDITION: {"participant": {"rms_dbfs_median": -1.0, "clipped_fraction": 1.0}}}
-    assert hot_or_clipped(hot) is False
+    assert hot_or_clipped(hot) is None, "review J3: unmeasured against an unset bound, not measured as under it"
     moved = {
         CONDITION: {
             "session": {"rms_dbfs_median": -10.0, "snr_db_median": 40.0},

@@ -27,6 +27,7 @@ from senselab.text.tasks.pii_detection import subprocess_backend as pii_subproce
 from senselab.text.tasks.pii_detection.subprocess_backend import (
     _DEFAULT_GLINER_LABELS,
     _DEFAULT_GLINER_MODEL,
+    _DEFAULT_GLINER_REVISION,
     _GLINER_TO_PRESIDIO_CATEGORY,
     _PRESIDIO_PII_ENTITIES,
     DETECTOR_GLINER,
@@ -35,6 +36,7 @@ from senselab.text.tasks.pii_detection.subprocess_backend import (
     DETECTOR_RULES,
     detect_pii_via_subprocess,
 )
+from senselab.utils.model_revision import resolve_revision as real_resolve_revision
 
 # ── Fixtures ────────────────────────────────────────────────────────
 
@@ -63,7 +65,11 @@ def fake_venv(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 
 
 class _SubprocessRecorder:
-    """Records calls + returns canned JSON output. Mirrors subprocess.run's signature."""
+    """Records calls + returns canned JSON output. Mirrors subprocess.run's signature.
+
+    A response that reports GLiNER loaded and carries no ``gliner_revision`` is given the commit the request named,
+    as the shipped worker reports it; a test of the unreported case sets ``gliner_revision`` to None explicitly.
+    """
 
     def __init__(self, response: dict[str, Any]) -> None:
         self.calls: list[dict[str, Any]] = []
@@ -82,9 +88,12 @@ class _SubprocessRecorder:
     ) -> subprocess.CompletedProcess:
         parsed_input = json.loads(input) if input else {}
         self.calls.append({"argv": argv, "input": parsed_input, "timeout": timeout})
-        response = self._response_json
+        answer = json.loads(self._response_json)
         if self.input_hook is not None:
-            response = json.dumps(self.input_hook(parsed_input))
+            answer = self.input_hook(parsed_input)
+        if DETECTOR_GLINER in (answer.get("detectors_used") or []) and "gliner_revision" not in answer:
+            answer = {**answer, "gliner_revision": parsed_input.get("gliner_revision")}
+        response = json.dumps(answer)
         return subprocess.CompletedProcess(args=argv, returncode=0, stdout=response, stderr="")
 
 
@@ -470,6 +479,270 @@ def test_the_parent_sends_no_snapshot_path_when_staging_fails(fake_venv: Path, m
     assert recorder.calls[0]["input"]["gliner_model_path"] is None
 
 
+# ── The pinned detector commit ───────────────────────────────────────
+
+
+@pytest.fixture
+def offline_resolution(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[tuple[str, str]]:
+    """The real ``resolve_revision`` over a Hub that cannot be reached; returns the refs it was asked to look up.
+
+    A full commit short-circuits before any lookup, so a test that passes under this fixture loads its
+    detector with no network at all.
+    """
+    from senselab.utils import model_revision
+
+    looked_up: list[tuple[str, str]] = []
+
+    def _unreachable(repo_id: str, ref: str, token: Optional[str] = None) -> str:
+        looked_up.append((repo_id, ref))
+        raise model_revision.RevisionResolutionError(f"offline: cannot resolve {repo_id}@{ref}")
+
+    monkeypatch.setattr(model_revision, "_resolve_uncached", _unreachable)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", real_resolve_revision)
+    monkeypatch.setattr(
+        "senselab.utils.dependencies.resolve_model", lambda repo_id, rev, **_: (rev, tmp_path / "snapshots" / rev)
+    )
+    return looked_up
+
+
+def test_the_default_detector_loads_at_its_pinned_commit_with_no_lookup(
+    fake_venv: Path, monkeypatch: pytest.MonkeyPatch, offline_resolution: list[tuple[str, str]]
+) -> None:
+    """No revision named: the default model is loaded at the pinned commit, and "main" is never resolved."""
+    recorder = _SubprocessRecorder({"spans_by_asr": {"whisper": []}, "failures": {}, "detectors_used": ["gliner"]})
+    monkeypatch.setattr(subprocess, "run", recorder)
+
+    detect_pii_via_subprocess({"whisper": "Sample."}, detectors=[DETECTOR_GLINER])
+
+    assert recorder.calls[0]["input"]["gliner_revision"] == _DEFAULT_GLINER_REVISION
+    assert offline_resolution == [], "a pinned commit is never looked up"
+
+
+def test_a_configured_commit_is_the_one_loaded_with_no_lookup(
+    fake_venv: Path, monkeypatch: pytest.MonkeyPatch, offline_resolution: list[tuple[str, str]]
+) -> None:
+    """The caller's commit reaches the worker as given, offline, and keys the result cache."""
+    pinned = "c" * 40
+    recorder = _SubprocessRecorder(
+        {"spans_by_asr": {"whisper": []}, "failures": {}, "detectors_used": ["gliner"], "gliner_revision": pinned}
+    )
+    monkeypatch.setattr(subprocess, "run", recorder)
+
+    result = detect_pii_via_subprocess({"whisper": "Sample."}, detectors=[DETECTOR_GLINER], gliner_revision=pinned)
+
+    assert recorder.calls[0]["input"]["gliner_revision"] == pinned
+    assert result["gliner_revision"] == pinned, "the commit the worker loaded is returned to the caller"
+    assert offline_resolution == []
+
+
+def test_another_detector_named_without_a_revision_still_resolves_main(
+    fake_venv: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The pin belongs to the default model; any other model's ``main`` is resolved, never given the pin."""
+    asked: list[tuple[str, str]] = []
+
+    def _resolve(repo_id: str, ref: str = "main", **_: object) -> str:
+        asked.append((repo_id, ref))
+        return "d" * 40
+
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", _resolve)
+    monkeypatch.setattr(
+        "senselab.utils.dependencies.resolve_model", lambda repo_id, rev, **_: (rev, tmp_path / "snapshots" / rev)
+    )
+    recorder = _SubprocessRecorder({"spans_by_asr": {"whisper": []}, "failures": {}, "detectors_used": ["gliner"]})
+    monkeypatch.setattr(subprocess, "run", recorder)
+
+    detect_pii_via_subprocess({"whisper": "Sample."}, detectors=[DETECTOR_GLINER], gliner_model="org/other-gliner")
+
+    assert asked == [("org/other-gliner", "main")]
+    assert recorder.calls[0]["input"]["gliner_revision"] == "d" * 40
+
+
+def test_a_worker_that_loaded_another_commit_is_refused(
+    fake_venv: Path, monkeypatch: pytest.MonkeyPatch, offline_resolution: list[tuple[str, str]]
+) -> None:
+    """Satra review 2026-11-14: the commit the worker reports is the configured one, or GLiNER counts as failed.
+
+    Its findings are dropped, the scan is incomplete (so it is not cached and is scanned again), and no commit is
+    recorded; the other detectors' findings stand.
+    """
+    configured, loaded = "c" * 40, "e" * 40
+    spans = [
+        {"text": "Alice", "category": "PERSON", "source": "gliner/person", "score": 0.9},
+        {"text": "Boston", "category": "LOCATION", "source": "presidio", "score": 0.8},
+    ]
+    recorder = _SubprocessRecorder(
+        {
+            "spans_by_asr": {"whisper": spans},
+            "failures": {},
+            "detectors_used": ["presidio", "gliner"],
+            "gliner_revision": loaded,
+        }
+    )
+    monkeypatch.setattr(subprocess, "run", recorder)
+
+    first = detect_pii_via_subprocess(
+        {"whisper": "Alice lives in Boston."},
+        detectors=[DETECTOR_PRESIDIO, DETECTOR_GLINER],
+        gliner_revision=configured,
+    )
+    again = detect_pii_via_subprocess(
+        {"whisper": "Alice lives in Boston."},
+        detectors=[DETECTOR_PRESIDIO, DETECTOR_GLINER],
+        gliner_revision=configured,
+    )
+
+    assert first["failures"][DETECTOR_GLINER].startswith("RevisionMismatch:")
+    assert loaded in first["failures"][DETECTOR_GLINER] and configured in first["failures"][DETECTOR_GLINER]
+    assert first["detectors_used"] == [DETECTOR_PRESIDIO]
+    assert first["spans_by_asr"]["whisper"] == [spans[1]], "a refused detector's findings are not reported"
+    assert first["gliner_revision"] is None, "no commit is recorded for a detector that was refused"
+    assert len(recorder.calls) == 2 and again["cache"]["whisper"]["hit"] is False, "an incomplete scan is not cached"
+
+
+def test_a_worker_that_names_no_commit_for_a_loaded_detector_is_refused(
+    fake_venv: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GLiNER reported loaded with no commit fails closed, as a mismatch does: failed, findings dropped, not cached."""
+    spans = [
+        {"text": "Alice", "category": "PERSON", "source": "gliner/person", "score": 0.9},
+        {"text": "Boston", "category": "LOCATION", "source": "presidio", "score": 0.8},
+    ]
+    recorder = _SubprocessRecorder(
+        {
+            "spans_by_asr": {"whisper": spans},
+            "failures": {},
+            "detectors_used": ["presidio", "gliner"],
+            "gliner_revision": None,
+        }
+    )
+    monkeypatch.setattr(subprocess, "run", recorder)
+    both = [DETECTOR_PRESIDIO, DETECTOR_GLINER]
+
+    first = detect_pii_via_subprocess({"whisper": "Alice lives in Boston."}, detectors=both)
+    again = detect_pii_via_subprocess({"whisper": "Alice lives in Boston."}, detectors=both)
+
+    assert first["failures"][DETECTOR_GLINER].startswith("RevisionMismatch: the worker named no commit")
+    assert first["detectors_used"] == [DETECTOR_PRESIDIO]
+    assert first["spans_by_asr"]["whisper"] == [spans[1]]
+    assert first["gliner_revision"] is None
+    assert len(recorder.calls) == 2 and again["cache"]["whisper"]["hit"] is False
+
+
+# ── Offline staging from the HF cache ────────────────────────────────
+
+_FAKE_GLINER = """
+import os
+
+
+class _Weights:
+    def cuda(self):
+        return self
+
+
+class GLiNER:
+    def __init__(self, where):
+        self.where = where
+        self.model = _Weights()
+
+    @classmethod
+    def from_pretrained(cls, target, revision=None, **kwargs):
+        if os.path.isdir(target):
+            if not os.path.isfile(os.path.join(target, "gliner_config.json")):
+                raise FileNotFoundError("no gliner_config.json in " + target)
+            return cls(target)
+        from huggingface_hub import snapshot_download
+
+        return cls(snapshot_download(target, revision=revision))
+
+    def predict_entities(self, text, labels, threshold=0.5):
+        return []
+"""
+"""A ``gliner`` package that loads nothing: a snapshot directory is opened as GLiNER opens one, and a repo id is
+fetched through the Hub as GLiNER fetches one, which an offline worker cannot do."""
+
+
+@pytest.fixture
+def offline_hub(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """An empty HF cache with the Hub unreachable, the real resolution and staging, and the shipped worker script.
+
+    The worker runs on this interpreter with a stand-in ``gliner`` first on its path, so the snapshot read-back is
+    the shipped code's. Nothing reaches the network: both processes are offline, a full commit is never looked up,
+    and a socket that tries to connect fails the test.
+
+    Returns:
+        The cache root (``HF_HUB_CACHE``).
+    """
+    import os
+    import socket
+
+    import huggingface_hub.constants as hf_constants
+
+    from senselab.utils import model_revision
+
+    hub = tmp_path / "hub"
+    hub.mkdir()
+    fake = tmp_path / "fake_site"
+    (fake / "gliner").mkdir(parents=True)
+    (fake / "gliner" / "__init__.py").write_text(_FAKE_GLINER)
+    monkeypatch.setattr(hf_constants, "HF_HUB_CACHE", str(hub))
+    monkeypatch.setattr(hf_constants, "HF_HUB_OFFLINE", True)
+    for name, value in {
+        "HF_HUB_CACHE": str(hub),
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "SENSELAB_BLOCK_NETWORK": "1",
+        "SENSELAB_CACHE": str(tmp_path / "senselab"),
+        "SENSELAB_HF_MAX_RETRIES": "1",
+        "PYTHONPATH": os.pathsep.join([str(fake), *filter(None, [os.environ.get("PYTHONPATH")])]),
+    }.items():
+        monkeypatch.setenv(name, value)
+
+    def _no_lookup(repo_id: str, ref: str, token: Optional[str] = None) -> str:
+        raise AssertionError(f"looked up {repo_id}@{ref}")
+
+    def _no_network(self: socket.socket, address: Any) -> None:  # noqa: ANN401
+        raise AssertionError(f"connected to {address}")
+
+    monkeypatch.setattr(model_revision, "_resolve_uncached", _no_lookup)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", real_resolve_revision)
+    monkeypatch.setattr(socket.socket, "connect", _no_network)
+    monkeypatch.setattr(pii_subprocess, "venv_python", lambda *_a, **_k: sys.executable)
+    return hub
+
+
+def _snapshot(hub: Path, sha: str) -> Path:
+    """Stage ``nvidia/gliner-pii`` at ``sha`` by hand: its config and a placeholder for the weights."""
+    snapshot = hub / "models--nvidia--gliner-pii" / "snapshots" / sha
+    snapshot.mkdir(parents=True)
+    (snapshot / "gliner_config.json").write_text("{}")
+    (snapshot / "pytorch_model.bin").write_bytes(b"")
+    return snapshot
+
+
+def test_the_detector_stages_from_the_cache_offline_and_reports_that_commit(fake_venv: Path, offline_hub: Path) -> None:
+    """A snapshot in the cache is staged with no network, loaded from its directory, and its commit reported."""
+    _snapshot(offline_hub, _DEFAULT_GLINER_REVISION)
+
+    result = detect_pii_via_subprocess({"whisper": "Alice lives in Boston."}, detectors=[DETECTOR_GLINER])
+
+    assert result["failures"] == {}, result["failures"]
+    assert result["detectors_used"] == [DETECTOR_GLINER]
+    assert result["gliner_revision"] == _DEFAULT_GLINER_REVISION
+
+
+def test_an_offline_host_without_the_snapshot_records_a_failed_detector(fake_venv: Path, offline_hub: Path) -> None:
+    """No snapshot and no network: GLiNER is recorded as failed, so the scan is incomplete, and no commit is named."""
+    _snapshot(offline_hub, "d" * 40)  # another commit of the same repo does not stand in for the pinned one
+
+    result = detect_pii_via_subprocess({"whisper": "Alice lives in Boston."}, detectors=[DETECTOR_GLINER])
+
+    assert DETECTOR_GLINER in result["failures"]
+    assert result["detectors_used"] == []
+    assert result["gliner_revision"] is None
+    assert result["cache"]["whisper"]["hit"] is False
+
+
 def test_presidio_only_sends_no_gliner_snapshot_path(fake_venv: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Nothing is staged when GLiNER is not requested, so nothing is pointed at either."""
     recorder = _SubprocessRecorder({"spans_by_asr": {"whisper": []}, "failures": {}, "detectors_used": ["presidio"]})
@@ -555,6 +828,21 @@ def test_a_different_gliner_commit_misses(fake_venv: Path, monkeypatch: pytest.M
     monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "a" * 40)
     detect_pii_via_subprocess({"0": "Alice lives in Boston."})
     assert len(recorder.calls) == 2
+
+
+def test_a_different_configured_gliner_commit_misses(
+    fake_venv: Path, monkeypatch: pytest.MonkeyPatch, offline_resolution: list[tuple[str, str]]
+) -> None:
+    """Two pinned commits never share a cached scan: the commit is in the key."""
+    recorder = _SubprocessRecorder({})
+    recorder.input_hook = _echo
+    monkeypatch.setattr(subprocess, "run", recorder)
+    first = detect_pii_via_subprocess({"0": "Alice lives in Boston."}, gliner_revision="a" * 40)
+    second = detect_pii_via_subprocess({"0": "Alice lives in Boston."}, gliner_revision="b" * 40)
+    again = detect_pii_via_subprocess({"0": "Alice lives in Boston."}, gliner_revision="a" * 40)
+    assert len(recorder.calls) == 2
+    assert first["cache"]["0"]["key"] != second["cache"]["0"]["key"]
+    assert again["cache"]["0"]["hit"] is True and again["cache"]["0"]["key"] == first["cache"]["0"]["key"]
 
 
 def test_an_incomplete_scan_is_not_stored(fake_venv: Path, monkeypatch: pytest.MonkeyPatch) -> None:
