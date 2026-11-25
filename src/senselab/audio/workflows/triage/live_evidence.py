@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.identity import FROM_HINT, recorded_identity
 from senselab.audio.workflows.triage.label_membership import LabelMembership
 from senselab.audio.workflows.triage.routing_analysis.families import UNKNOWN_TASK, task_family, task_id_of
 from senselab.audio.workflows.triage.routing_analysis.features import (
@@ -105,6 +106,24 @@ def declared_task(stem: str) -> tuple[str, str]:
     return task_id, task_family(task_id)
 
 
+def declared_task_of(store: ProvStore, stem: str = "") -> tuple[str, str]:
+    """The task the recording declares: a hint's, as ADMIT recorded it, else :func:`declared_task` of a stem.
+
+    Args:
+        store: The provenance store.
+        stem: The stem to read where no hint declared the task; empty reads :func:`recording_stem`.
+
+    Returns:
+        ``(task_id, family)``, both :data:`UNDECLARED` when nothing declares a task.
+    """
+    identity = recorded_identity(store)
+    if identity is not None and identity.sources.get("task_id") == FROM_HINT:
+        if identity.task_id == UNKNOWN_TASK:
+            return UNDECLARED, UNDECLARED
+        return identity.task_id, identity.task_family
+    return declared_task(stem or recording_stem(store))
+
+
 def read_live_features(
     store: ProvStore,
     *,
@@ -137,7 +156,7 @@ def read_live_features(
     )
     handle.close()
     path = Path(handle.name)
-    task_id, family = declared_task(stem)
+    task_id, family = declared_task_of(store, stem)
     try:
         store.write_jsonl(path)
         return extract_features(
