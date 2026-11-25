@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Sequence
 import yaml
 
 from senselab.audio.workflows.audio_analysis.harmonize import align_pair, normalise_token
+from senselab.audio.workflows.triage.dataset_profile import data_path
 from senselab.audio.workflows.triage.nodes.branches import (
     AIRWAY_EXPECTATIONS,
     SPEECH_EXPECTATIONS,
@@ -109,7 +110,8 @@ FUNCTION_WORDS = frozenset(
     we've they've you've we'll they'll it'll he'll she'll he'd she'd we'd they'd you'd it'd
     """.split()
 ) | frozenset(
-    str(word).casefold() for word in (yaml.safe_load(SPANISH_FUNCTION_WORDS_PATH.read_text()) or {}).get("words") or ()
+    str(word).casefold()
+    for word in (yaml.safe_load(data_path("function_words_es.yaml").read_text()) or {}).get("words") or ()
 )
 """Closed-class words, English and Spanish: a residue made of nothing else carries no content a detector could find."""
 

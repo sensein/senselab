@@ -22,7 +22,6 @@ reading and the fold's mask plan masks it. The bounds are in ``data/task_speech.
 
 from __future__ import annotations
 
-import functools
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,6 +29,7 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
+from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
 from senselab.audio.workflows.triage.nodes.branches import AIRWAY_EXPECTATIONS, VOICE_EXPECTATIONS
 from senselab.audio.workflows.triage.nodes.common import (
     consensus_words,
@@ -51,14 +51,14 @@ TASK_SPEECH_READING = "task_speech_reading"
 """The measurement holding a task's reading of the speech outside it."""
 
 
-@functools.cache
+@profile_cache
 def task_speech_parameters() -> dict[str, Any]:
     """The parameters of ``data/task_speech.yaml``.
 
     Returns:
         The parsed mapping.
     """
-    return dict(yaml.safe_load(TASK_SPEECH_PATH.read_text()) or {})
+    return dict(yaml.safe_load(data_path("task_speech.yaml").read_text()) or {})
 
 
 def voice_task_text(family: str | None) -> tuple[str, ...] | None:

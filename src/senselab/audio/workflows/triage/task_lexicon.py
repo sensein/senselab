@@ -3,7 +3,7 @@
 One definition read by three consumers, so they cannot drift: the residue (task words never reach the
 PII detectors), REDACT's stimulus exemption, and the fold's mask plan (no mask covers a task word). A
 family's lexicon is the names its expectation row declares (``expected_names``) plus, where the run's
-``stimulus.task_lexicons`` enables it, the packaged ``data/task_lexicon/<family>.yaml``. The
+``stimulus.task_lexicons`` enables it, the packaged the dataset profile's ``task_lexicon/<family>.yaml``. The
 derivation of each packaged list is in the file itself and in
 ``specs/20260928-reviewer-contradictions-and-task-lexicon/design.md``.
 """
@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Sequence
 
@@ -20,20 +19,15 @@ import yaml
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.audio_analysis.harmonize import normalise_token
+from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
 from senselab.audio.workflows.triage.nodes.branches import expected_names, item_category
 from senselab.audio.workflows.triage.stimulus import NearMatch, near_match
 
 if TYPE_CHECKING:
     from senselab.audio.workflows.triage.config import TriageConfig
 
-LEXICON_DIR = Path(__file__).parent / "data" / "task_lexicon"
-"""Where the packaged lexicons live, one ``<family>.yaml`` each."""
-
 SECTIONS = ("characters", "objects", "events", "time")
 """The lists a lexicon file carries; every entry of each is a word or a phrase."""
-
-CATEGORY_DIR = LEXICON_DIR / "categories"
-"""Where the packaged item-category lexicons live, one ``<slug>.yaml`` each, carrying ``category`` and ``items``."""
 
 LETTERS = "Letters"
 NUMBERS = "Numbers"
@@ -55,7 +49,7 @@ def _key(text: str) -> str:
     return normalise_token(text).replace("’", "'")
 
 
-@lru_cache(maxsize=None)
+@profile_cache
 def packaged_phrases(family: str) -> tuple[tuple[str, ...], ...]:
     """The phrases of a family's packaged lexicon file, each as its normalised tokens.
 
@@ -68,7 +62,7 @@ def packaged_phrases(family: str) -> tuple[tuple[str, ...], ...]:
     Raises:
         ValueError: If the file names a different family.
     """
-    path = LEXICON_DIR / f"{family}.yaml"
+    path = data_path("task_lexicon") / f"{family}.yaml"
     if not path.is_file():
         return ()
     document = yaml.safe_load(path.read_text()) or {}
@@ -88,7 +82,7 @@ def category_slug(category: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", category.lower()).strip("-")
 
 
-@lru_cache(maxsize=None)
+@profile_cache
 def category_phrases(category: str) -> tuple[tuple[str, ...], ...]:
     """The phrases of a category's packaged lexicon, each as its normalised tokens.
 
@@ -101,7 +95,7 @@ def category_phrases(category: str) -> tuple[tuple[str, ...], ...]:
     Raises:
         ValueError: If the file names a different category.
     """
-    path = CATEGORY_DIR / f"{category_slug(category)}.yaml"
+    path = data_path("task_lexicon/categories") / f"{category_slug(category)}.yaml"
     if not path.is_file():
         return ()
     document = yaml.safe_load(path.read_text()) or {}

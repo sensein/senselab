@@ -407,7 +407,7 @@ class TaskEvidence:
         owner_absent_inputs: The instruments, derivatives or gate readings an owning branch needed to
             look for the task and did not have; empty where every owner could look.
         required_event: The event kind the declared airway family is decided on (``breath``), from
-            ``data/airway_event_requirements.yaml``; None for every other family.
+            the dataset profile's ``airway_event_requirements.yaml``; None for every other family.
         events_found_n: How many events of the family's own kind the owning AIRWAY branch detected,
             or None where it reported no count.
         event_kind: The declared airway family's own event kind, or None.
@@ -434,10 +434,10 @@ class TaskEvidence:
         quality: QUALITY's join of the background against the task spans
             (``nodes.quality.measure_join``); empty where QUALITY wrote none.
         contest_events_min: The events AIRWAY's own detector must have found for a measure's
-            no-event discard to be contested instead (``data/discard_contested.yaml``); None where
+            no-event discard to be contested instead (the dataset profile's ``discard_contested.yaml``); None where
             no discard of this family is contested.
         contest_rise_db_min: The breath-train rise a breath family's no-event discard needs to be
-            contested (``data/discard_contested.yaml``, ``breath``); None for any other family.
+            contested (the dataset profile's ``discard_contested.yaml``, ``breath``); None for any other family.
         breath_train_rise_db: The breath train's median burst rise over the floor, or None.
         voice_mode: ``sustained`` or ``glide`` for a declared voice family decided on VOICE's
             phonation reading; None for every other family.
@@ -743,7 +743,7 @@ DISCARD_GROUNDS = (
 """Every ground a file discards on, in the order the fold tries them; an operational flag (``rerun``) is
 tried between the third and the fourth, since a missing derivative may be why the task was not found."""
 EVENT_ABSENT_GROUNDS = {"breath": NO_BREATH_CAPTURED, "cough": NO_COUGH_CAPTURED, "phonation": NO_PHONATION_CAPTURED}
-"""The discard ground for each required event kind of ``data/airway_event_requirements.yaml``."""
+"""The discard ground for each required event kind of the dataset profile's ``airway_event_requirements.yaml``."""
 TASK_MISMATCH = "task_mismatch"
 """Flag ground: the declared airway task's own events were detected, but not in the pattern it asked for."""
 BREATH_REVIEW_LOW_CONFIDENCE = "breath_review_low_confidence"

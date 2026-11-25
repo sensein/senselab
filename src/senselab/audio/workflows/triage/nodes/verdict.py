@@ -26,7 +26,6 @@ The two axes this node keeps apart — triage and release — and the tables it 
 
 from __future__ import annotations
 
-import functools
 import math
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -40,6 +39,7 @@ from senselab.audio.tasks.redaction.api import apply_redactions
 from senselab.audio.workflows.triage.background_model import BACKGROUND_MODEL
 from senselab.audio.workflows.triage.cohort_fold import COHORT_NODE, COHORT_READING
 from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
 from senselab.audio.workflows.triage.ddk_task import CYCLE, DDK_READING, SYLLABLE
 from senselab.audio.workflows.triage.live_evidence import declared_task_of
 from senselab.audio.workflows.triage.nodes.airway import EVENTS_FOUND as AIRWAY_EVENTS_FOUND
@@ -327,22 +327,20 @@ def _spans_by_node(store: ProvStore) -> dict[str, int]:
 
 
 TASK_MINIMUM_DURATION_PATH = Path(__file__).parents[1] / "data" / "task_minimum_duration.yaml"
-AIRWAY_EVENT_TOKENS_PATH = Path(__file__).parents[1] / "data" / "airway_event_tokens.yaml"
-DISCARD_CONTESTED_PATH = Path(__file__).parents[1] / "data" / "discard_contested.yaml"
 
 
-@functools.cache
+@profile_cache
 def _task_minimum_durations() -> tuple[float, dict[str, float]]:
     """``data/task_minimum_duration.yaml``: the default minimum and the per-family ones, in seconds."""
-    document = yaml.safe_load(TASK_MINIMUM_DURATION_PATH.read_text()) or {}
+    document = yaml.safe_load(data_path("task_minimum_duration.yaml").read_text()) or {}
     families = {str(name): float(value) for name, value in (document.get("families") or {}).items()}
     return float(document["default_s"]), families
 
 
-@functools.cache
+@profile_cache
 def _discard_contested() -> dict[str, Any]:
-    """``data/discard_contested.yaml``, as written."""
-    return yaml.safe_load(DISCARD_CONTESTED_PATH.read_text()) or {}
+    """The dataset profile's ``discard_contested.yaml``, as written."""
+    return yaml.safe_load(data_path("discard_contested.yaml").read_text()) or {}
 
 
 def contest_events_min(instructed: int | None, event: str = "cough") -> int:
@@ -393,10 +391,10 @@ def minimum_duration_s(declared_family: str | None) -> float | None:
     return families.get(declared_family, default)
 
 
-@functools.cache
+@profile_cache
 def _airway_event_tokens() -> dict[str, frozenset[str]]:
-    """``data/airway_event_tokens.yaml``: per declared airway family, the event tokens naming its event."""
-    document = yaml.safe_load(AIRWAY_EVENT_TOKENS_PATH.read_text()) or {}
+    """Per declared airway family, the event tokens naming its event (the profile's ``airway_event_tokens.yaml``)."""
+    document = yaml.safe_load(data_path("airway_event_tokens.yaml").read_text()) or {}
     return {
         str(family): frozenset(str(token).casefold() for token in document.get(kind) or ())
         for family, kind in (document.get("families") or {}).items()
@@ -582,7 +580,7 @@ def _task_evidence(
 
     Returns:
         The evidence :func:`~senselab.audio.workflows.triage.vocabulary.fold_file_verdict` reads. A
-        breath family of ``data/airway_event_requirements.yaml`` is decided on AIRWAY's breathing-
+        breath family of the dataset profile's ``airway_event_requirements.yaml`` is decided on AIRWAY's breathing-
         pattern reading and a cough family on its cough-onset reading; the reading's absent inputs
         then stand for the owner's, and a reading AIRWAY never wrote is itself an absent input.
     """

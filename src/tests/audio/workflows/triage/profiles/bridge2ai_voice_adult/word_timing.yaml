@@ -1,0 +1,12 @@
+# How a recognizer's word span places a word (consensus.located_span). Measured over 1,500 r18c recordings
+# (seed 20261010). Derivation: specs/20261007-task-events-in-background/design.md ("Untimed words").
+version: 2
+point_width_s: 0.32    # median duration of Qwen3-ASR's timed words (n 23,889; p25 0.16, p75 0.48); a point span is read over this window centred on it
+
+# Where the recognizers place a word far apart, the word takes the time that falls on sound (consensus.arbitrate_time,
+# word_arbitration.py); the text is never changed. Derivation: specs/20261012-r37-words-speaker/design.md ("B1").
+arbitration:
+  disagreement_s: 1.0         # located starts further apart than this are a disagreement on where the word is
+  held_voicing_min_s: 1.5     # in a voice family, a voiced run at least this long is the held phonation (voice_phonation.yaml speech_word_max_s)
+  held_voicing_bridge_s: 0.25 # unvoiced gaps up to this long inside a held run are bridged (voice_phonation.yaml break_min_s)
+  voiced_strength_min: 0.45   # periodicity strength at which a phonation-track frame is voiced (voice_phonation.yaml f0.strength_min)

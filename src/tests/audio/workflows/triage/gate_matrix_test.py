@@ -51,6 +51,7 @@ from senselab.audio.workflows.triage.routing_analysis.ruleset import (
     load_ruleset,
 )
 from senselab.audio.workflows.triage.vocabulary import BRANCHES
+from tests.conftest import B2AI_TRIAGE_PROFILE
 
 COUGH_KEY = "yamnet.cough_labels.peak_over_floor_db_max"
 """Where the ``airway.cough`` gate reads its dB from, and the one key a fixture drops to unread it."""
@@ -63,7 +64,7 @@ def ruleset() -> Ruleset:
     Returns:
         The ruleset as ``data/config/default.yaml`` declares it.
     """
-    return load_ruleset(load_triage_config())
+    return load_ruleset(load_triage_config(profile=B2AI_TRIAGE_PROFILE))
 
 
 def _features(family: str, stem: str = "", **overrides: object) -> RecordingFeatures:

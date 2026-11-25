@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import inspect
+import json
 import re
 from dataclasses import fields
 from pathlib import Path
@@ -13,6 +15,7 @@ import senselab.audio.tasks
 from senselab.audio.tasks.phonation import derive_f0_range
 from senselab.audio.workflows.triage import config as config_module
 from senselab.audio.workflows.triage.config import DATA_MAP_PATHS, TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.dataset_profile import deactivate_profile
 from senselab.audio.workflows.triage.nodes.common import (
     CPPS_SCALAR_KEYS,
     F0_RANGE_PARAMETER_NAMES,
@@ -161,6 +164,59 @@ class TestOverrides:
         override.write_text("spans:\n  k_bd: 8.0\n")
         with pytest.raises(ValueError, match="k_bd"):
             load_triage_config(override)
+
+
+class TestDatasetProfileLayer:
+    """A profile's override sits between the packaged file and a run's, and its files enter the hash."""
+
+    @staticmethod
+    def _profile(root: Path, override: str) -> Path:
+        root.mkdir()
+        (root / "override.yaml").write_text(override)
+        (root / "profile.yaml").write_text("name: demo\nversion: '1'\nconfig: override.yaml\n")
+        return root
+
+    def test_without_a_profile_the_hash_is_the_merged_mapping_alone(self, without_triage_profile: None) -> None:
+        """A run with no profile hashes exactly as before profiles existed."""
+        cfg = load_triage_config()
+        expected = hashlib.sha256(json.dumps(cfg.values, sort_keys=True, default=str).encode()).hexdigest()[:16]
+        assert cfg.config_hash == expected
+        assert cfg.profile is None
+
+    def test_the_run_override_wins_over_the_profiles(self, without_triage_profile: None, tmp_path: Path) -> None:
+        """Packaged, then profile, then run: the last layer to name a key decides it."""
+        root = self._profile(tmp_path / "p", "spans:\n  k_db: 7.0\nquality:\n  stoi_floor: 0.6\n")
+        run = tmp_path / "run.yaml"
+        run.write_text("spans:\n  k_db: 9.0\n")
+        try:
+            cfg = load_triage_config(run, profile=root)
+            assert cfg.require("spans.k_db") == 9.0
+            assert cfg.require("quality.stoi_floor") == 0.6
+            assert cfg.profile is not None and cfg.profile.name == "demo"
+        finally:
+            deactivate_profile()
+
+    def test_a_profile_changes_the_hash_even_with_the_same_values(
+        self, without_triage_profile: None, tmp_path: Path
+    ) -> None:
+        """The profile's identity and files are hashed beside the merged mapping."""
+        packaged = load_triage_config()
+        root = self._profile(tmp_path / "p", "{}\n")
+        try:
+            profiled = load_triage_config(profile=root)
+        finally:
+            deactivate_profile()
+        assert profiled.values == packaged.values
+        assert profiled.config_hash != packaged.config_hash
+
+    def test_a_profile_override_obeys_the_same_key_rules(self, without_triage_profile: None, tmp_path: Path) -> None:
+        """A key the packaged file lacks is refused in a profile override too."""
+        root = self._profile(tmp_path / "p", "spans:\n  k_bd: 8.0\n")
+        try:
+            with pytest.raises(ValueError, match="k_bd"):
+                load_triage_config(profile=root)
+        finally:
+            deactivate_profile()
 
 
 class TestOverridesMayExtendADataMap:

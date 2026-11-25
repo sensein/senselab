@@ -6,7 +6,7 @@ decides nothing: every threshold in a detector's grid is scored, and
 ``taxonomy.consolidation_floor`` is marked where it falls rather than adopted.
 
 No grid is written down. Each is derived at catalogue construction from the detector's own
-distribution over the corpus, read from the dated profile under ``data/detector_profile/``. A
+distribution over the corpus, read from the dated profile under the dataset profile's ``detector_profile/``. A
 detector the profile does not cover, or covers as a constant, raises rather than taking a default.
 Two kinds of candidate sit outside the catalogue and carry no grid at all: :data:`STAGED_DETECTORS`
 awaits the sweep that will profile it, and :data:`BRANCH_DETECTORS` is held for the branch that
@@ -27,6 +27,7 @@ from typing import Any, Iterable, Mapping, Sequence
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
 from senselab.audio.workflows.triage.routing_analysis.features import (
     PEAK_OVER_FLOOR_STATISTIC,
     SPAN_CLASSIFIERS,
@@ -82,9 +83,6 @@ CONSENSUS_CLASSIFIERS: frozenset[str] = frozenset(SPAN_CLASSIFIERS.values())
 
 PROFILE_VERSION = "1"
 """Schema version of the detector profile. A reader refuses any other value."""
-
-PROFILE_DIR = Path(__file__).resolve().parent.parent / "data" / "detector_profile"
-"""Where the bundled profiles live, one dated parquet per corpus sweep."""
 
 PROFILE_SUFFIX = ".parquet"
 """What a bundled profile is named with."""
@@ -185,9 +183,9 @@ def _bundled_profile_path() -> Path:
     Raises:
         FileNotFoundError: If the package ships no profile.
     """
-    bundled = sorted(PROFILE_DIR.glob(f"*{PROFILE_SUFFIX}"))
+    bundled = sorted(data_path("detector_profile").glob(f"*{PROFILE_SUFFIX}"))
     if not bundled:
-        raise FileNotFoundError(f"no detector profile in {PROFILE_DIR}")
+        raise FileNotFoundError(f"no detector profile in {data_path('detector_profile')}")
     return bundled[-1]
 
 
@@ -1558,8 +1556,6 @@ _CANDIDATES: tuple[Detector, ...] = tuple(
 
 _check_pins(_CANDIDATES)
 
-DETECTORS: tuple[Detector, ...] = build_catalogue(_CANDIDATES)
-"""Every candidate detector, scored at every threshold of its corpus-derived grid."""
 
 _PITCH_TRAJECTORY: tuple[Detector, ...] = (
     _candidate("glide.phonation_monotonicity", "glide", ("phonation", "monotonicity"), "correlation"),
@@ -1651,5 +1647,29 @@ STAGED_DETECTORS: tuple[Detector, ...] = (_candidate("cough.words_onomatopoeic",
 is absent from :data:`DETECTORS`; :func:`detector_value` reads one like any other. Once a profile
 carries one, :func:`_check_staged` raises until it is moved into the catalogue."""
 
-_check_staged(STAGED_DETECTORS, _CANDIDATES)
 _check_branch_detectors(BRANCH_DETECTORS, _CANDIDATES, STAGED_DETECTORS)
+
+
+@profile_cache
+def detector_catalogue() -> tuple[Detector, ...]:
+    """Every candidate detector, scored at every threshold of its grid.
+
+    The grids come from the detector profile, a distribution over one corpus, which the active dataset profile
+    supplies (``detector_profile``). The catalogue is built on first use rather than at import, so importing
+    triage needs no dataset.
+
+    Returns:
+        The catalogue.
+
+    Raises:
+        DatasetDataMissing: If no active dataset profile supplies a detector profile.
+    """
+    _check_staged(STAGED_DETECTORS, _CANDIDATES)
+    return build_catalogue(_CANDIDATES)
+
+
+def __getattr__(name: str) -> Any:  # noqa: ANN401 -- module attribute protocol
+    """``DETECTORS``, the catalogue, built on first access (:func:`detector_catalogue`)."""
+    if name == "DETECTORS":
+        return detector_catalogue()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

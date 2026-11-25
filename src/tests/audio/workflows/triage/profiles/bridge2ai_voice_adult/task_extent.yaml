@@ -1,0 +1,62 @@
+# Where a task's extent begins and ends, and whether it holds the whole task (task_extent.py).
+# Derivations: specs/20261012-r37-extents/design.md. A switch is on only after its listen stratum was labelled.
+version: 3
+growth:                          # A1: breath and cough extents grow outward from the task cluster
+  enabled: true                  # owner labels, round 2: 9 of 9 grown extents better
+  families: [breath, cough]      # the event kinds that grow
+  k: 2.5                         # UNFITTED: a gap up to k x the cluster's median onset interval keeps growing (one missed cycle, 25% jitter)
+  gap_floor_s: 0.25              # the median onset interval is read as at least this
+  single_event_gap: cluster      # a one-event cluster's gap is its family's clustering gap (task_events.yaml)
+  diarized_turn_min_s: 1.0       # a diarized turn at least this long stops growth, as COHORT's min_run_s
+  cross_speech: true             # owner labels, round 3: 7 ok, 3 better; growth crosses speech where breathing continues, the gap rule stops it
+modulation:                      # A1: envelope-modulation event detector beside the breath type test
+  enabled: true
+  band_hz: [0.1, 1.2]            # the breathing band, as task_events.yaml rhythm.band_hz
+  rate_hz: 10.0                  # the mean band envelope is read at this rate
+  prominence_db: 3.0             # UNFITTED: a breathing-band lobe this prominent is an event
+  margin_db: 6.0                 # the envelope at the lobe's peak stands this over the floor (as inhale.margin_db)
+  min_s: 0.3                     # a lobe's frames over the margin span at least this (as breath_pattern.yaml event_min_s)
+  max_s: 4.0                     # and at most this
+edges:                           # round 2: a breath extent's first and last events run out to their envelope's boundary
+  enabled: true                  # owner labels, round 3: 9 ok, 1 both wrong (no task)
+  margin_db: 3.0                 # UNFITTED: the broadband level over the stationary floor that is still the event
+  bridge_s: 0.1                  # a dip under the margin this short does not end it
+  max_s: 3.0                     # the furthest an edge moves
+trim:                            # A2: the extent ends at the task's own acoustic onset and offset
+  enabled: true                  # owner labels, round 2: voice onset 10 of 10 better, DDK 7 of 10 better
+  voice:
+    onset_voiced_s: 0.2          # phonation onset: the first voiced stretch at least this long
+  ddk:
+    agreed_run_min: 2            # a run of this many agreed non-task words cuts the train (task_content.yaml agreed_run_min)
+    edge_duration_ratio: 2.5     # UNFITTED: an edge event longer than this x the train's median event is not the train
+    kept_share_min: 0.5          # a speech split stands only where its kept piece holds this share of the train's events
+    margin_intervals: 1.0        # a trimmed edge keeps this many of the train's own median onset intervals beyond its last event. Round 3: 7 ok, 1 same, 2 current better
+    exclude_families:            # families whose task word spans the recording: never trimmed
+    - diadochokinesis-buttercup
+    - diadochokinesis-v2-buttercup
+  airway:
+    pad_s: 0.1                   # breath and cough: nothing beyond the events but this (cough_pattern.yaml extent)
+count_in:                        # A3: a voice task's declared count-in is inside its extent
+  enabled: true                  # owner labels, round 2: 10 of 10 better
+  gap_max_s: 3.0                 # the count-in ends at most this before the phonation onset: r36 p99 2.9 s (n=1232); an overlap is taken in. Round 3: 9 of 9 ok
+continuity:                      # A3: an interrupted vowel is spanned by phonation continuity
+  enabled: true                  # owner labels, round 3 (end bounded by tail_s, runs_max): 9 ok, 1 better
+  semitones: 3.0                 # UNFITTED: a further run's median F0 within this of the core's continues the vowel
+  voiced_min_s: 0.1              # a further run holds at least this much voicing
+  gap_max_s: 2.5                 # and lies at most this far from the extent
+  tail_s: 0.1                    # a run continuity takes in ends this long after its last voiced frame
+  runs_max: 1                    # round 2: continuity takes in at most this many further runs a side (the completion burst)
+parts:                           # round 2: a voice task done in several separate phonations is spanned whole
+  enabled: true                  # owner labels, round 3: 7 ok, 2 better, 1 current better
+  hold_min_s: 1.0                # UNFITTED: a further run with this much voicing is a part of the task
+  voiced_fraction_min: 0.5       # and voiced over at least this share
+  gap_max_s: 6.0                 # UNFITTED: parts lie at most this far apart
+stimulus_edges:                  # A4: substituted edge tokens a recogniser read as the stimulus are task speech
+  enabled: true                  # owner labels, round 2: 10 of 10 better
+completeness:                    # A5: extent_complete
+  reviews: false                 # a recording whose extent is not complete goes to review
+  voice_hold_min_s: 0.8          # a voiced run outside a voice extent this long, F0 within continuity.semitones, is the task (voice_phonation.yaml segment_min_s)
+  onset_tolerance_s: 0.3         # a voice extent starting this much before its phonation onset (no count-in) is too wide
+atypical:                        # E2: an attempted task whose events fall outside its family's corpus range
+  cough_event_s_max: 1.877        # the median cough event longer than this: r36 corpus p97.5 (n=2643)
+  ddk_rate_hz: [2.235, 7.692]    # the syllable rate outside this range: r36 corpus p2.5-p97.5 (n=7815)

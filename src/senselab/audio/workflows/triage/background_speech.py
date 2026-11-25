@@ -18,7 +18,6 @@ and ``specs/20261007-task-events-in-background/design.md``.
 
 from __future__ import annotations
 
-import functools
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,6 +27,7 @@ import numpy as np
 import yaml
 
 from senselab.audio.tasks.classification.label_scores import label_scores
+from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
 from senselab.audio.workflows.triage.nodes.common import find_measurement
 from senselab.utils.prov_store import ProvStore
 
@@ -94,14 +94,14 @@ class BackgroundSpeechParameters:
     thinned_db: tuple[float, float]
 
 
-@functools.cache
+@profile_cache
 def background_speech_parameters() -> BackgroundSpeechParameters:
     """The parameters of ``data/background_speech.yaml``.
 
     Returns:
         The parameters.
     """
-    held = dict(yaml.safe_load(BACKGROUND_SPEECH_PATH.read_text()) or {})
+    held = dict(yaml.safe_load(data_path("background_speech.yaml").read_text()) or {})
     labels = tuple(str(label) for label in held.pop("speech_labels"))
     band, f0, thinned = held.pop("harmonic_band_hz"), held.pop("f0_range_hz"), held.pop("thinned_db")
     return BackgroundSpeechParameters(

@@ -1,0 +1,63 @@
+# The Bridge2AI-Voice adult settings, merged over senselab's packaged triage config. Every value is the one triage
+# used before profiles existed (senselab alpha 98c8048b6). Some equal senselab's own default and are recorded
+# here so this profile's results do not move if that default changes.
+windows:
+  yamnet:
+    default_threshold: 0.2   # owner-directed, 2026-09-10 (7a5590250); no ROC over this corpus
+    label_top_k: 4           # owner-directed, 2026-09-10
+  hear:
+    default_threshold: 0.2   # as yamnet
+    label_top_k: 4
+stimulus:
+  residue:
+    cue_families: [productive-vocabulary]
+  task_lexicons: [cinderella-story, animal-fluency, random-item-generation, random-item-generation-v2]
+airway:
+  route_by_task_index:
+    1: nose
+    2: mouth
+    3: nose
+    4: mouth
+diarization:
+  streams: [enhanced]        # narrowed 2026-09-20 after the corpus run
+speech:
+  target_match_cosine: 0.231 # midpoint of same-speaker p5 and between-speaker p95 at 1.0 s windows (config-derivations.md)
+  secondary_exclusive_min_s: 1.0
+verdict:
+  llm_reset_redactions: true
+  condition_categories: [CONDITION]
+  person_name_review_flags: true
+  trim_protected_categories: [PERSON, NAME, LOCATION, LOC]
+  cohort_conditions: bridge2ai_voice_adult_2026-09-04
+  llm_second_speaker_flags: true
+  llm_contradiction_flags: true
+  llm_instructions_spoken_flags: true
+  uncomputed_reading_flags: true
+  second_opinion_disagreement_flags: true
+  second_opinion_confident_yes: 0.8
+  second_opinion_confident_no: 0.2
+  hint_mismatch_exempt_families: [respiration-and-cough-breath, respiration-and-cough-v2-breath]
+  model_speaker_families: [harvard-sentences-list, cape-v-sentences, cape-v-sentences-v2]
+  gates:
+    by_family:
+      rainbow-passage:
+        content_omission_fraction_max: 0.1
+      caterpillar-passage:
+        content_omission_fraction_max: 0.1
+      word-color-stroop:
+        content_omission_fraction_max: 0.2
+taxonomy:
+  consolidation_floor: 0.2
+  ruleset:
+    gates:
+      speech.lexical: {threshold: 2}
+      speech.transcript_agreement: {threshold: 3}
+      voice.sustained: {threshold: 3.0}
+      voice.glide: {threshold: 0.05}
+      voice.chant: {threshold: 0.02}
+      airway.breath: {threshold: 0.10}
+      airway.cough: {threshold: 50.0}
+      airway.bracketed_event: {threshold: 1}
+      airway.ppg_silent_fraction: {threshold: 0.757}
+pii:
+  name_words_max: 1

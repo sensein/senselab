@@ -12,7 +12,6 @@ Every parameter is in ``data/breath_pattern.yaml``. See
 
 from __future__ import annotations
 
-import functools
 import json
 import unicodedata
 from dataclasses import dataclass, field, replace
@@ -25,6 +24,7 @@ from scipy.signal import find_peaks
 
 from senselab.audio.tasks.classification.label_scores import label_scores
 from senselab.audio.workflows.triage.background_speech import background_speech_parameters
+from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
 from senselab.audio.workflows.triage.nodes.common import find_measurement, lexical_words, live_entities, word_hull
 from senselab.audio.workflows.triage.residue import is_non_lexical
 from senselab.audio.workflows.triage.task_events import (
@@ -127,14 +127,14 @@ class ModulationParameters:
     min_duration_s: float
 
 
-@functools.cache
+@profile_cache
 def modulation_parameters() -> ModulationParameters:
     """The ``modulation`` parameters of ``data/breath_pattern.yaml``.
 
     Returns:
         The parameters.
     """
-    held = (yaml.safe_load(BREATH_PATTERN_PATH.read_text()) or {})["modulation"]
+    held = (yaml.safe_load(data_path("breath_pattern.yaml").read_text()) or {})["modulation"]
 
     def pair(key: str) -> tuple[float, float]:
         low, high = held[key]
@@ -152,14 +152,14 @@ def modulation_parameters() -> ModulationParameters:
     )
 
 
-@functools.cache
+@profile_cache
 def breath_pattern_parameters() -> BreathPatternParameters:
     """The parameters of ``data/breath_pattern.yaml``.
 
     Returns:
         The parameters.
     """
-    held = (yaml.safe_load(BREATH_PATTERN_PATH.read_text()) or {})["measure"]
+    held = (yaml.safe_load(data_path("breath_pattern.yaml").read_text()) or {})["measure"]
 
     def pair(key: str) -> tuple[float, float]:
         low, high = held[key]
@@ -301,14 +301,14 @@ class TrainParameters:
     edge_min_s: float
 
 
-@functools.cache
+@profile_cache
 def train_parameters() -> TrainParameters:
     """The ``train`` parameters of ``data/breath_pattern.yaml``.
 
     Returns:
         The parameters.
     """
-    held = (yaml.safe_load(BREATH_PATTERN_PATH.read_text()) or {})["train"]
+    held = (yaml.safe_load(data_path("breath_pattern.yaml").read_text()) or {})["train"]
     ints = {"tonal_halfwidth_bins", "speech_words_min"}
     values: dict[str, Any] = {}
     for name, value in held.items():
@@ -343,14 +343,14 @@ class ReviewParameters:
     veto_reviews: tuple[str, ...] = ()
 
 
-@functools.cache
+@profile_cache
 def review_parameters() -> ReviewParameters:
     """The ``review`` parameters of ``data/breath_pattern.yaml``.
 
     Returns:
         The parameters.
     """
-    held = (yaml.safe_load(BREATH_PATTERN_PATH.read_text()) or {})["review"]
+    held = (yaml.safe_load(data_path("breath_pattern.yaml").read_text()) or {})["review"]
     return ReviewParameters(
         min_phases=int(held["min_phases"]),
         cycle_cv_min=float(held["cycle_cv_min"]),
@@ -510,14 +510,14 @@ class VetoParameters:
     noise_labels: tuple[str, ...]
 
 
-@functools.cache
+@profile_cache
 def veto_parameters() -> VetoParameters:
     """The ``veto`` parameters of ``data/breath_pattern.yaml``.
 
     Returns:
         The parameters.
     """
-    held = (yaml.safe_load(BREATH_PATTERN_PATH.read_text()) or {})["veto"]
+    held = (yaml.safe_load(data_path("breath_pattern.yaml").read_text()) or {})["veto"]
     return VetoParameters(
         speech_words_min=int(held["speech_words_min"]),
         active_fraction_min=float(held["active_fraction_min"]),

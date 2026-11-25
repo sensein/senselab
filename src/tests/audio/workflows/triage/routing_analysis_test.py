@@ -14,6 +14,7 @@ import pytest
 from senselab.audio.tasks.features_extraction.ppg import PHONEME_LABELS
 from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.consensus import vocabulary_key
+from senselab.audio.workflows.triage.dataset_profile import data_path
 from senselab.audio.workflows.triage.label_membership import LabelMembership
 from senselab.audio.workflows.triage.routing_analysis.detectors import (
     BRANCH_DETECTORS,
@@ -21,10 +22,8 @@ from senselab.audio.workflows.triage.routing_analysis.detectors import (
     CONSOLIDATION_FLOOR,
     COUNT_UNITS,
     DENSE_INTEGER_SPAN,
-    DETECTORS,
     GATE_CLOSED,
     PINNED_THRESHOLDS,
-    PROFILE_DIR,
     PROFILE_NAME_COLUMN,
     PROFILE_SUFFIX,
     QUANTILE_LADDER,
@@ -33,6 +32,7 @@ from senselab.audio.workflows.triage.routing_analysis.detectors import (
     _check_branch_detectors,
     _check_staged,
     build_catalogue,
+    detector_catalogue,
     detector_value,
     evidence_blocks,
     load_detector_profile,
@@ -497,7 +497,7 @@ def test_score_detector_sweeps_and_marks_the_consolidation_floor(tmp_path: Path)
     """Every threshold gets its own 2x2, and 0.2 is marked as the configured floor."""
     records = list(_features(tmp_path))
     reference = next(r for r in REFERENCE_STANDARDS if r.name == "agreed_asr")
-    detector = next(d for d in DETECTORS if d.name == "speech.yamnet_peak.plain")
+    detector = next(d for d in detector_catalogue() if d.name == "speech.yamnet_peak.plain")
     scored = score_detector(records, detector, reference)
     assert scored["n_scored"] == 2
     assert scored["n_reference_positive"] == 1
@@ -514,7 +514,7 @@ def test_score_detector_excludes_recordings_with_no_evidence(tmp_path: Path) -> 
     """A detector reading a stream neither recording carries scores nothing."""
     records = list(_features(tmp_path))
     reference = next(r for r in REFERENCE_STANDARDS if r.name == "agreed_asr")
-    detector = next(d for d in DETECTORS if d.name == "speech.yamnet_peak.residual")
+    detector = next(d for d in detector_catalogue() if d.name == "speech.yamnet_peak.residual")
     scored = score_detector(records, detector, reference)
     assert scored["n_scored"] == 0
     assert scored["n_unavailable"] == 2
@@ -875,7 +875,7 @@ def test_the_set_conditioned_cough_detectors_read_the_union(tmp_path: Path) -> N
     expected = {"max": 40.0, "p75": 37.5, "p90": 39.0}
     for statistic, value in expected.items():
         name = f"cough.yamnet_cough_set_span_peak_over_floor_db_{statistic}"
-        detector = next(candidate for candidate in DETECTORS if candidate.name == name)
+        detector = next(candidate for candidate in detector_catalogue() if candidate.name == name)
         assert detector_value(record, detector) == pytest.approx(value)
         assert detector_value(silent, detector) is None
 
@@ -889,7 +889,7 @@ def test_label_conditioned_detectors_read_the_cough_spans(tmp_path: Path) -> Non
         "cough.yamnet_cough_span_peak_over_floor_db_p75",
         "cough.yamnet_cough_span_peak_over_floor_db_p90",
     )
-    detectors = {name: next(d for d in DETECTORS if d.name == name) for name in names}
+    detectors = {name: next(d for d in detector_catalogue() if d.name == name) for name in names}
     assert detector_value(record, detectors[names[0]]) == pytest.approx(40.0)
     assert detector_value(record, detectors[names[1]]) == pytest.approx(37.5)
     assert detector_value(record, detectors[names[2]]) == pytest.approx(39.0)
@@ -1359,7 +1359,7 @@ class TestBranchHeldAndStagedAreDifferentStates:
         """A branch detector is read inside a branch; it is not a gate into one."""
         ruleset = load_ruleset(load_triage_config())
         gating = {name for names in ruleset.branch_gates.values() for name in names}
-        catalogue = {detector.name for detector in DETECTORS}
+        catalogue = {detector.name for detector in detector_catalogue()}
         for detector in BRANCH_DETECTORS["VOICE"]:
             assert detector.name not in catalogue
             assert detector.name not in gating
@@ -1376,34 +1376,34 @@ class TestBranchHeldAndStagedAreDifferentStates:
 
     def test_a_held_detector_may_not_repeat_a_catalogue_name(self) -> None:
         """One id, one meaning: a name that both gates and is held would be read two ways."""
-        held = Detector(DETECTORS[0].name, "glide", ("phonation", "monotonicity"), "correlation", ())
+        held = Detector(detector_catalogue()[0].name, "glide", ("phonation", "monotonicity"), "correlation", ())
         with pytest.raises(ValueError, match="already in the catalogue"):
-            _check_branch_detectors({"VOICE": (held,)}, DETECTORS, STAGED_DETECTORS)
+            _check_branch_detectors({"VOICE": (held,)}, detector_catalogue(), STAGED_DETECTORS)
 
     def test_a_held_detector_may_not_also_be_staged(self) -> None:
         """A detector awaiting a profile is not yet anything; it cannot be held at the same time."""
         held = Detector(STAGED_DETECTORS[0].name, "cough", ("onomatopoeic",), "tokens", ())
         with pytest.raises(ValueError, match="also staged for the catalogue"):
-            _check_branch_detectors({"VOICE": (held,)}, DETECTORS, STAGED_DETECTORS)
+            _check_branch_detectors({"VOICE": (held,)}, detector_catalogue(), STAGED_DETECTORS)
 
     def test_a_held_detector_may_not_carry_a_grid(self) -> None:
         """A grid is what a router sweeps; a branch reads the number the detector returns."""
         held = Detector("glide.invented", "glide", ("phonation", "monotonicity"), "correlation", (0.5,))
         with pytest.raises(ValueError, match="carry a threshold grid"):
-            _check_branch_detectors({"VOICE": (held,)}, DETECTORS, STAGED_DETECTORS)
+            _check_branch_detectors({"VOICE": (held,)}, detector_catalogue(), STAGED_DETECTORS)
 
     def test_a_held_detector_must_name_a_branch_the_graph_runs(self) -> None:
         """Held for a branch means held for one of the four; anything else has no reader."""
         held = Detector("glide.invented", "glide", ("phonation", "monotonicity"), "correlation", ())
         assert "GLIDE" not in BRANCHES
         with pytest.raises(ValueError, match="branches the graph does not run"):
-            _check_branch_detectors({"GLIDE": (held,)}, DETECTORS, STAGED_DETECTORS)
+            _check_branch_detectors({"GLIDE": (held,)}, detector_catalogue(), STAGED_DETECTORS)
 
     def test_one_detector_may_not_be_held_for_two_branches(self) -> None:
         """Two readers of one id is two branches disagreeing about what it measured."""
         held = Detector("glide.invented", "glide", ("phonation", "monotonicity"), "correlation", ())
         with pytest.raises(ValueError, match="more than one branch"):
-            _check_branch_detectors({"VOICE": (held,), "AIRWAY": (held,)}, DETECTORS, STAGED_DETECTORS)
+            _check_branch_detectors({"VOICE": (held,), "AIRWAY": (held,)}, detector_catalogue(), STAGED_DETECTORS)
 
 
 NEW_DETECTOR_NAMES: tuple[str, ...] = (
@@ -1436,7 +1436,7 @@ def test_each_new_detector_reads_its_derivative_or_nothing(tmp_path: Path, name:
     """The value is there when the derivative is, and None — not zero — when it is not."""
     record = _derivatives(tmp_path, _repeated([0, 1], 10))
     _, silent = _features(tmp_path)
-    detector = next(candidate for candidate in DETECTORS if candidate.name == name)
+    detector = next(candidate for candidate in detector_catalogue() if candidate.name == name)
     assert detector_value(record, detector) is not None
     assert detector_value(silent, detector) is None
 
@@ -1444,7 +1444,9 @@ def test_each_new_detector_reads_its_derivative_or_nothing(tmp_path: Path, name:
 def test_the_normalised_pitch_spread_is_the_ratio_of_the_two_praat_scalars(tmp_path: Path) -> None:
     """Absolute spread scales with register, so the sweep is offered the spread over the mean too."""
     record = _derivatives(tmp_path, _repeated([0, 1], 10))
-    detector = next(candidate for candidate in DETECTORS if candidate.name == "glide.praat_f0_relative_spread")
+    detector = next(
+        candidate for candidate in detector_catalogue() if candidate.name == "glide.praat_f0_relative_spread"
+    )
     assert detector_value(record, detector) == pytest.approx(42.0 / 210.0)
 
 
@@ -1478,7 +1480,9 @@ def _profiled(name: str) -> dict[str, Any]:
 def test_the_repetition_lag_fires_above_its_threshold_over_a_grid_that_holds_its_range(tmp_path: Path) -> None:
     """A syllable train repeats at a longer segment lag than a sentence does, so it fires above."""
     record = _derivatives(tmp_path, _repeated([0, 1, 2], 8))
-    detector = next(candidate for candidate in DETECTORS if candidate.name == "ddk.ppg_repetition_lag_segments")
+    detector = next(
+        candidate for candidate in detector_catalogue() if candidate.name == "ddk.ppg_repetition_lag_segments"
+    )
     value = detector_value(record, detector)
     assert value is not None
     assert value == pytest.approx(3.0)
@@ -1494,10 +1498,10 @@ def test_the_phonation_ratio_grid_reaches_the_bound_its_corpus_piles_against(tmp
     record = _derivatives(tmp_path, _repeated([0, 1], 10))
     saturated = replace(record, praat={**record.praat, "phonation_ratio": 0.97})
     for name in ("airway.praat_phonation_ratio", "glide.praat_phonation_ratio", "voice.praat_phonation_ratio"):
-        detector = next(candidate for candidate in DETECTORS if candidate.name == name)
+        detector = next(candidate for candidate in detector_catalogue() if candidate.name == name)
         assert max(detector.thresholds) == pytest.approx(1.0)
         assert _profiled(name)["quantiles"]["0.5"] == pytest.approx(1.0)
-    detector = next(candidate for candidate in DETECTORS if candidate.name == "airway.praat_phonation_ratio")
+    detector = next(candidate for candidate in detector_catalogue() if candidate.name == "airway.praat_phonation_ratio")
     value = detector_value(saturated, detector)
     assert value is not None
     assert value == pytest.approx(0.97)
@@ -1518,7 +1522,7 @@ def test_the_syllable_repetition_detectors_have_a_reference_standard_to_be_score
 def test_the_breath_detectors_fire_below_their_threshold(tmp_path: Path) -> None:
     """A breath is unvoiced, so it is a low phonation ratio and a low harmonics-to-noise ratio."""
     for name in ("airway.praat_phonation_ratio", "airway.praat_mean_hnr_db"):
-        assert next(candidate for candidate in DETECTORS if candidate.name == name).polarity == "below"
+        assert next(candidate for candidate in detector_catalogue() if candidate.name == name).polarity == "below"
 
 
 def _retitled(record: RecordingFeatures, family: str) -> RecordingFeatures:
@@ -1711,7 +1715,7 @@ class TestFamiliesExcludedFromAReferenceByConstruction:
     def test_exactly_the_named_families_leave_the_population(self, tmp_path: Path) -> None:
         """Both diadochokinesis recordings go; the held vowels, which are not named, stay."""
         reference = next(r for r in REFERENCE_STANDARDS if r.name == "declared_lexical_speech")
-        detector = next(d for d in DETECTORS if d.name == "speech.words_lexical")
+        detector = next(d for d in detector_catalogue() if d.name == "speech.words_lexical")
         curve = detector_recall_at_budgets(self._mixed(tmp_path), detector, reference)
         assert curve.n_scored == 3
         assert curve.n_positive == 1
@@ -1720,7 +1724,7 @@ class TestFamiliesExcludedFromAReferenceByConstruction:
     def test_the_sweep_reports_both_specificities_side_by_side(self, tmp_path: Path) -> None:
         """The plain table charges the diadochokinesis recordings; the corrected one does not."""
         reference = next(r for r in REFERENCE_STANDARDS if r.name == "declared_lexical_speech")
-        detector = next(d for d in DETECTORS if d.name == "speech.words_lexical")
+        detector = next(d for d in detector_catalogue() if d.name == "speech.words_lexical")
         scored = score_detector(self._mixed(tmp_path), detector, reference)
         assert scored["excluded_by_construction"] == "the syllable-repetition families"
         row = next(row for row in scored["rows"] if row["threshold"] == 1)
@@ -1734,7 +1738,7 @@ class TestFamiliesExcludedFromAReferenceByConstruction:
         """Only a standard that declares an exclusion reports a second table."""
         records = list(_features(tmp_path))
         reference = next(r for r in REFERENCE_STANDARDS if r.name == "declared_speech")
-        detector = next(d for d in DETECTORS if d.name == "speech.words_lexical")
+        detector = next(d for d in detector_catalogue() if d.name == "speech.words_lexical")
         scored = score_detector(records, detector, reference)
         assert scored["excluded_by_construction"] is None
         assert all("excluding_construction" not in row for row in scored["rows"])
@@ -1745,7 +1749,7 @@ class TestDerivedGrids:
 
     def test_every_grid_reaches_the_profiled_extreme_on_its_firing_side(self) -> None:
         """A value past the last threshold is a block no cut divides, which is the defect."""
-        for detector in DETECTORS:
+        for detector in detector_catalogue():
             entry = _profiled(detector.name)
             grid = sorted(detector.thresholds)
             if detector.polarity == "above":
@@ -1756,7 +1760,7 @@ class TestDerivedGrids:
     def test_every_threshold_is_a_measured_value_or_a_declared_cut(self) -> None:
         """Nothing is interpolated: a threshold is a quantile, an extreme, an integer, or a pin."""
         declared = {CONSOLIDATION_FLOOR} | {value for values in PINNED_THRESHOLDS.values() for value in values}
-        for detector in DETECTORS:
+        for detector in detector_catalogue():
             if detector.reader[0] == "gated":
                 continue
             entry = _profiled(detector.name)
@@ -1769,8 +1773,8 @@ class TestDerivedGrids:
 
     def test_a_gated_grid_carries_its_primary_feature_s_ladder(self) -> None:
         """A gate selects which recordings are scored, not what is read, so the grid is the same."""
-        ungated = {detector.reader: detector.name for detector in DETECTORS if detector.reader[0] != "gated"}
-        gated = [detector for detector in DETECTORS if detector.reader[0] == "gated"]
+        ungated = {detector.reader: detector.name for detector in detector_catalogue() if detector.reader[0] != "gated"}
+        gated = [detector for detector in detector_catalogue() if detector.reader[0] == "gated"]
         assert gated
         for detector in gated:
             primary = ungated.get(detector.reader[1])
@@ -1782,7 +1786,7 @@ class TestDerivedGrids:
 
     def test_no_grid_carries_the_closed_gate_sentinel(self) -> None:
         """GATE_CLOSED is what a gate wrote, not what the feature read; a cut there means nothing."""
-        for detector in DETECTORS:
+        for detector in detector_catalogue():
             assert GATE_CLOSED not in detector.thresholds, detector.name
 
     def test_a_detector_the_profile_does_not_cover_raises_at_construction(self) -> None:
@@ -1794,7 +1798,7 @@ class TestDerivedGrids:
     def test_a_staged_detector_is_declared_without_a_grid_and_stays_out_of_the_catalogue(self) -> None:
         """No profile has measured it, so it has no grid and is scored at no threshold."""
         assert STAGED_DETECTORS
-        catalogue = {detector.name for detector in DETECTORS}
+        catalogue = {detector.name for detector in detector_catalogue()}
         for detector in STAGED_DETECTORS:
             assert detector.name not in catalogue
             assert detector.thresholds == ()
@@ -1810,9 +1814,9 @@ class TestDerivedGrids:
 
     def test_a_staged_detector_may_not_repeat_a_catalogue_name(self) -> None:
         """One id, one grid: a name in both places would be scored twice and differently."""
-        staged = Detector(DETECTORS[0].name, "speech", ("onomatopoeic",), "tokens", ())
+        staged = Detector(detector_catalogue()[0].name, "speech", ("onomatopoeic",), "tokens", ())
         with pytest.raises(ValueError, match="already in the catalogue"):
-            _check_staged([staged], DETECTORS)
+            _check_staged([staged], detector_catalogue())
 
     def test_a_constant_detector_raises_at_construction(self) -> None:
         """The consensus AST peaks were constant at zero; nothing may read one and score it."""
@@ -1826,10 +1830,10 @@ class TestDerivedGrids:
         """AST never runs per span, so the consensus stream can never carry an AST peak."""
         assert "ast" not in CONSENSUS_CLASSIFIERS
         gone = {"speech.ast_peak.consensus", "airway.ast_peak.consensus", "voice.ast_peak.consensus"}
-        assert gone & {detector.name for detector in DETECTORS} == set()
+        assert gone & {detector.name for detector in detector_catalogue()} == set()
         assert all(
             detector.reader[:3] != ("peak", "consensus", "ast")
-            for detector in DETECTORS
+            for detector in detector_catalogue()
             if detector.reader[0] == "peak"
         )
 
@@ -1837,7 +1841,7 @@ class TestDerivedGrids:
         """Zero is a property of the comparison, and no quantile of this corpus lands on it."""
         assert PINNED_THRESHOLDS
         for name, pinned in PINNED_THRESHOLDS.items():
-            detector = next(candidate for candidate in DETECTORS if candidate.name == name)
+            detector = next(candidate for candidate in detector_catalogue() if candidate.name == name)
             entry = _profiled(name)
             for value in pinned:
                 assert value in detector.thresholds, name
@@ -1845,19 +1849,21 @@ class TestDerivedGrids:
 
     def test_an_integer_valued_feature_gets_its_integers(self) -> None:
         """Quantiles of a small count collide; a token count wants one threshold per token."""
-        detector = next(candidate for candidate in DETECTORS if candidate.name == "airway.bracketed_throatclearing")
+        detector = next(
+            candidate for candidate in detector_catalogue() if candidate.name == "airway.bracketed_throatclearing"
+        )
         assert sorted(detector.thresholds) == [0.0, 1.0, 2.0, 3.0, 4.0]
-        words = next(candidate for candidate in DETECTORS if candidate.name == "speech.words_lexical")
+        words = next(candidate for candidate in detector_catalogue() if candidate.name == "speech.words_lexical")
         assert {float(count) for count in range(0, DENSE_INTEGER_SPAN + 1)} <= set(words.thresholds)
         assert max(words.thresholds) == _profiled("speech.words_lexical")["max"]
-        for detector in DETECTORS:
+        for detector in detector_catalogue():
             if detector.unit in COUNT_UNITS:
                 assert all(float(value).is_integer() for value in detector.thresholds), detector.name
 
     def test_no_ungated_grid_carries_a_threshold_the_feature_never_reaches(self) -> None:
         """A cut outside the data is a sweep row that fires on nothing, or on everything twice."""
         declared = {CONSOLIDATION_FLOOR} | {value for values in PINNED_THRESHOLDS.values() for value in values}
-        for detector in DETECTORS:
+        for detector in detector_catalogue():
             if detector.reader[0] == "gated":
                 continue
             entry = _profiled(detector.name)
@@ -1870,7 +1876,11 @@ class TestDerivedGrids:
 
     def test_a_count_grid_starts_at_the_smallest_count_the_corpus_holds(self) -> None:
         """The integer union ran from zero regardless, so a feature reaching 1 swept a dead row."""
-        counts = [detector for detector in DETECTORS if detector.unit in COUNT_UNITS and detector.reader[0] != "gated"]
+        counts = [
+            detector
+            for detector in detector_catalogue()
+            if detector.unit in COUNT_UNITS and detector.reader[0] != "gated"
+        ]
         assert counts
         for detector in counts:
             entry = _profiled(detector.name)
@@ -1879,23 +1889,24 @@ class TestDerivedGrids:
 
     def test_every_grid_is_ascending_and_distinct(self) -> None:
         """A repeated threshold is a duplicated row in the sweep, and a cost with no information."""
-        for detector in DETECTORS:
+        for detector in detector_catalogue():
             grid = list(detector.thresholds)
             assert grid == sorted(set(grid)), detector.name
             assert len(grid) >= 2, detector.name
 
     def test_the_configured_consolidation_floor_is_markable_on_every_score_grid(self) -> None:
         """The report marks where taxonomy.consolidation_floor falls; it must be a point to mark."""
-        scores = [detector for detector in DETECTORS if detector.unit == "score"]
+        scores = [detector for detector in detector_catalogue() if detector.unit == "score"]
         assert scores
         for detector in scores:
             assert CONSOLIDATION_FLOOR in detector.thresholds, detector.name
 
     def test_the_profile_ships_as_one_parquet_table(self) -> None:
-        """It is 175 rows of quantiles, and it is read at import to build every grid."""
-        bundled = sorted(PROFILE_DIR.glob(f"*{PROFILE_SUFFIX}"))
-        assert bundled, PROFILE_DIR
-        assert not list(PROFILE_DIR.glob("*.json"))
+        """It is 175 rows of quantiles, read on first use to build every grid, from the dataset profile."""
+        profile_dir = data_path("detector_profile")
+        bundled = sorted(profile_dir.glob(f"*{PROFILE_SUFFIX}"))
+        assert bundled, profile_dir
+        assert not list(profile_dir.glob("*.json"))
         table = pq.read_table(bundled[-1])
         assert table.num_rows == len(load_detector_profile()["detectors"])
         assert PROFILE_NAME_COLUMN in table.schema.names
