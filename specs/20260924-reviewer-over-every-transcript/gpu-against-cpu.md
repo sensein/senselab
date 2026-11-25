@@ -42,17 +42,17 @@ This is the number that decides it, and it is why CPU looked competitive. Read f
 |---|---|---|---:|
 | `ou_bcs_low` | `a100=32, h100=32, gpu=64` | `cpu=1792` | 256 |
 | `ou_bcs_normal` | `a100=8, h100=8, gpu=16` | `cpu=448` | 256 |
-| `pi_satra` | `a100=4, h100=2, gpu=6` (GrpTRES) | `cpu=192` | 256 |
+| `${CPU_PARTITION}` | `a100=4, h100=2, gpu=6` (GrpTRES) | `cpu=192` | 256 |
 | `mit_preemptable` | `gpu=4` | `cpu=1024` | 448 |
 | `mit_normal` | — | `cpu=96` | 448 |
 
-The partitions **share nodes** — `ou_bcs_normal ⊂ ou_bcs_low`, `pi_satra` is two of those nodes, and
+The partitions **share nodes** — `ou_bcs_normal ⊂ ou_bcs_low`, `${CPU_PARTITION}` is two of those nodes, and
 all are also in `mit_preemptable` — but the caps are per-QOS and therefore add.
 
 **GPU arm**, one card and 8 cores per task: the cap is `64 + 16 + 6 + 4 = 90` concurrent cards. The
 cap is not the constraint; free cards are. Snapshot 2026-09-24 21:00 EDT, unallocated on usable
 nodes: `ou_bcs_low` 13 a100 / 0 h100, `ou_bcs_normal` 6 a100 / 0 h100 (a subset of those 13),
-`pi_satra` 0, `mit_preemptable` 20 a100 / 16 h100 but capped at 4. **Obtainable now ≈ 17.**
+`${CPU_PARTITION}` 0, `mit_preemptable` 20 a100 / 16 h100 but capped at 4. **Obtainable now ≈ 17.**
 
 **CPU arm**, 32 cores per task: `1792/32 + 1024/32 + 448/32 + 192/32 + 96/32 = 56 + 32 + 14 + 6 + 3
 = 111` concurrent workers. Free cores at the same moment were 2,542 / 18,535 / 1,906 / 112, so the
@@ -96,7 +96,7 @@ counter and reads 0 on CPU.
 ## The caveat that applies to both arms
 
 **The machine is not idle.** At submission the user held 42 running CPU-only array tasks across
-`pi_satra`, `ou_bcs_normal` and `mit_preemptable`, and the `triage-r4-*` arrays were actively
+`${CPU_PARTITION}`, `ou_bcs_normal` and `mit_preemptable`, and the `triage-r4-*` arrays were actively
 churning. Timings taken under that load are upper bounds, not clean measurements. The *ratio*
 between the arms is the more robust quantity, because both arms contend with the same background —
 but the CPU arm contends for the resource the background is consuming, and the GPU arm does not, so

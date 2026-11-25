@@ -24,7 +24,7 @@ This document reports and proposes. **Nothing in `src/` is changed by it.**
 | graph | the full triage DAG through REPORT, CPU, one recording per run directory |
 | commit | **`f2729d7cc8d79bd93266560c397365f7f17985c1`**, pinned |
 | config | `senselab-triage/default` v1, hash `23c7df85d999d771`, no override |
-| where | ORCD `pi_satra`, 24-way array, `sbatch` |
+| where | ORCD `${CPU_PARTITION}`, 24-way array, `sbatch` |
 | probe | `voice-flag-grounds-census.py` and `voice-flag-grounds-tables.py`, beside this file |
 
 `voice.py`, `vocabulary.py`, `verdict.py`, `routing.py` and the packaged config are byte-identical

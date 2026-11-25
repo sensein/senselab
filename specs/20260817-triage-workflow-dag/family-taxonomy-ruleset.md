@@ -249,7 +249,7 @@ Traced by reading each selecting sweep, not by reading this document's own table
 
 The sources are `specs/20260910-taxonomy-routing-evidence/measurements.md` and its `sweeps.json`,
 `specs/20260911-praat-ppg-detectors/design.md`, and the sweep tables under
-`/orcd/scratch/bcs/002/satra/routing_scratch/{full_out,deriv_out,glide_out}/summary.md`.
+`${ORCD_GROUP_SCRATCH}/routing_scratch/{full_out,deriv_out,glide_out}/summary.md`.
 
 **Two entries could not be traced, and are reported as untraced rather than guessed.**
 `ddk.lexical_repetition >= 3` had no sweep anywhere, which this document already states, and it is
@@ -285,7 +285,7 @@ across. The conditioned feature has been swept once, on 2026-09-12, against
 `declared_cough_vs_breath` — scoped again, over 4,793 recordings, the feature absent on 8,224 of the
 12,741 airway recordings. Its max-Youden point there is 49.93 dB at J 0.7815, so the shipped 50.0
 sits essentially on a scoped optimum and has still never been scored outside the airway families.
-Sources: `/orcd/scratch/bcs/002/satra/routing_scratch/deriv_out/summary.md:2555` and `:4060`, and
+Sources: `${ORCD_GROUP_SCRATCH}/routing_scratch/deriv_out/summary.md:2555` and `:4060`, and
 `…/glide_out/summary.md:5839`.
 
 **Owed: a re-scoring of `airway.cough` against the full population**, which needs a standard that
@@ -304,7 +304,7 @@ same four types the shipped gate resolves out of `taxonomy.airway_bracket_tokens
 2026-09-12 against `declared_airway` over the whole corpus, off the extracted `bracketed_types`
 counts rather than the capped transcript. At 1 token: tp 9,920, fp 2,000, tn 47,509, fn 3,089 —
 sens 0.7625, spec 0.9596, **J 0.7221**, the max-Youden point of its grid. Source:
-`/orcd/scratch/bcs/002/satra/routing_scratch/glide_out/summary.md:6555`.
+`${ORCD_GROUP_SCRATCH}/routing_scratch/glide_out/summary.md:6555`.
 
 The scoped estimate **holds**, marginally better than the estimate. That is the third outcome and the
 reason the rule is about method rather than about outcomes: the scoped figure was not evidence either
@@ -333,10 +333,10 @@ why "A glide is a trajectory, and nothing could read one" below had to go lookin
 row is the question the gate actually answers, and there the detector is **better** than the 0.75
 this document credits it with. `voice.glide` is under-reported, not over-reported, and its 0.75 is a
 `glide`-kind figure standing in for a VOICE gate. Source:
-`/orcd/scratch/bcs/002/satra/routing_scratch/deriv_out/summary.md:2156`, `:2252` and `:2276`.
+`${ORCD_GROUP_SCRATCH}/routing_scratch/deriv_out/summary.md:2156`, `:2252` and `:2276`.
 
 **Measured outside the glide families, 2026-09-15**, over the 16-shard feature shard at
-`/orcd/scratch/bcs/002/satra/gatematrix_20260915/evidence/features` (62,547 recordings; shard schemas
+`${ORCD_GROUP_SCRATCH}/gatematrix_20260915/evidence/features` (62,547 recordings; shard schemas
 differ, because a label column exists only where that label occurred, so the column lists must be
 intersected per shard):
 

@@ -621,7 +621,7 @@ def build_wheel(
 
     venv = work_dir / "venv"
     build_python = venv / "bin" / "python"
-    _run([uv, "venv", "--no-config", "--python", python, str(venv)], env=base)
+    _run([uv, "venv", "--no-config", "--python", python, "--python-preference", "only-managed", str(venv)], env=base)
     if torch_lock is not None:
         torch_file = inputs / torch_lock.lock
         index = torch_index_url(torch_lock, torch_file.read_text())

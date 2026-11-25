@@ -7,7 +7,7 @@ conformance — so the differential separates them by axis rather than by run.
 
 ## The r3 baseline
 
-Every `summary/summary.json` under `/orcd/scratch/bcs/002/satra/triage_r3_20260923/out/`, read
+Every `summary/summary.json` under `${ORCD_GROUP_SCRATCH}/triage_r3_20260923/out/`, read
 directly. Slurm array `23702231`, 32 tasks, `ou_bcs_normal --qos=normal`. **62,548 summaries, 0
 unreadable.**
 
@@ -43,7 +43,7 @@ boundary is 19,097 recordings from a determination to an admission of ignorance,
 conservative direction.
 
 The same tree was read a second time by a second script, [`axes_census.py`](axes_census.py), Slurm
-array `23710001` on `pi_satra`: **62,548 recordings**, and the release table above reproduced value
+array `23710001` on `${CPU_PARTITION}`: **62,548 recordings**, and the release table above reproduced value
 for value. The two scripts share no code, so the agreement is a check on both. `axes_census.py` also
 records the r3 baseline on the other two axes, which is what the recall change will be read against:
 
@@ -59,9 +59,9 @@ comparator's own null.
 
 `scripts/extend_replay_decisions.py` at `84ebb3b5107b1176ef9f01f305156d578bf4ffb9`, over the same
 manifest and the same finished-corpus sources r3 replayed —
-`/orcd/scratch/bcs/002/satra/triage_r3_20260923/replay_manifest.jsonl`, 62,548 rows, `--hints
+`${ORCD_GROUP_SCRATCH}/triage_r3_20260923/replay_manifest.jsonl`, 62,548 rows, `--hints
 <design>/scope` — into a fresh `--out-root` at
-`/orcd/scratch/bcs/002/satra/triage_r4_20260924/out`.
+`${ORCD_GROUP_SCRATCH}/triage_r4_20260924/out`.
 
 The pin is the commit that changed the graph. Everything committed after it on this branch
 touches the viewer bundle, the review page, the specs and the tests — a diff of `src/senselab`
@@ -72,9 +72,9 @@ pass is reproducible from the branch tip as well as from the pin.
 
 | array | partition | slices | cpus |
 | --- | --- | --- | ---: |
-| `23709700` | `pi_satra` | 0-21 (running) | 8 |
+| `23709700` | `${CPU_PARTITION}` | 0-21 (running) | 8 |
 | `23709701` | `ou_bcs_normal --qos=normal` | 40-54 (running) | 8 |
-| `23711702` | `pi_satra` | 22-39, 55-103 | 4 |
+| `23711702` | `${CPU_PARTITION}` | 22-39, 55-103 | 4 |
 | `23711703` | `ou_bcs_normal --qos=normal` | 104-170 | 4 |
 | `23711704` | `mit_preemptable` | 171-239 | 4 |
 
@@ -121,7 +121,7 @@ themselves when the five arrays drain, `afterany` so a failed slice does not str
 | `23712098` | [`r4_census.sbatch`](r4_census.sbatch) — the axes census over `<r4>/out`, 32 tasks |
 | `23712099` | [`r4_report.sbatch`](r4_report.sbatch) — the row count and `compare_census.py` r3 against r4 |
 
-`23712099` writes `/orcd/scratch/bcs/002/satra/triage_r4_20260924/REPORT.txt`, whose first section
+`23712099` writes `${ORCD_GROUP_SCRATCH}/triage_r4_20260924/REPORT.txt`, whose first section
 prints `COMPLETE` only when the rows read 62,548 **and** the distinct run roots do too — the second
 condition is what would have caught the 156 and 60 rows two earlier passes lost, since a slice that
 died mid-stride writes fewer rows rather than none.

@@ -5,13 +5,13 @@
 #SBATCH --nodes=1
 #SBATCH --time=03:00:00
 #SBATCH --mem=96G
-#SBATCH --output=/orcd/scratch/bcs/002/satra/yamnetperf/logs/%x-%j.out
+#SBATCH --output=${ORCD_GROUP_SCRATCH}/yamnetperf/logs/%x-%j.out
 set -euo pipefail
-source /orcd/scratch/bcs/002/satra/triage_design_20260919/env_common.sh
-export SENSELAB_REPO=/orcd/scratch/bcs/002/satra/senselab-yamnetperf
+source ${ORCD_GROUP_SCRATCH}/triage_design_20260919/env_common.sh
+export SENSELAB_REPO=${ORCD_GROUP_SCRATCH}/senselab-yamnetperf
 export CUDA_VISIBLE_DEVICES=""
 export OMP_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 MKL_NUM_THREADS=8
-W=/orcd/scratch/bcs/002/satra/yamnetperf
+W=${ORCD_GROUP_SCRATCH}/yamnetperf
 cd "$SENSELAB_REPO"
 echo "=== host=$(hostname) exclusive=yes nproc=$(nproc)"
 echo "=== loadavg_start=$(cat /proc/loadavg)"

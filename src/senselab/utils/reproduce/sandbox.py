@@ -111,12 +111,19 @@ with open("/proc/self/mountinfo", "rb") as handle:
 bad = []
 for raw, (options, fstype) in top.items():
     path = raw.decode("unicode_escape").encode("latin-1") if b"\\\\" in raw else raw
-    if path in skip or fstype == "proc" or any(path.startswith(m) for m in masked):
+    if path in skip or fstype == "proc" or path.startswith(b"/proc/") or any(path.startswith(m) for m in masked):
         continue
     flags = 32 | 4096 | 1
     for option in options.split(b","):
         flags |= KEEP.get(option.decode(), 0)
     if libc.mount(None, path, None, flags, None) != 0 and fstype not in PSEUDO:
+        if ctypes.get_errno() == 13:
+            try:
+                os.stat(path)
+            except PermissionError:
+                continue
+            except OSError:
+                pass
         bad.append(fstype)
 if bad:
     sys.stderr.write("reproduce sandbox: mounts left writable: " + ", ".join(sorted(set(bad))) + "\\n")
@@ -125,8 +132,12 @@ if bad:
 """Run with the driver's interpreter (``-I -S``) inside the namespace, before the capability drop: remounts the
 topmost mount at every mount point read-only, keeping each mount's locked flags, except the paths named on
 its command line after the comma-separated pseudo types (the writable binds), the fresh ``/proc``, and every
-mount point under a masked dir (named with a leading ``@``), which the mask makes unreachable. A
-mount that refuses is fatal unless its type is a kernel pseudo filesystem in `PSEUDO_FS`."""
+mount point under a masked dir (named with a leading ``@``), which the mask makes unreachable. Host mounts
+at or under ``/proc/`` are skipped too: the fresh ``/proc`` covers them, so they cannot be reached. A mount
+that refuses with EACCES is skipped only when its mount point is itself inaccessible to the process
+(``os.stat`` fails with ``PermissionError``, e.g. a path under a directory the user cannot traverse), so
+it cannot be reached or written either. Any other refusal is fatal unless its type is a kernel pseudo
+filesystem in `PSEUDO_FS`."""
 
 PSEUDO_FS = frozenset(
     {

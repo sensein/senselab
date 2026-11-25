@@ -12,7 +12,7 @@ mkdir -p "$HF_HOME"
 ROOT="${TRIAGE_EVAL_ROOT:-$(readlink -f ~/orcd/scratch)/triage-pr567-prolonged-vowel-20260826}"
 REPO_DIR="$ROOT/source"
 OUT_DIR="$ROOT/output"
-AUDIO="/orcd/data/satra/002/datasets/b2aivoice/post_3.0/v3.1/adult/bids_07_01_lang/sub-SUBJ04/ses-SES04/audio/sub-SUBJ04_ses-SES04_task-Prolonged-vowel.wav"
+AUDIO="${ORCD_DATA}/datasets/b2aivoice/post_3.0/v3.1/adult/bids_07_01_lang/sub-SUBJ04/ses-SES04/audio/sub-SUBJ04_ses-SES04_task-Prolonged-vowel.wav"
 HINT="$REPO_DIR/specs/20260817-triage-workflow-dag/runs/b2ai-v2/hints/sub-SUBJ04_ses-SES04_task-Prolonged-vowel.json"
 CONFIG="$REPO_DIR/specs/20260817-triage-workflow-dag/runs/b2ai-v2/override.yaml"
 
