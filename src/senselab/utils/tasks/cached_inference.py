@@ -71,7 +71,7 @@ __all__ = [
     "write_json",
 ]
 
-CACHE_SCHEMA_VERSION = 27
+CACHE_SCHEMA_VERSION = 28
 """Bump to invalidate every on-disk entry (see :func:`sync_cache_with_schema_version`).
 
 Bumped 1 → 2 when ``wrapper_hash`` became ``code_version``: the key payload
@@ -276,6 +276,9 @@ Bumped 25 → 26 when the temporal stage's SQUIM rows gained ``windows_n`` and `
 
 Bumped 26 → 27 when ``resample_audios`` replaced its Butterworth + speechbrain path with a
 Kaiser-windowed sinc resampler (issue #630), changing every resampled input.
+
+Bumped 27 → 28 when ``resample_audios`` began computing in float64 by default (issue #650), changing
+resampled inputs by up to one float32 step.
 """
 
 

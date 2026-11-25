@@ -5,6 +5,7 @@ import re
 
 import pytest
 import torch
+import torchaudio.functional as taf
 from pytest import FixtureRequest
 
 from senselab.audio.data_structures import Audio
@@ -17,6 +18,8 @@ from senselab.audio.tasks.preprocessing import (
     resample_audios,
     select_channel_from_audios,
 )
+from senselab.audio.tasks.preprocessing.preprocessing import RESAMPLE_KAISER_PARAMS
+from senselab.utils.provenance import ENVIRONMENT_KEYS
 
 
 def test_resample_audios(
@@ -320,3 +323,77 @@ class TestExtractSegmentsRefusesAnEmptySegment:
         audio = self._tone(1.0)
         with pytest.raises(ValueError):
             extract_segments([(audio, [(0.5, 0.5)])])
+
+
+def _noise(duration_s: float, sampling_rate: int, channels: int = 1) -> Audio:
+    """Seeded white noise, for tests that compare resampler output sample by sample."""
+    generator = torch.Generator().manual_seed(650)
+    waveform = 0.25 * torch.randn(channels, int(duration_s * sampling_rate), generator=generator)
+    return Audio(waveform=waveform, sampling_rate=sampling_rate)
+
+
+def test_resample_audios_defaults_to_float64_and_returns_float32() -> None:
+    """The default computes in float64 and casts the result to float32."""
+    audio = _noise(1.0, 48000)
+    [out] = resample_audios([audio], resample_rate=16000)
+    expected = taf.resample(audio.waveform.double(), 48000, 16000, **RESAMPLE_KAISER_PARAMS).float()
+    assert out.waveform.dtype == torch.float32
+    assert torch.equal(out.waveform, expected)
+
+
+def test_resample_audios_float32_opt_out_computes_in_float32() -> None:
+    """``precision="float32"`` computes in float32, as before the float64 default."""
+    audio = _noise(1.0, 48000)
+    [out] = resample_audios([audio], resample_rate=16000, precision="float32")
+    expected = taf.resample(audio.waveform.float(), 48000, 16000, **RESAMPLE_KAISER_PARAMS)
+    assert out.waveform.dtype == torch.float32
+    assert torch.equal(out.waveform, expected)
+
+
+def test_resample_audios_float64_lowcut_path_returns_float32() -> None:
+    """The `lowcut` path also computes in float64 by default and returns float32."""
+    [out] = resample_audios([_noise(1.0, 48000, channels=2)], resample_rate=16000, lowcut=4000.0)
+    assert out.waveform.dtype == torch.float32
+    assert out.waveform.shape == (2, 16000)
+
+
+def test_resample_audios_rejects_an_unknown_precision() -> None:
+    """A precision other than float64 or float32 is rejected before any audio is processed."""
+    with pytest.raises(ValueError, match="precision"):
+        resample_audios([_noise(0.1, 48000)], resample_rate=16000, precision="float16")  # type: ignore[arg-type]
+
+
+def test_resample_audios_records_the_step_and_its_environment() -> None:
+    """Each resampled audio names its parameters, precision and environment in its metadata."""
+    audio = _noise(0.5, 48000)
+    audio.metadata = {"speaker": "S1", "processing_steps": [{"step": "earlier", "parameters": {}, "environment": "x"}]}
+    [out] = resample_audios([audio], resample_rate=16000)
+
+    *earlier, entry = out.metadata["processing_steps"]
+    assert earlier == [{"step": "earlier", "parameters": {}, "environment": "x"}]
+    assert entry["step"] == "resample_audios"
+    assert entry["parameters"] == {
+        "source_rate": 48000,
+        "resample_rate": 16000,
+        "lowcut": None,
+        "order": None,
+        "precision": "float64",
+    }
+    env = out.metadata["environments"][entry["environment"]]
+    assert set(env) == set(ENVIRONMENT_KEYS)
+    assert out.metadata["speaker"] == "S1"
+    # The input's own record is untouched.
+    assert len(audio.metadata["processing_steps"]) == 1
+    assert "environments" not in audio.metadata
+
+
+def test_resample_audios_records_the_opt_out_precision() -> None:
+    """The float32 opt-out is recorded as such."""
+    [out] = resample_audios([_noise(0.5, 48000)], resample_rate=16000, precision="float32")
+    assert out.metadata["processing_steps"][-1]["parameters"]["precision"] == "float32"
+
+
+def test_resample_audios_no_op_records_no_step() -> None:
+    """An audio returned unchanged gains no processing step."""
+    [out] = resample_audios([_sine(0.5, 16000)], resample_rate=16000)
+    assert "processing_steps" not in out.metadata
