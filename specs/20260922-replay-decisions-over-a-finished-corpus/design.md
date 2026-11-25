@@ -140,18 +140,26 @@ under the run's own `run/` directory. A finished run root holds `run/store.jsonl
 | VOICE | `derivatives/phonation_tracks.npz`, `hint.metadata["task_token"]` | store + sidecar | yes |
 | QUALITY | `clip_amplitude`, the `recording` stream | store + `streams/` | yes |
 | REDACT | SPEECH's live `pii` entities, the `recording` stream, `hint.expected_speech` | store + `streams/` + hint | yes |
+| REVIEW | the residue, the consensus words, `hint` (task context) | store + hint | yes |
 | VERDICT | every node's verdict/report, `ruleset_routing`, `hint`, `ran` | store + hint | yes; `ran` from the driver |
 | REPORT | the whole store, sidecar paths | store + `run/` | yes |
 
 Two things are not in the store and must be supplied by the driver.
 
-**`hint`.** `AudioHints` is a `run_triage` parameter that ADMIT accepts and does not store
-(`nodes/admit.py:53`, "Unread"). routing, AIRWAY, SPEECH, VOICE, REDACT and VERDICT all read fields
-off it. Nothing in `store.jsonl` or `run.json` reconstructs it. The corpus run built it from the
-BIDS sidecar beside each recording with its own `build_hint`, which is deterministic given the
-sidecar, so the replay rebuilds it the same way — 0.021 s per recording, measured. This is the one
-genuine gap in the run's self-description and it is closed by re-reading the input tree, not by the
-store.
+**`hint`.** `AudioHints` is a `run_triage` parameter. As written, ADMIT accepted it and did not store
+it: nothing in `store.jsonl` or `run.json` reconstructed it, and the replay rebuilt it from the BIDS
+sidecar beside each recording with the same `build_hint` (0.021 s per recording, measured).
+
+*Updated 2026-10-23 (`specs/20261022-triage-dataset-profile/plan.md`, step 3).* ADMIT now records the
+hint, a digest of each of its fields, and the identity it declares (`hint_record.py`, `identity.py`),
+and every stage reads the task from that record. A replay may be given a hint that differs from the
+recorded one: that is the caller's correction, and it is accepted. The replay records the new hint as
+the run's, rebuilds the stimulus alignment where the expected speech moved, and names the changed
+fields on its marker. Without `--hints` it reuses the recorded hint. It refuses a recording whose bytes
+differ from ADMIT's digest, a profile of another name, and a store that records no hint unless
+`--no-hint` is given (`extend.check_replay_inputs`). The marker is keyed on the hint digest as well as
+the configuration and commit, so a replay after a sidecar correction runs rather than reading as done.
+A re-fold refuses a changed hint: it would fold branch reports made under the old one.
 
 **`enrollment`.** Also a `run_triage` parameter with no serialized form. It was `None` for every
 recording in the corpus run, so the replay passes `None`. A corpus run that used enrollment could
@@ -180,8 +188,16 @@ defaults to it.
 It is not usable for the 2026-09-19 corpus, whose tree must not be modified. The driver therefore
 takes `--out-root`, under which each run gets a fresh root that reads through to the finished one:
 
-- `run/derivatives` is a symlink to the finished run's `derivatives/` — nothing among the replayed
-  nodes writes there, only TAXONOMY, AIRWAY and VOICE read from it.
+- `run/derivatives` is a real directory holding a symlink per entry of the finished run's
+  `derivatives/`, and the sidecar writers a replay runs remove the entry before writing.
+
+  **This paragraph originally said `run/derivatives` was a symlink because nothing among the replayed
+  nodes writes there.** BACKGROUND does: it rewrites `background_view.npz` (`nodes/background.py`,
+  `write_view_arrays`), and the rebuilt stimulus alignment writes `stimulus_alignment.npz`. Through the
+  directory link both writes landed in the finished tree, and a replay with `--out-root` rewrote
+  `background_view.npz` in every finished run it touched. The per-file links
+  and the remove-before-write in both writers (as `write_stream` already does) close it, and
+  `extend_replay_decisions_test.py` checks that a mirror's rewrites leave the finished tree byte-identical.
 - `run/streams` is a real directory seeded with a symlink per finished stream **that the replay only
   reads**. REDACT writes into `streams/` (`redact.py:803-804`, `write_stream(redacted, run_dir,
   STREAM_NAME)`) and so, when separation is configured, does SPEECH (`speech.py:1975`). Those two

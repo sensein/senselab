@@ -134,11 +134,17 @@ class TestDeclaredTaskId:
         assert declared_task_id(store) == "respiration-and-cough-fivebreaths-2"
         assert DECLARED_TASK_ID in store.entities("stream")[0].attributes
 
-    def test_an_explicit_stem_is_read_where_no_hint_task_was_recorded(self) -> None:
-        """A caller holding the stem it means passes it; a recorded hint task still wins."""
+    def test_an_explicit_stem_is_read_where_no_task_was_recorded(self) -> None:
+        """A store from before ADMIT recorded identity: the caller's stem is read."""
         store = ProvStore(run_id="c")
         _recording(store, f"/data/{STEM}.wav")
         assert declared_task_id(store, "sub-1_ses-1_task-loudness-3") == "loudness-3"
+
+    def test_a_task_read_off_the_given_stem_is_kept_when_the_stored_path_differs(self) -> None:
+        """ADMIT stores the resolved path; the task it recorded came from the name it was given."""
+        store = ProvStore(run_id="c")
+        _recording(store, "/exports/platform-0042.wav", **identity_from_stem(STEM).as_attributes())
+        assert declared_task_id(store) == "respiration-and-cough-fivebreaths-2"
 
     def test_a_refused_recording_reads_what_the_admit_activity_recorded(self) -> None:
         """ADMIT wrote no stream; its activity carries the file and what the hint declared."""
