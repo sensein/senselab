@@ -212,8 +212,14 @@ follows it. What changed is recorded. Replay refuses only where a change is almo
       equal size and modification time are not taken as a match (2026-11-14, #613-1).
    3. **Profile name differs**, or the run had a profile and the replay has none: refuse, unless
       `--allow-profile-change`.
-   4. **Profile version or contents, or config, differ:** accept and record them on the marker. Re-deciding after a
-      rule or data change is what replay is for.
+   4. **Profile version or contents differ** from the profile the run's decisions were last taken under: refuse,
+      naming the old and new version and digest, unless `--allow-profile-change`; with it, accept and record the
+      change on the marker. A config change under the same profile is accepted and recorded by the marker's
+      `config_hash`. Re-deciding after a rule or data change stays possible; it is a deliberate choice
+      (2026-11-25, #613). Every driver that reads a finished run's store applies checks 3 and 4 and takes
+      `--allow-profile-change`; an extend driver that goes ahead records an `EXTEND` / `profile_change_allowed`
+      activity naming itself and the profile it wrote under, which does not move the profile the run's decisions
+      stand under.
    5. **`--hints` given and it differs from the recorded hint:** accept. The replay re-resolves the identity from the
       new hint. Where it differs, it writes a new `recording` record and retires the old one with the existing
       `supersede` (`extend.py:507`), so every stage reads the new one. The marker records the old and new digest of
