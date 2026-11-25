@@ -56,7 +56,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from senselab.audio.workflows.triage.recording_vectors import RUN_SUBDIR, STORE_NAME, recording_dirs  # noqa: E402
 from senselab.audio.workflows.triage.review_page import ListenSet, review_record, write_page  # noqa: E402
-from senselab.audio.workflows.triage.review_page.page import SOURCE_BASE  # noqa: E402
+from senselab.audio.workflows.triage.review_page.page import (
+    SOURCE_BASE,  # noqa: E402
+    record_key,
+)
 from senselab.audio.workflows.triage.review_page.records import transcripts  # noqa: E402
 from senselab.utils import fastio  # noqa: E402
 
@@ -215,7 +218,7 @@ def load(path: Path, stems: Collection[str] | None = None) -> list[Mapping[str, 
     if stems is None:
         return [record for record in map(json.loads, lines[1:]) if "error" not in record]
     wanted = set(stems)
-    return [record for record in map(json.loads, lines[1:]) if "error" not in record and record["stem"] in wanted]
+    return [record for record in map(json.loads, lines[1:]) if "error" not in record and record_key(record) in wanted]
 
 
 OWNER_PREFIX = "owner_"
@@ -242,15 +245,16 @@ def listen_set(
         The listen set.
     """
     lines = [line for line in path.read_text().splitlines() if line.strip()]
-    if not lines or "stem" not in lines[0].split("\t"):
+    header = lines[0].split("\t") if lines else []
+    key = "recording_id" if "recording_id" in header else "stem"
+    if key not in header:
         checks = {line.strip(): () for line in lines}
         return ListenSet(name, question, tuple(labels), (), checks, directions=tuple(directions))
     rows = list(csv.DictReader(lines, delimiter="\t"))
-    header = lines[0].split("\t")
-    columns = tuple(c for c in header if c != "stem" and not c.startswith(OWNER_PREFIX))
-    checks = {row["stem"]: tuple(row.get(c) or "" for c in columns) for row in rows}
+    columns = tuple(c for c in header if c not in ("stem", "recording_id") and not c.startswith(OWNER_PREFIX))
+    checks = {row[key]: tuple(row.get(c) or "" for c in columns) for row in rows}
     proposed = {
-        row["stem"]: (float(row[PROPOSED_START]), float(row[PROPOSED_END]))
+        row[key]: (float(row[PROPOSED_START]), float(row[PROPOSED_END]))
         for row in rows
         if row.get(PROPOSED_START) and row.get(PROPOSED_END)
     }
@@ -272,11 +276,13 @@ def labelled_stems(directory: Path) -> set[str]:
         data = json.loads(path.read_text())
         entries = data.get("entries") if isinstance(data, dict) else data
         values = entries.values() if isinstance(entries, dict) else entries or ()
-        found |= {str(e["stem"]) for e in values if isinstance(e, dict) and e.get("stem")}
+        found |= {str(e.get("recording_id") or e["stem"]) for e in values if isinstance(e, dict) and e.get("stem")}
     for path in sorted(directory.glob("*.tsv")):
         lines = [line for line in path.read_text().splitlines() if line.strip()]
-        if lines and "stem" in lines[0].split("\t"):
-            found |= {row["stem"] for row in csv.DictReader(lines, delimiter="\t") if row.get("stem")}
+        header = lines[0].split("\t") if lines else []
+        key = "recording_id" if "recording_id" in header else "stem"
+        if key in header:
+            found |= {row[key] for row in csv.DictReader(lines, delimiter="\t") if row.get(key)}
     return found
 
 
@@ -402,7 +408,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 2
     if listen is not None:
-        records = [r for r in records if r["stem"] in listen.checks]
+        records = [r for r in records if record_key(r) in listen.checks]
     written = write_page(
         records,
         arguments.out,
@@ -414,7 +420,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     if listen is not None:
         written["listed"] = len(listen.checks)
-        written["listed_not_in_extract"] = len(set(listen.checks) - {r["stem"] for r in records})
+        written["listed_not_in_extract"] = len(set(listen.checks) - {record_key(r) for r in records})
     print(json.dumps(written, indent=2))
     return 0
 

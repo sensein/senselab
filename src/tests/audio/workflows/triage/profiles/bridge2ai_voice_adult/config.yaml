@@ -9,7 +9,7 @@ verdict:
   condition_categories: [CONDITION]      # owner, 2026-10-03 (policy v7): a listed health condition is never masked and never withholds
   person_name_review_flags: true         # owner, 2026-10-03 (policy v7): a masked person's name flags for a human's review of name tags
   trim_protected_categories: [PERSON, NAME, LOCATION, LOC]  # owner, 2026-09-27: a marked word written as a proper noun is never trimmed
-  cohort_conditions: bridge2ai_voice_adult_2026-09-04       # the study's recruited conditions (cohort_conditions/)
+  recruited_conditions: bridge2ai_voice_adult_2026-09-04       # the study's recruited conditions (recruited_conditions/)
   llm_second_speaker_flags: true         # owner, 2026-09-27: a reading that heard more than one speaker flags the recording for review
   llm_contradiction_flags: true          # owner, 2026-09-28: a flagged reading that names no words flags the recording for review
   llm_instructions_spoken_flags: true    # owner, 2026-10-01: a reading quoting the task's instructions spoken in the recording flags for review

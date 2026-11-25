@@ -69,6 +69,7 @@ from senselab.audio.workflows.triage.extend import (
     SliceLog,
     add_config_arguments,
     check_replay_inputs,
+    corpus_inputs_digest,
     driver_config,
     export_prov,
     find_replay_marker,
@@ -267,7 +268,13 @@ def replay_one(
         )
     except ReplayRefused as refusal:
         return {"status": REFUSED, DERIVATION: str(refusal)}
-    if not force and find_replay_marker(store, config.config_hash, commit, hint_digest(inputs.hint)) is not None:
+    if (
+        not force
+        and find_replay_marker(
+            store, config.config_hash, commit, hint_digest(inputs.hint), corpus_inputs=corpus_inputs_digest(store)
+        )
+        is not None
+    ):
         return {"status": PRESENT, DERIVATION: "this configuration, revision and hint have already replayed this run"}
     try:
         outcome: ReplayOutcome = replay_decisions(

@@ -31,12 +31,23 @@ from pathlib import Path
 import pandas as pd
 import pyarrow.parquet as pq
 
-from senselab.audio.workflows.triage.identity import ROW_PARTICIPANT, ROW_SESSION, ROW_SOURCES, ROW_TASK
+from senselab.audio.workflows.triage.identity import (
+    RECORDING_ID_COLUMN,
+    ROW_PARTICIPANT,
+    ROW_SESSION,
+    ROW_SOURCES,
+    ROW_TARGET_SPEAKER,
+    ROW_TASK,
+)
 from senselab.audio.workflows.triage.nodes.branches import EXPECTATIONS
 from senselab.audio.workflows.triage.vocabulary import RunStatus
 
 IDENTITY_COLUMNS = (ROW_PARTICIPANT, ROW_SESSION, ROW_TASK, *ROW_SOURCES.values())
 """The corpus table's identity columns, copied onto every manifest row."""
+
+SPEAKER_AND_ID_COLUMNS = (ROW_TARGET_SPEAKER, RECORDING_ID_COLUMN)
+"""The target-speaker and recording-id columns (step 9), copied onto every manifest row: null and the stem where
+the table is older than them."""
 
 
 def select(table: pd.DataFrame, *, branch: str, include_incomplete: bool) -> pd.DataFrame:
@@ -82,14 +93,16 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    absent = [name for name in IDENTITY_COLUMNS if name not in pq.read_schema(args.table).names]
+    present = set(pq.read_schema(args.table).names)
+    absent = [name for name in IDENTITY_COLUMNS if name not in present]
     if absent:
         print(
             f"refusing: {args.table} carries no {', '.join(absent)} column; rebuild the corpus table",
             file=sys.stderr,
         )
         return 2
-    columns = ["stem", "run_dir", "declared_family", "verdict", "run_status", *IDENTITY_COLUMNS]
+    optional = [name for name in SPEAKER_AND_ID_COLUMNS if name in present]
+    columns = ["stem", "run_dir", "declared_family", "verdict", "run_status", *IDENTITY_COLUMNS, *optional]
     table = pd.read_parquet(args.table, columns=columns)
     chosen = select(table, branch=args.branch, include_incomplete=not args.no_incomplete)
     with args.out.open("w") as handle:
@@ -98,11 +111,13 @@ def main() -> int:
                 json.dumps(
                     {
                         "stem": row["stem"],
+                        RECORDING_ID_COLUMN: _null(row.get(RECORDING_ID_COLUMN)) or row["stem"],
                         "enhanced": str(args.out_root / str(row["run_dir"]) / "run" / "streams" / "enhanced.flac"),
                         "declared_family": _null(row["declared_family"]),
                         "verdict": row["verdict"],
                         "selected_by": row["selected_by"],
                         **{name: _null(row[name]) for name in IDENTITY_COLUMNS},
+                        ROW_TARGET_SPEAKER: _null(row.get(ROW_TARGET_SPEAKER)),
                     }
                 )
                 + "\n"

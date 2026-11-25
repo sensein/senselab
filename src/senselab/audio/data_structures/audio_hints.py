@@ -126,6 +126,21 @@ class TargetSpeakerEmbedding(BaseModel):
     distribution: Optional[EmbeddingDistribution] = None
 
 
+class TargetSpeaker(BaseModel):
+    """One person whose voice a recording's task asks for.
+
+    Attributes:
+        id: Who it is, unique in the corpus: the participant's id, or a role-qualified one (``sub-07:child``).
+        role: Their part in the recording -- ``participant``, ``examiner``, ``partner``, ``caregiver`` -- or None.
+        embedding: Their voice, where the caller has one; it outranks an enrollment estimated from the
+            participant's recordings.
+    """
+
+    id: str = Field(min_length=1)
+    role: Optional[str] = None
+    embedding: Optional[TargetSpeakerEmbedding] = None
+
+
 class AudioHints(BaseModel):
     """What a recording was declared to contain.
 
@@ -142,7 +157,10 @@ class AudioHints(BaseModel):
         expected_speech: Ordered prompts for a read task. Ordered and separate rather than one
             concatenated string, because "which sentence was skipped" is a different question
             from "how close was the whole thing".
-        target_speaker: The declared target speaker's embedding, with provenance.
+        target_speaker: The declared target speaker's embedding, with provenance: the voice of the one target speaker
+            where ``target_speakers`` names none.
+        target_speakers: Whose voices the task asks for, where that is not simply the participant: a list, so an
+            interaction can declare each of its speakers. Empty means one target, the participant.
         instructions: What the participant was told to do, verbatim, or None.
         speech_type: What kind of speech the task asks for, as the corpus names it (``read``,
             ``recall``, ``free``, ``non-lexical`` ...), or None.
@@ -165,6 +183,7 @@ class AudioHints(BaseModel):
     environment: Optional[str] = None
     expected_speech: list[ExpectedSpeech] = Field(default_factory=list)
     target_speaker: Optional[TargetSpeakerEmbedding] = None
+    target_speakers: list[TargetSpeaker] = Field(default_factory=list)
     instructions: Optional[str] = None
     speech_type: Optional[str] = None
     task: Optional[str] = None

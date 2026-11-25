@@ -99,3 +99,22 @@ def test_a_table_without_identity_columns_is_refused(
     assert selector.main() == 2
     assert "rebuild the corpus table" in capsys.readouterr().err
     assert not out.exists()
+
+
+def test_every_manifest_row_carries_its_target_speaker_and_recording_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review of step 9: both columns travel to the corpus passes; an older table gives none and the stem."""
+    out = tmp_path / "manifest.jsonl"
+    newer = _table().assign(target_speaker=["sub-1:child", None, None, None], recording_id=["p/a.wav", "b", "c", "d"])
+    newer.to_parquet(tmp_path / "new.parquet")
+    monkeypatch.setattr(sys, "argv", ["x", str(tmp_path / "new.parquet"), str(out), "--out-root", "/corpus"])
+    assert selector.main() == 0
+    rows = {row["stem"]: row for row in map(json.loads, out.read_text().splitlines())}
+    assert (rows["a"]["target_speaker"], rows["a"]["recording_id"]) == ("sub-1:child", "p/a.wav")
+    assert (rows["b"]["target_speaker"], rows["b"]["recording_id"]) == (None, "b")
+    _table().to_parquet(tmp_path / "old.parquet")
+    monkeypatch.setattr(sys, "argv", ["x", str(tmp_path / "old.parquet"), str(out), "--out-root", "/corpus"])
+    assert selector.main() == 0
+    rows = {row["stem"]: row for row in map(json.loads, out.read_text().splitlines())}
+    assert (rows["a"]["target_speaker"], rows["a"]["recording_id"]) == (None, "a")

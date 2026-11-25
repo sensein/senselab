@@ -48,6 +48,7 @@ def admit(
     hint: AudioHints | None = None,
     *,
     run_dir: Path,
+    corpus_path: str | None = None,
 ) -> AdmitResult:
     """Decide whether the recording is measurable at all.
 
@@ -62,6 +63,8 @@ def admit(
         hint: What the recording was declared to contain. Read for the identity and the task it declares, and
             recorded.
         run_dir: The run directory. Unused.
+        corpus_path: The recording's path relative to its corpus's root, where the caller gave one: its id where
+            the hint declares none (plan step 9b).
 
     Returns:
         The verdict and, on ``pass``, the decoded audio.
@@ -70,7 +73,8 @@ def admit(
         TypeError: If ``source`` is not a path or a string. Nothing is recorded.
     """
     source = Path(source)
-    declared = {**identity_of(hint).as_attributes(), **hint_attributes(hint), **task_attributes(hint)}
+    identity = identity_of(hint, stem=Path(source).stem, corpus_path=corpus_path)
+    declared = {**identity.as_attributes(), **hint_attributes(hint), **task_attributes(hint)}
     activity_id = store.activity(node=NODE, step=None, parameters={"audio_file": str(source), **declared})
     agent_id = software_agent(store)
     store.was_associated_with(activity_id, agent_id)
