@@ -52,8 +52,8 @@ def _sine(duration_s: float, sampling_rate: int, freq: float = 440.0) -> Audio:
     Returns:
         The audio.
     """
-    t = torch.arange(int(duration_s * sampling_rate), dtype=torch.float32) / sampling_rate
-    waveform = (0.5 * torch.sin(2 * math.pi * freq * t)).unsqueeze(0)
+    t = torch.arange(int(duration_s * sampling_rate), dtype=torch.float64) / sampling_rate
+    waveform = (0.5 * torch.sin(2 * math.pi * freq * t)).float().unsqueeze(0)
     return Audio(waveform=waveform, sampling_rate=sampling_rate)
 
 
@@ -87,6 +87,57 @@ def test_resample_audios_mixed_batch_only_resamples_what_needs_it() -> None:
     assert out_resampled.sampling_rate == 16000
     expected_size = needs_resampling.waveform.shape[1] / needs_resampling.sampling_rate * 16000
     assert math.ceil(expected_size) == out_resampled.waveform.shape[1]
+
+
+def _tone_power_db(freq: float, source_rate: int, target_rate: int = 16000) -> float:
+    """Output power of a unit sine resampled by `resample_audios`, relative to the input, in dB.
+
+    Args:
+        freq: Tone frequency in Hz.
+        source_rate: Input sampling rate in Hz.
+        target_rate: Output sampling rate in Hz.
+
+    Returns:
+        The gain in dB, edges trimmed.
+    """
+    audio = _sine(2.0, source_rate, freq=freq)
+    [out] = resample_audios([audio], resample_rate=target_rate)
+    y = out.waveform[0, target_rate // 4 : -target_rate // 4]
+    x = audio.waveform[0]
+    return 10 * math.log10(float(y.pow(2).mean()) / float(x.pow(2).mean()) + 1e-30)
+
+
+@pytest.mark.parametrize("source_rate", [44100, 48000])
+def test_resample_audios_passband_is_flat(source_rate: int) -> None:
+    """Tones well inside the target band pass within 0.1 dB."""
+    for freq in (100.0, 1000.0, 4000.0, 7000.0):
+        assert abs(_tone_power_db(freq, source_rate)) < 0.1, freq
+
+
+@pytest.mark.parametrize("source_rate", [44100, 48000])
+def test_resample_audios_rejects_content_above_target_nyquist(source_rate: int) -> None:
+    """Tones above the target Nyquist frequency are attenuated by at least 90 dB, not aliased."""
+    for freq in (8100.0, 8500.0, 9000.0, 10000.0, 15000.0, 20000.0):
+        assert _tone_power_db(freq, source_rate) < -90.0, freq
+
+
+def test_resample_audios_lowcut_is_designed_at_the_input_rate() -> None:
+    """An explicit `lowcut` attenuates at its cutoff on the signal it is applied to."""
+    gains = {}
+    for freq in (1000.0, 2000.0, 6000.0):
+        audio = _sine(2.0, 48000, freq=freq)
+        [out] = resample_audios([audio], resample_rate=16000, lowcut=2000.0)
+        y = out.waveform[0, 4000:-4000]
+        gains[freq] = 10 * math.log10(float(y.pow(2).mean()) / float(audio.waveform.pow(2).mean()))
+    assert gains[1000.0] > -0.5
+    assert -7.0 < gains[2000.0] < -5.0
+    assert gains[6000.0] < -40.0
+
+
+def test_resample_audios_lowcut_above_input_nyquist_raises() -> None:
+    """A `lowcut` at or above the input's Nyquist frequency is rejected."""
+    with pytest.raises(ValueError, match="lowcut"):
+        resample_audios([_sine(1.0, 8000)], resample_rate=16000, lowcut=7900.0)
 
 
 def test_downmix_audios(mono_audio_sample: Audio, stereo_audio_sample: Audio) -> None:

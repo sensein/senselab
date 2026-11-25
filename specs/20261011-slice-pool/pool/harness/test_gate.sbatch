@@ -8,8 +8,8 @@
 # Test link: gate the pool after its worker array(s); on a resubmission, queue this link again after the new array.
 set -uo pipefail
 POOL=${1:?pool dir}
-P=/orcd/scratch/bcs/002/satra/r18d_20261010/pool
-PY=/orcd/scratch/bcs/002/satra/senselab-r28/.venv/bin/python
+P=${ORCD_GROUP_SCRATCH}/r18d_20261010/pool
+PY=${ORCD_GROUP_SCRATCH}/senselab-r28/.venv/bin/python
 OUT=$($PY $P/slice_pool.py gate "$POOL"); RC=$?
 echo "$OUT"
 echo "gate rc=$RC $(date -Is)" >> "$POOL/gate.log"

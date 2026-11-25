@@ -16,7 +16,7 @@ import torchaudio
 from torchcodec.decoders import AudioDecoder
 
 warnings.filterwarnings("ignore")
-W = "/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work3"
+W = "${AGENT_SCRATCH}/io-audit/work3"
 os.makedirs(W, exist_ok=True)
 
 
@@ -177,7 +177,7 @@ def chunk_ffmpeg(path, srate, a, n):
 
 
 def chunk_senselab(path, srate, a, n):
-    sys.path.insert(0, "/Users/satra/software/sensein/senselab/src")
+    sys.path.insert(0, "src")
     from senselab.audio.data_structures.audio import Audio
     return Audio(filepath=path, offset_in_sec=a / srate, duration_in_sec=n / srate).waveform.numpy()
 
@@ -256,7 +256,7 @@ for fname, f in [("wav PCM_16", "c_pcm16.wav"), ("wav FLOAT32", "c_f32.wav"), ("
             print(f"  {fname:<14} {cname:<22} {type(e).__name__}: {str(e)[:70]}")
 
 hr("B3. senselab Audio.from_stream (soundfile blocks) vs full decode")
-sys.path.insert(0, "/Users/satra/software/sensein/senselab/src")
+sys.path.insert(0, "src")
 from senselab.audio.data_structures.audio import Audio  # noqa: E402
 
 for fname, f in [("wav PCM_16", "c_pcm16.wav"), ("wav FLOAT32", "c_f32.wav"), ("flac PCM_24", "c_24.flac")]:

@@ -1,7 +1,7 @@
 # senselab audio I/O audit — measured matrix
 
 All measurements on this host, 2026-08-19. Reproduction scripts:
-`/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/{matrix,summarize,probes,invariants,invariants2}.py`
+`${AGENT_SCRATCH}/io-audit/{matrix,summarize,probes,invariants,invariants2}.py`
 Raw results: `matrix.json` in the same directory (copied here as `matrix.json`).
 
 ## Versions

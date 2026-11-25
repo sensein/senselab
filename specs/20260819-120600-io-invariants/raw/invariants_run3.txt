@@ -23,7 +23,7 @@
   mp3 192k      ffmpeg -ss after -i  0.117209934        0.117209934    1.000000      True
   m4a aac       torchcodec           0.150671810        0.150671810    1.000000      True
   m4a aac       torchaudio           0.150671810        0.150671810    1.000000      True
-  m4a aac       soundfile            LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/
+  m4a aac       soundfile            LibsndfileError: Error opening '${AGENT_SCRATCH}/
   m4a aac       ffmpeg -ss after -i  0.150671810        0.150671810    1.000000      True
   opus 48k      torchcodec           RuntimeError: getFramesPlayedInRangeAudio, /Users/runner/work/to
   opus 48k      torchaudio           ValueError: zero-size array to reduction operation maximum whi

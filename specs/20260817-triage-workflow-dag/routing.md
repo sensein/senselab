@@ -145,7 +145,7 @@ branch stay tellable apart. No parallel field and no alias: pre-alpha.
 ### Measured: +3,132 routes over 62,547 recordings, and no file-level state changed
 
 Reduced from the finished features shard at
-`/orcd/scratch/bcs/002/satra/gatematrix_20260915/evidence/features` through the same
+`${ORCD_GROUP_SCRATCH}/gatematrix_20260915/evidence/features` through the same
 `evaluate_routes` the graph runs, so the added routes are exactly `RouteEvaluation.missed`.
 
 | branch | content routes | declared routes | added by declaration |
