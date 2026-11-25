@@ -12,8 +12,6 @@ from typing import Any, Iterator
 
 import pytest
 
-from senselab.audio.workflows.triage.config import load_triage_config
-from senselab.audio.workflows.triage.nodes import review as review_node
 from senselab.text.tasks.pii_detection import redaction_review as rr
 from senselab.text.tasks.pii_detection import redaction_review_vllm as rv
 
@@ -147,8 +145,28 @@ def mocked_vllm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[dic
     rr.shutdown_review_worker()
 
 
+VLLM_SETTINGS = {
+    "max_model_len": 12288,
+    "gpu_memory_utilization": 0.90,
+    "enable_prefix_caching": True,
+    "kv_cache_dtype": "auto",
+    "generation_config": "vllm",
+    "limit_mm_per_prompt": {"image": 0, "audio": 0},
+}
+"""The vLLM server arguments under test: a caller's settings (triage's ``redaction.llm_check.vllm``), written out."""
+
+
 def _settings() -> dict[str, Any]:
-    return dict(load_triage_config().require("redaction.llm_check.vllm"))
+    return dict(VLLM_SETTINGS)
+
+
+@pytest.fixture(scope="module")
+def policy(tmp_path_factory: pytest.TempPathFactory) -> rr.ReviewPolicy:
+    """A review policy of the test's own: the reviewer takes the caller's (plan step 6b), not a dataset's."""
+    root = Path(tmp_path_factory.mktemp("policy"))
+    (root / "review_policy.txt").write_text("TEST POLICY. Remove names.\n\n")
+    (root / "task_guidance.yaml").write_text("families: []\nnatures: []\n")
+    return rr.load_review_policy(root / "review_policy.txt", root / "task_guidance.yaml")
 
 
 class TestTheEngineIdentity:
@@ -175,34 +193,25 @@ class TestTheEngineIdentity:
         with pytest.raises(ValueError):
             rv.engine_identity("sglang")
 
-    def test_the_cache_key_names_the_engine(self) -> None:
-        """Same engine, same key; another engine or any other server argument, another key."""
-        base = {
-            "model_id": "m/x",
-            "max_new_tokens": 1024,
-            "max_iterations": 3,
-            "engine": "vllm",
-            "vllm": _settings(),
-        }
-        key = review_node.review_cache_key("a b", None, {"task": "t"}, base, SHA)
-        assert key == review_node.review_cache_key("a b", None, {"task": "t"}, dict(base), SHA)
-        assert key != review_node.review_cache_key("a b", None, {"task": "t"}, {**base, "engine": "transformers"}, SHA)
-        shared = {**base, "vllm": {**_settings(), "gpu_memory_utilization": 0.3}}
-        assert key != review_node.review_cache_key("a b", None, {"task": "t"}, shared, SHA)
-
 
 class TestTheWorkerAgainstAMockedServer:
     """The worker templates token ids, asks one request at a time, decodes the ids and stops its server."""
 
-    def test_a_review_round_trips_and_records_the_engine(self, mocked_vllm: dict[str, Any]) -> None:
+    def test_a_review_round_trips_and_records_the_engine(
+        self, mocked_vllm: dict[str, Any], policy: rr.ReviewPolicy
+    ) -> None:
         """Greedy, the checkpoint's stop ids, the caller's ceiling; the answer parses; the engine is recorded."""
         engine = rv.engine_identity("vllm", _settings())
-        first = rr.review_transcript("hello", context={"item_set": True}, engine=engine, max_new_tokens=64)
+        first = rr.review_transcript(
+            "hello", policy=policy, context={"item_set": True}, engine=engine, max_new_tokens=64
+        )
         assert first.available, first.failure
         assert first.phrases_instead_of_items == "occasional" and first.phrase_quotes == ["hello"]
         assert first.engine == engine and first.revision == SHA and first.load_s > 0
         assert rr.review_payload(first)["engine"] == engine
-        second = rr.review_transcript("hello", context={"item_set": True}, engine=engine, max_new_tokens=64)
+        second = rr.review_transcript(
+            "hello", policy=policy, context={"item_set": True}, engine=engine, max_new_tokens=64
+        )
         assert second.available and second.load_s == 0.0 and second.reasoning == first.reasoning
         sent = [json.loads(line) for line in mocked_vllm["log"].read_text().splitlines()]
         assert len(sent) == 2 and sent[0]["prompt"] == sent[1]["prompt"]
@@ -214,13 +223,13 @@ class TestTheWorkerAgainstAMockedServer:
         assert argv[argv.index("--max-model-len") + 1] == "12288" and "--enable-prefix-caching" in argv
 
     def test_an_over_long_request_fails_alone_and_the_server_stops_with_the_worker(
-        self, mocked_vllm: dict[str, Any]
+        self, mocked_vllm: dict[str, Any], policy: rr.ReviewPolicy
     ) -> None:
         """A request past max_model_len is an absent reading; the next one is served; shutdown ends the server."""
         engine = rv.engine_identity("vllm", {**_settings(), "max_model_len": 4000})
-        too_long = rr.review_transcript("hello", engine=engine, max_new_tokens=3000)
+        too_long = rr.review_transcript("hello", policy=policy, engine=engine, max_new_tokens=3000)
         assert not too_long.available and "max_model_len" in str(too_long.failure)
-        fits = rr.review_transcript("hello", engine=engine, max_new_tokens=64)
+        fits = rr.review_transcript("hello", policy=policy, engine=engine, max_new_tokens=64)
         assert fits.available and fits.load_s == 0.0, fits.failure
         pid = int(Path(str(mocked_vllm["log"]) + ".pid").read_text())
         rr.shutdown_review_worker()
@@ -235,9 +244,11 @@ class TestTheWorkerAgainstAMockedServer:
             pytest.fail("the fake vLLM server outlived its worker")
 
     def test_a_server_of_another_version_is_refused(
-        self, mocked_vllm: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+        self, mocked_vllm: dict[str, Any], monkeypatch: pytest.MonkeyPatch, policy: rr.ReviewPolicy
     ) -> None:
         """The reading would name an engine it was not served by; the worker is not used."""
         monkeypatch.setenv("FAKE_VLLM_VERSION", "0.30.0")
-        result = rr.review_transcript("hello", engine=rv.engine_identity("vllm", _settings()), max_new_tokens=64)
+        result = rr.review_transcript(
+            "hello", policy=policy, engine=rv.engine_identity("vllm", _settings()), max_new_tokens=64
+        )
         assert not result.available and "version" in str(result.failure)

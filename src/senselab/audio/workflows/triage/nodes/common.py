@@ -21,6 +21,7 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.features_extraction.praat_parselmouth import CppsSettings
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.consensus import located_span, word_timing_parameters
+from senselab.audio.workflows.triage.prov_types import TRIAGE_PROV_TYPE
 from senselab.audio.workflows.triage.vocabulary import (
     CONFORMANCE_REFERENTS,
     BranchReport,
@@ -30,7 +31,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     Triage,
 )
 from senselab.utils.portable_audio_io import NORMALIZE, AudioWriteReport
-from senselab.utils.prov_store import PROV_TYPE, Entity, ProvStore, file_attributes
+from senselab.utils.prov_store import Entity, ProvStore, file_attributes
 from senselab.utils.subprocess_venv import venv_environment
 
 RESERVED_REPORT_KEYS = frozenset(
@@ -160,7 +161,7 @@ REMINT = "remint"
 
 
 def mint_live(
-    store: ProvStore, *, prov_type: PROV_TYPE, extent: tuple[float, float] | None, attributes: dict[str, Any]
+    store: ProvStore, *, prov_type: TRIAGE_PROV_TYPE, extent: tuple[float, float] | None, attributes: dict[str, Any]
 ) -> str:
     """Add an entity and return a live one carrying these attributes.
 
@@ -456,7 +457,7 @@ def find_measurements(store: ProvStore, name: str) -> list[Entity]:
     ]
 
 
-def live_entities(store: ProvStore, prov_type: PROV_TYPE) -> list[Entity]:
+def live_entities(store: ProvStore, prov_type: TRIAGE_PROV_TYPE) -> list[Entity]:
     """Every non-invalidated entity of one type, in write order.
 
     Args:

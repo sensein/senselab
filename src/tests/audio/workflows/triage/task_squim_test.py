@@ -26,6 +26,7 @@ from senselab.audio.workflows.triage.task_squim import (
     task_windows,
 )
 from senselab.utils.prov_store import ProvStore
+from tests.audio.workflows.triage.conftest import b2ai_identity_attributes
 
 RATE = 16_000
 CONFIG = WindowConfig(window_s=10.0, min_window_s=3.0, floor_s=1.0)
@@ -230,12 +231,22 @@ class TestTheStore:
         assert outcome.status == ABSENT and "floor" in str(outcome.reason)
 
 
-def test_a_timestamped_manifest_stem_gives_its_family(tmp_path: Path) -> None:
-    """Where the fold names no family, the manifest stem's launch timestamp is dropped before the task is read."""
+def test_without_the_folds_family_the_recorded_task_is_read_and_never_the_stem(tmp_path: Path) -> None:
+    """A verdict from before the fold recorded its family: ADMIT's recorded task, never the file name (review 4)."""
     from senselab.audio.workflows.triage.task_squim import declared_family
 
-    store = ProvStore(run_id="stem-test")
-    assert declared_family(store, "sub-a_ses-b_task-voluntary-cough-2_20000101-000000") == "voluntary-cough"
+    assert declared_family(ProvStore(run_id="stem-test")) is None
+    store = ProvStore(run_id="recorded")
+    store.entity(
+        prov_type="stream",
+        extent=None,
+        attributes={
+            "name": "recording",
+            "path": "r.wav",
+            **b2ai_identity_attributes("sub-a_ses-b_task-voluntary-cough-2"),
+        },
+    )
+    assert declared_family(store) == "voluntary-cough"
 
 
 def _windows_before_the_shared_planner(start_s: float, end_s: float, config: WindowConfig) -> list[tuple[float, float]]:

@@ -15,6 +15,7 @@ import torch
 
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.identity import identity_of
 from senselab.audio.workflows.triage.nodes.branches import contest, deviation, write_findings
 from senselab.audio.workflows.triage.nodes.common import software_agent, write_report, write_verdict
 from senselab.audio.workflows.triage.nodes.figure import SUMMARY_LANES
@@ -663,7 +664,7 @@ class TestTheStructuredJsonCompanion:
         artifacts = report(store, tmp_path / "summary", pdf_config)
         payload = json.loads(artifacts["json"].read_text())
         assert artifacts["summary"].exists() and artifacts["json"].exists()
-        assert payload["schema_version"] == "triage-summary/v9"
+        assert payload["schema_version"] == "triage-summary/v10"
         assert payload["decisions"]["file_triage"] == payload["verdict"]["triage"]
         assert payload["decisions"]["release"] == payload["verdict"]["release"]
         assert payload["artifacts"]["summary"]["path"] == artifacts["summary"].name
@@ -1948,8 +1949,14 @@ class TestTheTitleIsShort:
         titles = _capture_titles(monkeypatch)
         store = ProvStore(run_id=self._RUN_ID)
         _seed_report_store(store, tmp_path, full=True)
+        declared = identity_of(AudioHints(metadata={"task_token": "respiration-and-cough-v2-breath"}))
+        store.entity(
+            prov_type="stream",
+            extent=None,
+            attributes={"name": "recording", "path": "r.wav", **declared.as_attributes()},
+        )
         report(store, tmp_path / "summary", _png(tmp_path))
-        assert titles[0].startswith("task-Respiration-and-cough-(v2)-Breath · 2026-08-25")
+        assert titles[0].startswith("respiration-and-cough-v2-breath · 2026-08-25")
         assert "triage:" in titles[0] and "release:" in titles[0]
 
     def test_the_full_run_id_is_not_in_the_title(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

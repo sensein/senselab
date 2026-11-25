@@ -25,6 +25,7 @@ import yaml  # type: ignore[import-untyped]
 from senselab.audio.data_structures import Audio
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.dataset_profile import data_values, profile_cache
+from senselab.audio.workflows.triage.live_evidence import UNDECLARED, declared_task_of
 from senselab.audio.workflows.triage.nodes.branches import EXPECTATIONS
 from senselab.audio.workflows.triage.nodes.common import (
     find_measurement,
@@ -34,8 +35,6 @@ from senselab.audio.workflows.triage.nodes.common import (
     write_measurement,
 )
 from senselab.audio.workflows.triage.nodes.verdict import NODE as VERDICT_NODE
-from senselab.audio.workflows.triage.recording_vectors import stem_of
-from senselab.audio.workflows.triage.routing_analysis.families import task_family, task_id_of
 from senselab.audio.workflows.triage.task_audio import MEASUREMENT as TASK_AUDIO_MEASUREMENT
 from senselab.audio.workflows.triage.task_audio import PLAIN, sample_bounds, task_extent
 from senselab.utils.prov_store import Entity, ProvStore
@@ -181,21 +180,22 @@ def branch_of_family(family: str | None) -> str | None:
     return owners[0] if owners else None
 
 
-def declared_family(store: ProvStore, stem: str | None) -> str | None:
-    """The recording's declared family: the fold's, else the stem's task id collapsed.
+def declared_family(store: ProvStore) -> str | None:
+    """The recording's declared family: the fold's, else the task ADMIT recorded.
 
     Args:
         store: The run's store.
-        stem: The recording's BIDS stem, with or without the run's launch timestamp, or None.
 
     Returns:
-        The family, or None where neither is known.
+        The family, or None where neither records one (a pass over the store requires a recorded identity, plan
+        step 6a, so a verdict from before the fold recorded its family still has ADMIT's).
     """
     folded = find_verdict(store, VERDICT_NODE)
     family = None if folded is None else folded.attributes.get("declared_family")
     if family:
         return str(family)
-    return task_family(task_id_of(stem_of(Path(stem)))) if stem else None
+    recorded = declared_task_of(store)[1]
+    return recorded if recorded != UNDECLARED else None
 
 
 def weights_path(asset: str) -> Path:
@@ -335,7 +335,6 @@ def measure_task_squim(
     config: TriageConfig,
     *,
     run_dir: Path,
-    stem: str | None = None,
     scorer: ScorerFactory | None = None,
     parameters: Mapping[str, Any] | None = None,
 ) -> TaskSquimOutcome:
@@ -350,7 +349,6 @@ def measure_task_squim(
         store: The run's store.
         config: The triage configuration, for ``task_audio.padding_s``.
         run_dir: The run directory the plain stream's path is relative to.
-        stem: The recording's BIDS stem, for its family where the fold records none.
         scorer: Builds the SQUIM reader, called only once a window is to be read; :func:`squim_scorer`
             when None.
         parameters: ``data/task_squim.yaml``'s mapping; the packaged one when None.
@@ -371,7 +369,7 @@ def measure_task_squim(
         _retire(store, held, software=software_agent(store), reason=reason)
         return TaskSquimOutcome(ABSENT, reason, None, changed=True)
 
-    family = declared_family(store, stem)
+    family = declared_family(store)
     branch = branch_of_family(family)
     if branch in set(p.get("no_value_branches") or ()):
         return absent(f"{str(branch).lower()} family")

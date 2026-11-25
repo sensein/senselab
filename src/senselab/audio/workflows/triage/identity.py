@@ -5,11 +5,10 @@ A caller declares a recording's identity in its hint's ``metadata`` under :data:
 it onto the ``recording`` stream entity it already creates (:meth:`RecordingIdentity.as_attributes`), so
 a reader that holds only the store sees the declaration too.
 
-Whatever the hint leaves out is read off the recording's file stem, the one place triage reads a file name
-for identity: the ``task-`` entity through
-:func:`~senselab.audio.workflows.triage.routing_analysis.families.task_id_of`, and the ``sub-`` and ``ses-``
-entities, each on its own. A store written before ADMIT recorded an identity has none: the readers here return
-None for it, and a replay records one.
+Triage reads nothing off a file name (plan step 6a): whatever the hint leaves out is not declared. A dataset whose
+names carry the identity reads it off them in its own hint builder, and may say so under :data:`IDENTITY_FROM_KEY`,
+which ADMIT records as the fields' source. A store written before ADMIT recorded an identity has none: the readers
+here return None or :data:`UNKNOWN_TASK` for it, and a replay records one.
 
 Corpus passes read the same record. The corpus table (``recording_vectors``) carries each run's recorded
 identity as columns (:func:`identity_columns`), a replay manifest copies them, and a pass groups its rows by
@@ -24,11 +23,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from senselab.audio.data_structures import AudioHints
-from senselab.audio.workflows.triage.routing_analysis.families import UNKNOWN_TASK, task_family, task_id_of
+from senselab.audio.workflows.triage.routing_analysis.families import UNKNOWN_TASK, task_family
 from senselab.utils.prov_store import Entity, ProvStore
 
 PARTICIPANT_KEY = "participant_id"
@@ -46,9 +44,14 @@ DECLARED_TASK_ID = "declared_task_id"
 DECLARED_FROM = "declared_from"
 """The ``recording`` stream attributes ADMIT records the resolved identity under."""
 
+IDENTITY_FROM_KEY = "identity_from"
+"""The hint ``metadata`` key a caller says its declared identity came from, where not from its own records:
+:data:`FROM_STEM` for values its hint builder read off the file name."""
+
 FROM_HINT = "hint"
 FROM_STEM = "stem"
-"""Where a field of the identity came from."""
+"""Where a field of the identity came from: declared in the hint, or read off the file name (by the hint builder;
+a store from before step 6a records it for triage's own reading)."""
 
 ROW_PARTICIPANT = "participant"
 ROW_SESSION = "session"
@@ -83,8 +86,8 @@ class RecordingIdentity:
         participant: The participant, e.g. ``sub-01``, or None where nothing names one.
         session: The session, e.g. ``ses-02``, or None where nothing names one.
         task_id: The lower-cased task id with its trailing index, or :data:`UNKNOWN_TASK`.
-        sources: :data:`FROM_HINT` or :data:`FROM_STEM` for each of ``participant``, ``session`` and
-            ``task_id``.
+        sources: :data:`FROM_HINT` or :data:`FROM_STEM` for each of ``participant``, ``session`` and ``task_id``
+            that was declared; a field nothing declared has no entry.
     """
 
     participant: str | None
@@ -116,28 +119,6 @@ class RecordingIdentity:
         }
 
 
-def _entity(stem: str, prefix: str) -> str | None:
-    return next((chunk for chunk in stem.split("_") if chunk.startswith(prefix) and chunk != prefix), None)
-
-
-def identity_from_stem(stem: str) -> RecordingIdentity:
-    """The identity a file stem alone names: the ``sub-``, ``ses-`` and ``task-`` entities, each on its own.
-
-    Args:
-        stem: A recording's file stem.
-
-    Returns:
-        The identity, every field from :data:`FROM_STEM`; a field the stem does not name is None (the task
-        :data:`UNKNOWN_TASK`).
-    """
-    return RecordingIdentity(
-        participant=_entity(stem, "sub-"),
-        session=_entity(stem, "ses-"),
-        task_id=task_id_of(stem),
-        sources={"participant": FROM_STEM, "session": FROM_STEM, "task_id": FROM_STEM},
-    )
-
-
 def check_label(label: str | None, what: str) -> str | None:
     """A participant or session label, refused where it could not name one folder, file or group key.
 
@@ -163,32 +144,33 @@ def _declared(hint: AudioHints | None, key: str) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
-def identity_of(stem: str, hint: AudioHints | None = None) -> RecordingIdentity:
-    """A recording's identity: each field from the hint where it declares one, otherwise off the stem.
+def identity_of(hint: AudioHints | None = None) -> RecordingIdentity:
+    """A recording's identity: each field the hint declares; nothing is read off the file name.
 
     Args:
-        stem: The recording's file stem.
         hint: What the recording was declared to contain, or None.
 
     Returns:
-        The identity, with each field's source.
+        The identity. A declared field's source is :data:`FROM_HINT`, or :data:`FROM_STEM` where the hint says
+        under :data:`IDENTITY_FROM_KEY` that its builder read it off the file name; a field the hint does not
+        declare is None (the task :data:`UNKNOWN_TASK`) with no source.
 
     Raises:
         IdentityLabelError: If the participant or session cannot name a folder (:func:`check_label`).
+        ValueError: If :data:`IDENTITY_FROM_KEY` names another source.
     """
-    parsed = identity_from_stem(stem)
     participant = _declared(hint, PARTICIPANT_KEY)
     session = _declared(hint, SESSION_KEY)
     token = _declared(hint, TASK_TOKEN_KEY)
+    source = _declared(hint, IDENTITY_FROM_KEY) or FROM_HINT
+    if source not in (FROM_HINT, FROM_STEM):
+        raise ValueError(f"hint metadata {IDENTITY_FROM_KEY} is {source!r}; it is {FROM_HINT!r} or {FROM_STEM!r}")
+    declared = {"participant": participant, "session": session, "task_id": token}
     return RecordingIdentity(
-        participant=check_label(participant or parsed.participant, "participant"),
-        session=check_label(session or parsed.session, "session"),
-        task_id=token.lower() if token else parsed.task_id,
-        sources={
-            "participant": FROM_HINT if participant else FROM_STEM,
-            "session": FROM_HINT if session else FROM_STEM,
-            "task_id": FROM_HINT if token else FROM_STEM,
-        },
+        participant=check_label(participant, "participant"),
+        session=check_label(session, "session"),
+        task_id=token.lower() if token else UNKNOWN_TASK,
+        sources={field: source for field, value in declared.items() if value},
     )
 
 
@@ -276,25 +258,19 @@ def identity_from_attributes(attributes: Mapping[str, Any]) -> RecordingIdentity
     )
 
 
-def declared_task_id(store: ProvStore, stem: str = "") -> str:
-    """The task id every stage reads: the one ADMIT recorded, else the stem's.
+def declared_task_id(store: ProvStore) -> str:
+    """The task id every stage reads: the one ADMIT recorded.
 
     Args:
         store: The provenance store.
-        stem: The stem to read where ADMIT recorded no task (a store from before it recorded identity);
-            empty reads the stem of the path ADMIT recorded (:func:`admit_record`).
 
     Returns:
-        The lower-cased task id with its trailing index, or :data:`UNKNOWN_TASK`.
+        The lower-cased task id with its trailing index, or :data:`UNKNOWN_TASK` where none is recorded (a store
+        from before ADMIT recorded identity reads none until it is replayed).
     """
     record = admit_record(store)
-    if record is not None:
-        attributes, path = record
-        recorded = attributes.get(DECLARED_TASK_ID)
-        if isinstance(recorded, str):
-            return recorded
-        stem = stem or Path(path).stem
-    return task_id_of(stem) if stem else UNKNOWN_TASK
+    recorded = record[0].get(DECLARED_TASK_ID) if record is not None else None
+    return recorded if isinstance(recorded, str) else UNKNOWN_TASK
 
 
 def declared_session_key(store: ProvStore) -> str | None:
@@ -344,7 +320,8 @@ def row_identity(row: Mapping[str, Any]) -> RecordingIdentity | None:
         row: The row, carrying :func:`identity_columns`.
 
     Returns:
-        The row's identity, or None where the row's run records none (every ``*_from`` column empty).
+        The row's identity, or None where the row's run records none (no task and every ``*_from`` column empty;
+        a run that recorded an identity declaring nothing carries the task :data:`UNKNOWN_TASK`).
 
     Raises:
         ManifestWithoutIdentity: If the row carries none of the identity columns.
@@ -354,7 +331,7 @@ def row_identity(row: Mapping[str, Any]) -> RecordingIdentity | None:
             f"row {row.get('stem')!r} carries no identity columns; rebuild the manifest from a current corpus table"
         )
     sources = {name: str(row[column]) for name, column in ROW_SOURCES.items() if _label(row.get(column))}
-    if not sources:
+    if not sources and not _label(row.get(ROW_TASK)):
         return None
     return RecordingIdentity(
         participant=_label(row.get(ROW_PARTICIPANT)),

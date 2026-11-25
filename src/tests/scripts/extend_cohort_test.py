@@ -12,9 +12,10 @@ import numpy as np
 import pytest
 import soundfile as sf
 
+from senselab.audio.workflows.triage.b2ai_hints import identity_from_name
 from senselab.audio.workflows.triage.cohort_fold import COHORT_READING, MEASURED
 from senselab.audio.workflows.triage.extend import read_store, write_store
-from senselab.audio.workflows.triage.identity import ManifestWithoutIdentity, identity_columns, identity_from_stem
+from senselab.audio.workflows.triage.identity import ManifestWithoutIdentity, identity_columns
 from senselab.audio.workflows.triage.nodes.common import find_measurement
 from senselab.utils.prov_store import ProvStore
 from tests.audio.workflows.triage.nodes.conftest import word_attributes
@@ -82,7 +83,7 @@ def _run(  # noqa: ANN202
         extent=None,
         attributes={"name": "yamnet_scores", "signal": "plain", "path": "derivatives/yamnet_scores.json"},
     )
-    identity = identity_from_stem(stem)
+    identity = identity_from_name(stem)
     store.entity(
         prov_type="stream",
         extent=(0.0, duration),
@@ -338,9 +339,9 @@ def test_a_manifest_without_identity_columns_is_refused(tmp_path: Path) -> None:
 def test_recordings_declaring_no_session_pool_under_their_participant() -> None:
     """A participant's session-less recordings form one pool, not one session each; a nameless one is its own."""
     rows = [
-        {"stem": "a", "enhanced": "/x/a", **identity_columns(identity_from_stem("sub-a_task-x"))},
-        {"stem": "b", "enhanced": "/x/b", **identity_columns(identity_from_stem("sub-a_task-y"))},
-        {"stem": "c", "enhanced": "/x/c", **identity_columns(identity_from_stem("recording-c"))},
+        {"stem": "a", "enhanced": "/x/a", **identity_columns(identity_from_name("sub-a_task-x"))},
+        {"stem": "b", "enhanced": "/x/b", **identity_columns(identity_from_name("sub-a_task-y"))},
+        {"stem": "c", "enhanced": "/x/c", **identity_columns(identity_from_name("recording-c"))},
     ]
     grouped = {p: [s for s, _ in sessions] for p, sessions in cli.participants_of(rows)}
     assert grouped == {"sub-a": ["sub-a/"], "c": ["c"]}

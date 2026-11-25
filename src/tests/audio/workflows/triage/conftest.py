@@ -6,6 +6,7 @@ a seeded store the way ADMIT does, and :func:`record_admitted_hint`, which recor
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -97,11 +98,10 @@ def declare_hint_identity(store: ProvStore, hint: AudioHints) -> str:
         The new stream entity's id.
     """
     latest = [e for e in store.entities("stream") if e.attributes.get("name") == RECORDING_STREAM][-1]
-    stem = Path(str(latest.attributes.get("path") or "")).stem
     return store.entity(
         prov_type="stream",
         extent=latest.extent,
-        attributes={**latest.attributes, **identity_of(stem, hint).as_attributes()},
+        attributes={**latest.attributes, **identity_of(hint).as_attributes()},
     )
 
 
@@ -163,3 +163,57 @@ def _scalar_evidence_rows(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 @pytest.fixture(autouse=True)
 def _triage_reads_the_b2ai_profile(b2ai_triage_profile: Any) -> None:  # noqa: ANN401 -- the fixture's profile
     """Every triage test reads its dataset data from the Bridge2AI-Voice adult profile (src/tests/conftest.py)."""
+
+
+def b2ai_identity_attributes(path_or_stem: str) -> dict[str, Any]:
+    """The identity attributes ADMIT records for a B2AI-named recording, as B2AI's hint builder declares them.
+
+    For a test that seeds a ``recording`` stream by hand: senselab reads nothing off the file name (plan step 6a),
+    so the identity the name carries is recorded beside it, as on a real run.
+
+    Args:
+        path_or_stem: The recording's path or stem, B2AI-named; a run stamp after it is ignored.
+
+    Returns:
+        ``identity_of(...).as_attributes()`` for the participant, session and task the name carries.
+    """
+    from senselab.audio.workflows.triage.b2ai_hints import identity_from_name  # noqa: PLC0415
+
+    stem = re.sub(
+        r"_\d{8}-\d{6}$", "", Path(str(path_or_stem)).stem if "." in Path(str(path_or_stem)).name else str(path_or_stem)
+    )
+    named = identity_from_name(stem)
+    metadata = {
+        key: value
+        for key, value in (
+            (PARTICIPANT_KEY, named.participant),
+            (SESSION_KEY, named.session),
+            (TASK_TOKEN_KEY, named.task_id),
+        )
+        if value and value != "unknown"
+    }
+    return identity_of(AudioHints(metadata=metadata)).as_attributes()
+
+
+def seed_recorded_identity(store: ProvStore, stem: str) -> str:
+    """Record on a hand-seeded store the identity ADMIT records on every run, as B2AI's hints declare it.
+
+    Corpus passes refuse a run that records no identity (plan step 6a: replay it first), so a test that seeds a
+    finished run by hand records one. The fields are what B2AI's hint builder reads off ``stem``, declared.
+
+    Args:
+        store: The seeded store.
+        stem: The recording's file stem, B2AI-named, or its run directory's name (the stem and a stamp).
+
+    Returns:
+        The ``recording`` stream entity's id.
+    """
+    return store.entity(
+        prov_type="stream",
+        extent=None,
+        attributes={
+            "name": RECORDING_STREAM,
+            "path": f"{stem}.wav",
+            **b2ai_identity_attributes(stem),
+        },
+    )

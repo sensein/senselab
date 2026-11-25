@@ -18,7 +18,13 @@ from typing import Any
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.data_structures.audio_hints import ExpectedSpeech
-from senselab.audio.workflows.triage.identity import PARTICIPANT_KEY, SESSION_KEY, TASK_TOKEN_KEY, identity_from_stem
+from senselab.audio.workflows.triage.identity import (
+    FROM_STEM,
+    PARTICIPANT_KEY,
+    SESSION_KEY,
+    TASK_TOKEN_KEY,
+    RecordingIdentity,
+)
 from senselab.audio.workflows.triage.routing_analysis.families import UNKNOWN_TASK, task_family
 from senselab.audio.workflows.triage.task_catalogue import task_list
 from senselab.audio.workflows.triage.task_registry import prompt_ref, questionnaire_field, task_text
@@ -67,6 +73,31 @@ def task_id_of(stem: str) -> str:
     """
     match = _TASK.search(stem)
     return match.group(1).lower() if match else "unknown"
+
+
+def _entity(stem: str, prefix: str) -> str | None:
+    return next((chunk for chunk in stem.split("_") if chunk.startswith(prefix) and chunk != prefix), None)
+
+
+def identity_from_name(stem: str) -> RecordingIdentity:
+    """The identity a B2AI file stem names: its ``sub-``, ``ses-`` and ``task-`` entities, each on its own.
+
+    B2AI's hint builder declares these (senselab reads nothing off a file name, plan step 6a), and the identity
+    check and the replay tools take this as the dataset's file-name reader.
+
+    Args:
+        stem: A recording's file stem.
+
+    Returns:
+        The identity, every field from :data:`~senselab.audio.workflows.triage.identity.FROM_STEM`; a field the
+        stem does not name is None (the task ``unknown``).
+    """
+    return RecordingIdentity(
+        participant=_entity(stem, "sub-"),
+        session=_entity(stem, "ses-"),
+        task_id=task_id_of(stem),
+        sources={"participant": FROM_STEM, "session": FROM_STEM, "task_id": FROM_STEM},
+    )
 
 
 def read_sidecars(wav: Path) -> dict[str, Any]:
@@ -179,7 +210,7 @@ def build_hint(wav: Path) -> tuple[AudioHints | None, dict[str, Any]]:
     metadata: dict[str, Any] = {"task_name": name}
     # Declared from the stem, so a hinted run reads the same task id as the stem parsers did before hints
     # declared one. Taking it from the sidecars instead is a later, separate change.
-    stem_identity = identity_from_stem(wav.stem)
+    stem_identity = identity_from_name(wav.stem)
     for key, value in (
         (PARTICIPANT_KEY, stem_identity.participant),
         (SESSION_KEY, stem_identity.session),

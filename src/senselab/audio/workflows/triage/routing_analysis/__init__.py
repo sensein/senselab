@@ -16,7 +16,7 @@ from senselab.audio.workflows.triage.routing_analysis.detectors import (
     detector_value,
     sweep_points,
 )
-from senselab.audio.workflows.triage.routing_analysis.families import task_family, task_id_of
+from senselab.audio.workflows.triage.routing_analysis.families import task_family
 from senselab.audio.workflows.triage.routing_analysis.features import (
     RecordingFeatures,
     bracket_type,
@@ -174,7 +174,6 @@ __all__ = [
     "sweep_points",
     "tally_families",
     "task_family",
-    "task_id_of",
     "taxonomy_as_run",
     "unassigned_families",
     "value_stats",

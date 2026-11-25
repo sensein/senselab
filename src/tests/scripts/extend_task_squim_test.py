@@ -16,6 +16,7 @@ from senselab.audio.workflows.triage import task_squim
 from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.nodes.common import find_measurement, path_attributes, write_stream
 from senselab.utils.prov_store import ProvStore
+from tests.audio.workflows.triage.conftest import b2ai_identity_attributes
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI = _REPO_ROOT / "scripts" / "extend_task_squim.py"
@@ -45,7 +46,13 @@ def _run(tree: Path) -> Path:
     for name in ("recording", "plain", "enhanced"):
         relative, _ = write_stream(audio, run_dir, name)
         store.entity(
-            prov_type="stream", extent=(0.0, 12.0), attributes={"name": name, **path_attributes(relative, run_dir)}
+            prov_type="stream",
+            extent=(0.0, 12.0),
+            attributes={
+                "name": name,
+                **path_attributes(relative, run_dir),
+                **(b2ai_identity_attributes(run_root.name) if name == "recording" else {}),
+            },
         )
     store.entity(prov_type="span", extent=(1.0, 11.0), attributes={"role": "task_extent", "branch": "SPEECH"})
     store.write_jsonl(run_dir / "store.jsonl")

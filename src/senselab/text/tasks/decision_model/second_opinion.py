@@ -6,7 +6,7 @@ anything the redaction policy removes, whether the masked text as it would ship 
 whether the participant talks off the task -- or, in an item-set task (the context's ``item_set``), whether
 the participant utters phrases instead of items (:func:`questions_for`). The policy is the reviewer's own
 (:func:`~senselab.text.tasks.pii_detection.redaction_review.redaction_policy_text`), sent in the state, and
-the task's nature and content guidance come from the reviewer's ``task_guidance.yaml``.
+the task's nature and content guidance come from the same review policy (the dataset's, plan step 6b).
 
 Each answer is kept as a probability; each choice question also keeps its chosen class and its class
 probabilities.
@@ -25,6 +25,7 @@ from senselab.text.tasks.pii_detection.redaction_review import (
     PHRASES_NONE,
     PHRASES_OCCASIONAL,
     PHRASES_PREDOMINANT,
+    ReviewPolicy,
     redaction_policy_text,
     task_guidance,
     task_nature_description,
@@ -218,13 +219,16 @@ def read_answers(answers: Mapping[str, Any], questions: Mapping[str, Mapping[str
     )
 
 
-def opinion_state(transcript: str, context: Mapping[str, Any], masked_text: str) -> dict[str, str]:
+def opinion_state(
+    transcript: str, context: Mapping[str, Any], masked_text: str, policy: ReviewPolicy
+) -> dict[str, str]:
     """The state the questions are asked about: the task's facts, the policy, and both texts.
 
     Args:
         transcript: The text the reviewer reads.
         context: The reviewer's task context (``task``, ``instructions``, ``asked_to_say``, ...).
         masked_text: The transcript exactly as the release would ship it under the final mask plan.
+        policy: The dataset's review policy, the one the reviewer reads.
 
     Returns:
         The state, with the task family's nature
@@ -236,12 +240,12 @@ def opinion_state(transcript: str, context: Mapping[str, Any], masked_text: str)
     family = str(context.get("task") or "") or None
     return {
         "task": str(context.get("task") or ""),
-        "task_nature": task_nature_description(family),
+        "task_nature": task_nature_description(family, policy),
         "speech_type": str(context.get("speech_type") or ""),
         "instructions": str(context.get("instructions") or ""),
         "stimulus": str(context.get("asked_to_say") or ""),
-        "task_content": task_guidance(family),
-        "redaction_policy": redaction_policy_text(),
+        "task_content": task_guidance(family, policy),
+        "redaction_policy": redaction_policy_text(policy),
         "transcript": transcript,
         "masked_text": masked_text,
     }
@@ -252,6 +256,7 @@ def ask_second_opinion(
     transcript: str,
     context: Mapping[str, Any],
     masked_text: str,
+    policy: ReviewPolicy,
 ) -> SecondOpinion:
     """Ask the question set about one transcript.
 
@@ -260,9 +265,10 @@ def ask_second_opinion(
         transcript: The text the reviewer reads.
         context: The reviewer's task context.
         masked_text: The transcript as the release would ship it.
+        policy: The dataset's review policy.
 
     Returns:
         The answers to :func:`questions_for` the context.
     """
     questions = questions_for(context)
-    return read_answers(ask(opinion_state(transcript, context, masked_text), questions), questions)
+    return read_answers(ask(opinion_state(transcript, context, masked_text, policy), questions), questions)

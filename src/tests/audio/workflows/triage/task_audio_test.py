@@ -26,6 +26,7 @@ from senselab.audio.workflows.triage.task_audio import (
 )
 from senselab.audio.workflows.triage.vocabulary import Release
 from senselab.utils.prov_store import ProvStore
+from tests.audio.workflows.triage.conftest import b2ai_identity_attributes
 
 RECORDING_HZ = 44_100
 PLAIN_HZ = 16_000
@@ -58,6 +59,7 @@ def _stream(store: ProvStore, run_dir: Path, name: str, audio: Audio, *, source:
             "sampling_rate": audio.sampling_rate,
             "channels": int(audio.waveform.shape[0]),
             "write_gain": report.gain,
+            **(b2ai_identity_attributes("sub-a_ses-b_task-rainbow-passage") if name == "recording" else {}),
         },
     )
     if source is not None:

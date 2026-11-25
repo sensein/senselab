@@ -1,0 +1,25 @@
+# A test's own task guidance: the reviewer takes the caller's (plan step 6b), so the text tests do not read a dataset's.
+families:
+  - names: [definition-task]
+    guidance: >-
+      This is a definition task: the target word and what explains it are task content.
+  - names: [reading-task]
+    guidance: >-
+      The participant reads a given text aloud; its words are task content.
+natures:
+  - nature: open_response
+    names: [open-task, definition-task]
+    description: >-
+      The participant answers in their own words.
+  - nature: item_generation
+    names: [list-task]
+    description: >-
+      The participant names items of a category.
+  - nature: read_or_recall
+    names: [reading-task, recall-task]
+    description: >-
+      The participant reads or retells a given text.
+  - nature: non_lexical
+    names: [breath-task]
+    description: >-
+      The participant makes no words: breathing, coughing, phonation.

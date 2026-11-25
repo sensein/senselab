@@ -14,6 +14,7 @@ import pytest
 import soundfile as sf
 
 from senselab.audio.workflows.triage import review_page
+from senselab.audio.workflows.triage.b2ai_hints import identity_from_name
 from senselab.audio.workflows.triage.identity import identity_of
 from senselab.audio.workflows.triage.recording_vectors import read_store
 from senselab.audio.workflows.triage.review_page import page as page_module
@@ -82,7 +83,7 @@ def _run_root(root: Path) -> Path:
         entity(
             "rec",
             "stream",
-            {"name": "recording", "path": "streams/recording.flac", **identity_of(STEM).as_attributes()},
+            {"name": "recording", "path": "streams/recording.flac", **identity_from_name(STEM).as_attributes()},
             [0.0, 4.0],
         ),
         entity("plain", "stream", {"name": "plain", "path": "streams/plain.flac"}, [0.0, 4.0]),

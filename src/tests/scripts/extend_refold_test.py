@@ -24,6 +24,7 @@ from senselab.audio.workflows.triage.nodes.common import software_agent, write_v
 from senselab.audio.workflows.triage.run import LOG_FILE
 from senselab.audio.workflows.triage.vocabulary import REDACTION_LLM_ANNOTATION, Outcome
 from senselab.utils.prov_store import ProvStore
+from tests.audio.workflows.triage.conftest import b2ai_identity_attributes
 from tests.audio.workflows.triage.nodes.conftest import word_attributes
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -63,7 +64,13 @@ def _finished_run(root: Path, *, words: Sequence[str] = ("hello", "alicia")) -> 
         stream = store.entity(
             prov_type="stream",
             extent=(0.0, 3.0),
-            attributes={"name": name, "path": f"streams/{name}.flac", "sampling_rate": SR, "channels": 1},
+            attributes={
+                "name": name,
+                "path": f"streams/{name}.flac",
+                "sampling_rate": SR,
+                "channels": 1,
+                **(b2ai_identity_attributes(run_root.name) if name == "recording" else {}),
+            },
         )
         store.was_generated_by(stream, activity)
     word_ids = []

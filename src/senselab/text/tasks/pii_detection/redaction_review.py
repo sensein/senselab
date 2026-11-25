@@ -51,7 +51,7 @@ from typing import Any, Mapping, Optional, Sequence
 
 import yaml
 
-from senselab.text.tasks.pii_detection.redaction_policy import country_runs, date_positions, state_positions
+from senselab.text.tasks.pii_detection.redaction_policy import Lexicon, country_runs, date_positions, state_positions
 from senselab.utils.dependencies import hf_subprocess_env
 from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, venv_python
 
@@ -156,9 +156,6 @@ SAFE_HARBOR_PATH = Path(__file__).parent / "data" / "safe_harbor.yaml"
 redaction policy (:mod:`~senselab.text.tasks.pii_detection.redaction_policy`) in place of (A)-(C)."""
 
 
-TASK_GUIDANCE_PATH = Path(__file__).parent / "data" / "task_guidance.yaml"
-"""What counts as the task's own content in each task family, and what kind of task each family is."""
-
 NATURE_OPEN_RESPONSE = "open_response"
 NATURE_ITEM_GENERATION = "item_generation"
 NATURE_READ_OR_RECALL = "read_or_recall"
@@ -167,27 +164,82 @@ TASK_NATURES = (NATURE_OPEN_RESPONSE, NATURE_ITEM_GENERATION, NATURE_READ_OR_REC
 """The kinds of task a declared family is, as ``task_guidance.yaml`` names them under ``natures``."""
 
 
-@lru_cache(maxsize=1)
-def _task_guidance() -> tuple[tuple[tuple[str, ...], str], ...]:
-    """The packaged guidance, as ``(family names, guidance)`` pairs in file order."""
-    raw = yaml.safe_load(TASK_GUIDANCE_PATH.read_text()) or {}
-    return tuple(
+@dataclass(frozen=True)
+class ReviewPolicy:
+    """What a dataset tells the reviewer: its redaction policy, written out, and what counts as each task's content.
+
+    senselab keeps the reviewer's frame, the Safe Harbor identifiers and the answer checks; the policy and the
+    guidance are the dataset's (plan step 6b). Load them with :func:`load_review_policy`.
+
+    Attributes:
+        text: The policy prose, sent ahead of the Safe Harbor identifiers.
+        guidance: ``(family names, guidance)`` pairs, in file order.
+        natures: ``(nature, family names, description)`` triples, in file order.
+        guidance_digest: The sha256 of the guidance file, which a reading's cache identity carries.
+    """
+
+    text: str
+    guidance: tuple[tuple[tuple[str, ...], str], ...]
+    natures: tuple[tuple[str, tuple[str, ...], str], ...]
+    guidance_digest: str
+
+
+def load_review_policy(policy_path: str | Path, guidance_path: str | Path) -> ReviewPolicy:
+    """A dataset's review policy, from its policy prose and its task guidance file.
+
+    Args:
+        policy_path: The policy prose (``review_policy.txt``), sent to the reviewer as written.
+        guidance_path: The task guidance (``task_guidance.yaml``): ``families`` with ``names`` and ``guidance``,
+            ``natures`` with ``nature``, ``names`` and ``description``.
+
+    Returns:
+        The policy.
+
+    Raises:
+        ValueError: If the guidance names a nature outside :data:`TASK_NATURES`.
+    """
+    return _load_review_policy(str(Path(policy_path).resolve()), str(Path(guidance_path).resolve()))
+
+
+@lru_cache(maxsize=4)
+def _load_review_policy(policy_path: str, guidance_path: str) -> ReviewPolicy:
+    raw_bytes = Path(guidance_path).read_bytes()
+    raw = yaml.safe_load(raw_bytes.decode("utf-8")) or {}
+    guidance = tuple(
         (tuple(str(name) for name in entry.get("names") or ()), " ".join(str(entry.get("guidance") or "").split()))
         for entry in raw.get("families") or ()
     )
+    natures = tuple(
+        (
+            str(entry.get("nature") or ""),
+            tuple(str(name) for name in entry.get("names") or ()),
+            " ".join(str(entry.get("description") or "").split()),
+        )
+        for entry in raw.get("natures") or ()
+    )
+    unknown = [nature for nature, _names, _description in natures if nature not in TASK_NATURES]
+    if unknown:
+        raise ValueError(f"{Path(guidance_path).name}: unknown natures {unknown}; known: {TASK_NATURES}")
+    return ReviewPolicy(
+        text=Path(policy_path).read_text(encoding="utf-8"),
+        guidance=guidance,
+        natures=natures,
+        guidance_digest=hashlib.sha256(raw_bytes).hexdigest(),
+    )
 
 
-def task_guidance(family: str | None) -> str:
+def task_guidance(family: str | None, policy: ReviewPolicy) -> str:
     """The guidance on task content for one declared task family.
 
     Args:
         family: The declared family (``productive-vocabulary``, ``picture-description-option1`` ...), or None.
+        policy: The dataset's review policy.
 
     Returns:
         The first entry whose names include the family, or a prefix of it followed by ``-``; the empty
         string where none does.
     """
-    for names, guidance in _task_guidance():
+    for names, guidance in policy.guidance:
         if _family_matches(family, names):
             return guidance
     return ""
@@ -199,59 +251,37 @@ def _family_matches(family: str | None, names: Sequence[str]) -> bool:
     return bool(key) and any(key == name or key.startswith(f"{name}-") for name in names)
 
 
-@lru_cache(maxsize=1)
-def _task_natures() -> tuple[tuple[str, tuple[str, ...], str], ...]:
-    """The packaged natures, as ``(nature, family names, description)`` in file order."""
-    raw = yaml.safe_load(TASK_GUIDANCE_PATH.read_text()) or {}
-    natures = tuple(
-        (
-            str(entry.get("nature") or ""),
-            tuple(str(name) for name in entry.get("names") or ()),
-            " ".join(str(entry.get("description") or "").split()),
-        )
-        for entry in raw.get("natures") or ()
-    )
-    unknown = [nature for nature, _names, _description in natures if nature not in TASK_NATURES]
-    if unknown:
-        raise ValueError(f"{TASK_GUIDANCE_PATH.name}: unknown natures {unknown}; known: {TASK_NATURES}")
-    return natures
-
-
-def task_nature(family: str | None) -> str:
+def task_nature(family: str | None, policy: ReviewPolicy) -> str:
     """What kind of task a declared family is.
 
     Args:
         family: The declared family, or None.
+        policy: The dataset's review policy.
 
     Returns:
         One of :data:`TASK_NATURES` for the first ``natures`` entry whose names match the family, or the
         empty string where none does.
     """
-    for nature, names, _description in _task_natures():
+    for nature, names, _description in policy.natures:
         if _family_matches(family, names):
             return nature
     return ""
 
 
-def task_nature_description(family: str | None) -> str:
+def task_nature_description(family: str | None, policy: ReviewPolicy) -> str:
     """The description of a declared family's nature, as both prompts send it.
 
     Args:
         family: The declared family, or None.
+        policy: The dataset's review policy.
 
     Returns:
         The matching ``natures`` entry's description, or the empty string where none matches.
     """
-    for _nature, names, description in _task_natures():
+    for _nature, names, description in policy.natures:
         if _family_matches(family, names):
             return description
     return ""
-
-
-@lru_cache(maxsize=1)
-def task_guidance_digest() -> str:
-    """The sha256 of the packaged guidance file, which a reading's cache identity carries."""
-    return hashlib.sha256(TASK_GUIDANCE_PATH.read_bytes()).hexdigest()
 
 
 @lru_cache(maxsize=1)
@@ -287,57 +317,16 @@ def _identifier_rule() -> str:
     return "\n".join(lines)
 
 
-_POLICY = (
-    "REDACTION POLICY. Apply these rules; they are stricter than HIPAA Safe Harbor in places.\n"
-    "- NAMES. Remove the name of the participant and of every person they know: family, friends, "
-    "neighbours, doctors, coworkers, anyone in their life. A public figure -- a celebrity, an author, an "
-    'artist, a politician, a historical figure, a fictional character ("Ray Bradbury", "Taylor Swift", '
-    '"Cinderella") -- may be proposed for release with the reason; a person will confirm it before it is '
-    'released. When a removed name is not a person at all, release it with the key "relabel" saying what '
-    'it is: work_title (a film, book, song, show or game: "Star Wars", "Harry Potter", "The Green Mile"), '
-    'brand_or_product ("Botox", "M&M"), organization, place, or other_non_person (an ordinary word, or a '
-    "character in the task's picture or story, that a detector mistook for a name). A relabelled "
-    "organization then follows the organization rule and a relabelled place the place rule. Relationship "
-    'words are never removed: release "mom", "my brother", "grandpa", "my wife", "my son", "aunt", '
-    '"cousin", "mamá", "mi hermano", "abuela".\n'
-    '- DATES. Remove every absolute date element, the year included: a year ("2021", "\'98", "two '
-    'thousand twenty-one"), a month ("October"), a holiday ("Halloween", "Christmas"), a day of the '
-    'month ("the 14th"). These are never released: in "I had COVID in 2021" remove "2021". Keep a '
-    'season ("summer", "invierno"), a day of the week ("Monday"), a time of day ("this morning"), and every '
-    'relative or length-of-time expression ("2-3 weeks ago", "last year", "a few months", '
-    '"yesterday", "for two years") -- release these.\n'
-    '- AGES. Remove every age ("I\'m 73", "seventy-three years old", "in my sixties", "my 50th '
-    'birthday"); never release one.\n'
-    "- PLACES. Remove every place smaller than a country that the speaker connects to themselves or to "
-    "people they know -- where they live, lived, work, travel, are treated or were born: a street, a "
-    "neighbourhood, a city, a county, a state or province, a region, a named venue. A place that "
-    'identifies nobody may be released with the key "place_reason" set to one of: historical ("the '
-    'Roman Empire", "the Civil War in Virginia"), fictional (a setting in a book or film), '
-    'public_landmark_or_general_knowledge ("the Colosseum", "a New York winter", "California poppies"), '
-    "task_content (the task's own stimulus, or a description of it). A state or province is released "
-    "only as historical. A place the speaker connects to themselves or their people stays removed, "
-    'whatever else it is. A country may stay ("we moved from Mexico") unless, together with other details '
-    "left in the text, it would help single the speaker out; then propose redacting it.\n"
-    "- ORGANIZATIONS. Remove a specific named organization: an employer, a company, a school or "
-    "university, a military unit, a hospital or clinic with a proper name, a church "
-    '("USF voice center", "the United States Marine Corps", "Vanderbilt"). Keep a generic description '
-    '("the voice center", "the hospital", "my school", "work") -- release it.\n'
-    "- HEALTH CONDITIONS. Never remove a health condition and never propose one: conditions are released "
-    "and never hold a recording back. List diagnoses under CONDITIONS for the record only.\n"
-    "- LANGUAGE. The transcript may be in Spanish or another language; judge it in that language. The "
-    'automatic detectors were built for English and often mark ordinary Spanish words ("pero", '
-    '"estado", "familia") as names; release every removed word that is not a name, a place, a date, '
-    "an age, an organization or an identifier.\n\n"
-)
+def redaction_policy_text(policy: ReviewPolicy) -> str:
+    """The redaction policy as the reviewer is given it: the dataset's rules, then the other Safe Harbor identifiers.
 
-
-def redaction_policy_text() -> str:
-    """The redaction policy as the reviewer is given it: the rules, then the remaining Safe Harbor identifiers.
+    Args:
+        policy: The dataset's review policy.
 
     Returns:
         The policy text, the one source every prompt that asks what the policy removes is built from.
     """
-    return _POLICY + _identifier_rule()
+    return policy.text.rstrip() + "\n\n" + _identifier_rule()
 
 
 _POINT_8_OFF_TASK = (
@@ -371,7 +360,7 @@ _PHRASE_PARTS = (
 )
 
 
-_PROMPT = (
+_PROMPT_HEAD = (
     "You are auditing one recording's transcript before it is released. You are given the "
     "ORIGINAL words as transcribed, and where an automatic redaction has already been applied, "
     "the RELEASED text it produced from the words the detectors read (every word outside the <task> and "
@@ -396,8 +385,11 @@ _PROMPT = (
     "the readings to judge whether a word was said at all and what it was: a name only one recogniser read, "
     "where another read an ordinary word, may be a misreading. Quote words as the ORIGINAL writes them, "
     "without the braces, their contents or the tags.\n\n"
-    + redaction_policy_text()
-    + "\n\nJudge nine things independently.\n"
+)
+"""The reviewer's instructions ahead of the dataset's policy (:func:`redaction_policy_text`)."""
+
+_PROMPT_TAIL = (
+    "\n\nJudge nine things independently.\n"
     "1. Whether the redaction, where one was applied, actually removed everything the policy removes.\n"
     "2. Whether the ORIGINAL words carry anything the policy removes at all, which is a separate "
     "question and the one no automatic detector here has asked.\n"
@@ -499,22 +491,24 @@ _PROMPT = (
     "street, the PROPOSAL must carry an entry quoting it: redact a specific named one, or release a "
     "generic description with the reason.\n\n"
 )
+"""The reviewer's instructions after the policy."""
 
 
-_ITEM_SET_PROMPT = _PROMPT.replace(_POINT_8_OFF_TASK, _POINT_8_PHRASES).replace(_OFF_TASK_PARTS, _PHRASE_PARTS)
-
-
-def review_prompt(item_set: bool) -> str:
+def review_prompt(item_set: bool, policy: ReviewPolicy) -> str:
     """The reviewer's instructions.
 
     Args:
         item_set: Whether the declared task is an item-set task (the context's :data:`ITEM_SET`).
+        policy: The dataset's review policy, whose prose sits between senselab's frame and the questions.
 
     Returns:
         The prompt; for an item-set task point 8 and its parts ask for every phrase the participant says, quoted,
         and whether they utter phrases instead of items (:data:`PHRASE_STATES`), in place of off-task speech.
     """
-    return _ITEM_SET_PROMPT if item_set else _PROMPT
+    prompt = _PROMPT_HEAD + redaction_policy_text(policy) + _PROMPT_TAIL
+    if item_set:
+        return prompt.replace(_POINT_8_OFF_TASK, _POINT_8_PHRASES).replace(_OFF_TASK_PARTS, _PHRASE_PARTS)
+    return prompt
 
 
 _BARE_READING = re.compile(r"[^\s{}|=<>;,]+")
@@ -667,7 +661,11 @@ def review_inputs_complete(inputs: Mapping[str, Any] | None) -> bool:
 
 
 def _compose(
-    original: str, redacted: str | None, context: Mapping[str, Any] | None = None, feedback: str | None = None
+    original: str,
+    redacted: str | None,
+    context: Mapping[str, Any] | None,
+    feedback: str | None,
+    policy: ReviewPolicy,
 ) -> str:
     """The task's own facts and the two transcripts, as one request body.
 
@@ -682,6 +680,7 @@ def _compose(
             sent.
         feedback: What was wrong with the previous round's answer, which this round must correct; None
             on a first round.
+        policy: The dataset's review policy, for the task's nature and content guidance.
 
     Returns:
         The body the prompt is prefixed to.
@@ -692,7 +691,7 @@ def _compose(
         lines.append(f"TASK: {facts['task']}")
     if facts.get("task_name") and facts.get("task_name") != facts.get("task"):
         lines.append(f"TASK NAME THE RECORDING DECLARES: {facts['task_name']}")
-    nature = task_nature_description(facts.get("task"))
+    nature = task_nature_description(facts.get("task"), policy)
     if nature:
         lines.append(f"NATURE OF THIS TASK: {nature}")
     if facts.get("speech_type"):
@@ -709,7 +708,7 @@ def _compose(
     words = facts.get("task_words") or ()
     if words:
         lines.append(f"WORDS AND PHRASES THE TASK ITSELF IS MADE OF: {', '.join(str(word) for word in words)}")
-    guidance = task_guidance(facts.get("task"))
+    guidance = task_guidance(facts.get("task"), policy)
     if guidance:
         lines.append(f"WHAT IS TASK CONTENT IN THIS TASK: {guidance}")
     if lines:
@@ -1397,6 +1396,8 @@ def answer_problem(
     original: str | Sequence[str],
     redacted: str | None,
     placeable: Sequence[str] | None = None,
+    *,
+    lexicon: Lexicon,
 ) -> str | None:
     """What makes an answer unusable under the prompt's own rule, as feedback for another round.
 
@@ -1406,6 +1407,7 @@ def answer_problem(
         redacted: The RELEASED text it read, or None where no redaction was applied.
         placeable: The tokens of the transcript words a quote can be placed on, in stream order; where given, a
             phrase quote that places on no run of them (:func:`unplaced_phrase_quotes`) is a problem.
+        lexicon: The dataset's word lists (:func:`~senselab.text.tasks.pii_detection.redaction_policy.load_lexicon`).
 
     Returns:
         None where the answer is usable. Otherwise one sentence naming the problem: a judgment that
@@ -1482,7 +1484,7 @@ def answer_problem(
     forbidden = [
         entry.text
         for entry in releases
-        if dated(entry.text) or (stated(entry.text) and entry.place_reason != PLACE_HISTORICAL)
+        if dated(entry.text, lexicon) or (stated(entry.text, lexicon) and entry.place_reason != PLACE_HISTORICAL)
     ]
     if forbidden:
         quoted = ", ".join(json.dumps(text) for text in forbidden)
@@ -1496,7 +1498,7 @@ def answer_problem(
         for entry in releases
         if (entry.category == "LOCATION" or entry.relabel == RELABEL_PLACE)
         and entry.place_reason not in PLACE_REASONS
-        and not only_countries(entry.text)
+        and not only_countries(entry.text, lexicon)
     ]
     if placeless:
         quoted = ", ".join(json.dumps(text) for text in placeless)
@@ -1541,41 +1543,44 @@ def answer_problem(
     return None
 
 
-def dated(quote: str) -> bool:
+def dated(quote: str, lexicon: Lexicon) -> bool:
     """Whether a quote writes a year, a month, a holiday or an age.
 
     Args:
         quote: The words a ``release`` entry quotes.
+        lexicon: The dataset's word lists.
 
     Returns:
         True where :func:`~senselab.text.tasks.pii_detection.redaction_policy.date_positions` finds one.
     """
-    return bool(date_positions(quote.split()))
+    return bool(date_positions(quote.split(), lexicon=lexicon))
 
 
-def stated(quote: str) -> bool:
+def stated(quote: str, lexicon: Lexicon) -> bool:
     """Whether a quote names a state or a province.
 
     Args:
         quote: The words a ``release`` entry quotes.
+        lexicon: The dataset's word lists.
 
     Returns:
         True where :func:`~senselab.text.tasks.pii_detection.redaction_policy.state_positions` finds one.
     """
-    return bool(state_positions(quote.split()))
+    return bool(state_positions(quote.split(), lexicon=lexicon))
 
 
-def only_countries(quote: str) -> bool:
+def only_countries(quote: str, lexicon: Lexicon) -> bool:
     """Whether every capitalised word of a quote belongs to a country's name.
 
     Args:
         quote: The words a ``release`` entry quotes.
+        lexicon: The dataset's word lists.
 
     Returns:
         True where the quote holds a country and no other capitalised word.
     """
     words = quote.split()
-    inside = {position for start, end in country_runs(words) for position in range(start, end)}
+    inside = {position for start, end in country_runs(words, lexicon=lexicon) for position in range(start, end)}
     capitals = [position for position, word in enumerate(words) if word.strip("\"'([{")[:1].isupper()]
     return bool(inside) and all(position in inside for position in capitals)
 
@@ -1854,6 +1859,7 @@ def _worker_for(
 def review_transcript(
     original: str,
     *,
+    policy: ReviewPolicy,
     redacted: str | None = None,
     context: Mapping[str, Any] | None = None,
     model_id: str = DEFAULT_MODEL,
@@ -1874,6 +1880,7 @@ def review_transcript(
 
     Args:
         original: The transcript as the recording's words were read.
+        policy: The dataset's review policy (:func:`load_review_policy`).
         redacted: The text an applied redaction produced, or None where none was applied.
         context: What the recording declares about itself; see :func:`_compose`.
         model_id: The HuggingFace repo. Defaults to the QAT w4a16 Gemma-4 31B checkpoint, which is
@@ -1912,8 +1919,8 @@ def review_transcript(
         try:
             worker, load_s = _worker_for(model_id, revision, timeout_s, engine)
             output = worker.review(
-                _compose(original, redacted, context, feedback),
-                review_prompt(bool((context or {}).get(ITEM_SET))),
+                _compose(original, redacted, context, feedback, policy),
+                review_prompt(bool((context or {}).get(ITEM_SET)), policy),
                 max_new_tokens,
                 timeout_s,
             )
