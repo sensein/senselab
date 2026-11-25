@@ -131,7 +131,7 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--slice-index", type=int, required=True)
     collect.add_argument("--slice-count", type=int, required=True)
     collect.add_argument("--log-dir", type=Path, default=None, help=f"Where {SLICES_SUBDIR}/ goes")
-    add_config_arguments(collect)
+    add_config_arguments(collect, allow_profile_change=True)
 
     quantiles = sub.add_parser("quantiles", help="Write the run's cohort quantile artefact")
     source = quantiles.add_mutually_exclusive_group(required=True)
@@ -154,7 +154,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--enrollments-out", type=Path, default=None, help="Write each session's and participant's vector here, 0600"
     )
     apply.add_argument("--force", action="store_true", help="Re-read participants already carrying this cohort key")
-    add_config_arguments(apply)
+    add_config_arguments(apply, allow_profile_change=True)
     apply.add_argument("--commit", default=None)
     apply.add_argument("--log-dir", type=Path, default=None, help=f"Where {SLICES_SUBDIR}/ goes")
     apply.add_argument("--device", default=None, help="cpu or cuda; default lets senselab pick")
@@ -169,13 +169,16 @@ def build_parser() -> argparse.ArgumentParser:
 # ------------------------------------------------------------------------------ collect
 
 
-def collect_rows(rows: Sequence[dict[str, Any]], config: TriageConfig | None = None) -> list[dict[str, Any]]:
+def collect_rows(
+    rows: Sequence[dict[str, Any]], config: TriageConfig | None = None, *, allow_profile_change: bool = False
+) -> list[dict[str, Any]]:
     """The fact row of every recording named, reading only its store.
 
     Args:
         rows: Manifest rows.
         config: The configuration each store is checked against (:func:`read_checked_store`), or None for the
             recording alone.
+        allow_profile_change: Accept a profile whose name, version or digest differs from a run's, and record it.
 
     Returns:
         One fact row per readable store; an unreadable or refused one carries ``error``.
@@ -184,7 +187,9 @@ def collect_rows(rows: Sequence[dict[str, Any]], config: TriageConfig | None = N
     for row in rows:
         try:
             run_root = run_root_of(Path(row["enhanced"]))
-            store = read_checked_store(run_root, config)
+            store = read_checked_store(
+                run_root, config, allow_profile_change=allow_profile_change, driver="extend_cohort"
+            )
         except (OSError, ValueError) as error:
             out.append({"stem": row["stem"], "error": describe_exception(error)})
             continue
@@ -193,7 +198,13 @@ def collect_rows(rows: Sequence[dict[str, Any]], config: TriageConfig | None = N
 
 
 def run_collect(
-    manifest: Path, *, slice_index: int, slice_count: int, log_dir: Path, config: TriageConfig | None = None
+    manifest: Path,
+    *,
+    slice_index: int,
+    slice_count: int,
+    log_dir: Path,
+    config: TriageConfig | None = None,
+    allow_profile_change: bool = False,
 ) -> Path:
     """Collect one shard's fact rows into its slice file.
 
@@ -203,12 +214,13 @@ def run_collect(
         slice_count: How many tasks.
         log_dir: Where ``slices/`` goes.
         config: As :func:`collect_rows`.
+        allow_profile_change: Accept a profile whose name, version or digest differs from a run's, and record it.
 
     Returns:
         The slice file.
     """
     mine = take_slice(read_manifest(manifest, required=("stem", "enhanced")), slice_index, slice_count)
-    found = collect_rows(mine, config)
+    found = collect_rows(mine, config, allow_profile_change=allow_profile_change)
     path = log_dir / SLICES_SUBDIR / f"{FACTS_PREFIX}{slice_index}-of-{slice_count}.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in found), encoding="utf-8")
@@ -398,6 +410,7 @@ def process_participant(
     enrollments_out: Path | None = None,
     force: bool = False,
     config: TriageConfig | None = None,
+    allow_profile_change: bool = False,
 ) -> list[dict[str, Any]]:
     """COHORT over every session of one participant, written into the stores or into ``readings_out``.
 
@@ -413,6 +426,7 @@ def process_participant(
         force: Re-read a participant already carrying this cohort key.
         config: The configuration each store is checked against (:func:`read_checked_store`), or None for the
             recording alone.
+        allow_profile_change: Accept a profile whose name, version or digest differs from a run's, and record it.
 
     Returns:
         One outcome record per member: ids, counts and cosines only.
@@ -435,7 +449,9 @@ def process_participant(
         for row in rows:
             try:
                 run_root = run_root_of(Path(row["enhanced"]))
-                store = read_checked_store(run_root, config, row=row)
+                store = read_checked_store(
+                    run_root, config, row=row, allow_profile_change=allow_profile_change, driver="extend_cohort"
+                )
             except (OSError, ValueError) as error:
                 if isinstance(error, StaleManifestRow):
                     stale.append(str(row["stem"]))
@@ -634,6 +650,7 @@ def run_apply(args: argparse.Namespace, config: TriageConfig | None = None) -> d
             enrollments_out=args.enrollments_out,
             force=args.force,
             config=config,
+            allow_profile_change=args.allow_profile_change,
         )
         log.extend(records)
         head = records[0].get("participant_summary") if records else None
@@ -759,6 +776,7 @@ def main(argv: list[str] | None = None) -> int:
                 slice_count=args.slice_count,
                 log_dir=args.log_dir if args.log_dir is not None else args.manifest.parent,
                 config=config,
+                allow_profile_change=args.allow_profile_change,
             )
             print(f"Facts: {path}")
             return 0

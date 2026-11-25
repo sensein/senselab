@@ -71,23 +71,26 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=f"Where this task's {SLICES_SUBDIR}/ log goes (default: beside the manifest)",
     )
-    add_config_arguments(parser)
+    add_config_arguments(parser, allow_profile_change=True)
     return parser
 
 
-def cut_one(run_root: Path, config: TriageConfig) -> dict[str, Any]:
+def cut_one(run_root: Path, config: TriageConfig, *, allow_profile_change: bool = False) -> dict[str, Any]:
     """Cut one finished run and write its store only if a cut moved.
 
     Args:
         run_root: The run root.
         config: The triage configuration.
+        allow_profile_change: Accept a profile whose name, version or digest differs from a run's, and record it.
 
     Returns:
         ``status`` (``ok``, ``present``, ``absent`` or ``error``), each source's outcome under
         ``task_<source>``, and the extent's bounds and the recording's duration where one stands.
     """
     try:
-        store = read_checked_store(run_root, config)
+        store = read_checked_store(
+            run_root, config, allow_profile_change=allow_profile_change, driver="extend_task_audio"
+        )
     except (OSError, ValueError) as error:
         return {"status": ERROR, NODE: describe_exception(error)}
     try:
@@ -114,7 +117,11 @@ def cut_one(run_root: Path, config: TriageConfig) -> dict[str, Any]:
 
 
 def process(
-    rows: Sequence[dict[str, Any]], config: TriageConfig, *, log: SliceLog | None = None
+    rows: Sequence[dict[str, Any]],
+    config: TriageConfig,
+    *,
+    log: SliceLog | None = None,
+    allow_profile_change: bool = False,
 ) -> list[dict[str, Any]]:
     """Cut every run named by these rows, one at a time.
 
@@ -122,6 +129,7 @@ def process(
         rows: The manifest rows this task owns.
         config: The triage configuration.
         log: Where each row's record is appended as it lands, or None.
+        allow_profile_change: Accept a profile whose name, version or digest differs from a run's, and record it.
 
     Returns:
         One outcome record per input row, in order.
@@ -132,13 +140,19 @@ def process(
             run_root = run_root_of(Path(row["enhanced"]))
         except ValueError as error:
             return {**row, "status": ERROR, NODE: describe_exception(error)}
-        return {**row, **cut_one(run_root, config)}
+        return {**row, **cut_one(run_root, config, allow_profile_change=allow_profile_change)}
 
     return logged(rows, one, log)
 
 
 def run_slice(
-    manifest: Path, *, slice_index: int, slice_count: int, config: TriageConfig, log_dir: Path
+    manifest: Path,
+    *,
+    slice_index: int,
+    slice_count: int,
+    config: TriageConfig,
+    log_dir: Path,
+    allow_profile_change: bool = False,
 ) -> dict[str, Any]:
     """Cut every run in one array task's stride of the manifest.
 
@@ -148,6 +162,7 @@ def run_slice(
         slice_count: How many tasks the array has.
         config: The triage configuration.
         log_dir: Where this task's ``slices/`` log goes.
+        allow_profile_change: Accept a profile whose name, version or digest differs from a run's, and record it.
 
     Returns:
         The task's summary: its counts, its parameters, and where its log went.
@@ -161,7 +176,7 @@ def run_slice(
     log_path = slices_dir / f"{label}.jsonl"
     rows_log = SliceLog(log_path, slice_index=slice_index, slice_count=slice_count, total=len(mine))
     try:
-        log = process(mine, config, log=rows_log)
+        log = process(mine, config, log=rows_log, allow_profile_change=allow_profile_change)
     finally:
         rows_log.close()
 
@@ -210,6 +225,7 @@ def main(argv: list[str] | None = None) -> int:
             slice_count=args.slice_count,
             config=driver_config(args),
             log_dir=args.log_dir if args.log_dir is not None else args.manifest.parent,
+            allow_profile_change=args.allow_profile_change,
         )
     except (OSError, ValueError) as error:
         print(f"ERROR: {error}", file=sys.stderr)

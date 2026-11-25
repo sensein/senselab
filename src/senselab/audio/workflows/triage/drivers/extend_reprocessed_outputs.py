@@ -107,7 +107,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=f"Where this task's {SLICES_SUBDIR}/ log goes (default: beside the manifest)",
     )
-    add_config_arguments(parser)
+    add_config_arguments(parser, allow_profile_change=True)
     return parser
 
 
@@ -189,7 +189,7 @@ def extend_consensus_taxonomy(store: ProvStore, config: TriageConfig) -> Derivat
     return attempt_derivation(_consolidate)
 
 
-def extend_one(run_root: Path, config: TriageConfig) -> dict[str, str]:
+def extend_one(run_root: Path, config: TriageConfig, *, allow_profile_change: bool = False) -> dict[str, str]:
     """Apply the three derivations to one finished run and write the store only if any changed.
 
     The fingerprint before and after is the whole convergence argument: a derivation that produces
@@ -199,6 +199,7 @@ def extend_one(run_root: Path, config: TriageConfig) -> dict[str, str]:
     Args:
         run_root: The run root.
         config: The triage configuration.
+        allow_profile_change: Accept a profile whose name, version or digest differs from a run's, and record it.
 
     Returns:
         ``{status, rebracket, phonation_tracks, consensus_taxonomy}`` — ``ok`` when nothing failed
@@ -206,7 +207,9 @@ def extend_one(run_root: Path, config: TriageConfig) -> dict[str, str]:
         derivation failed. A derivation that could not apply to this recording did not fail.
     """
     try:
-        store = read_checked_store(run_root, config)
+        store = read_checked_store(
+            run_root, config, allow_profile_change=allow_profile_change, driver="extend_reprocessed_outputs"
+        )
     except (OSError, ValueError) as error:
         return {"status": ERROR, **_reasons(describe_exception(error))}
     before = store.fingerprint()
@@ -226,7 +229,9 @@ def extend_one(run_root: Path, config: TriageConfig) -> dict[str, str]:
     return {"status": status, **{name: outcome.detail for name, outcome in derived.items()}}
 
 
-def process(rows: Sequence[dict[str, Any]], config: TriageConfig) -> list[dict[str, Any]]:
+def process(
+    rows: Sequence[dict[str, Any]], config: TriageConfig, *, allow_profile_change: bool = False
+) -> list[dict[str, Any]]:
     """Extend every run named by these rows, one at a time.
 
     A recording whose store will not open, or whose streams the run tree no longer holds, gets an
@@ -235,6 +240,7 @@ def process(rows: Sequence[dict[str, Any]], config: TriageConfig) -> list[dict[s
     Args:
         rows: The manifest rows this task owns.
         config: The triage configuration.
+        allow_profile_change: Accept a profile whose name, version or digest differs from a run's, and record it.
 
     Returns:
         One outcome record per input row, in order.
@@ -246,7 +252,7 @@ def process(rows: Sequence[dict[str, Any]], config: TriageConfig) -> list[dict[s
         except ValueError as error:
             out.append({**row, "status": ERROR, **_reasons(describe_exception(error))})
             continue
-        out.append({**row, **extend_one(run_root, config)})
+        out.append({**row, **extend_one(run_root, config, allow_profile_change=allow_profile_change)})
     return out
 
 
@@ -257,6 +263,7 @@ def run_slice(
     slice_count: int,
     config: TriageConfig,
     log_dir: Path,
+    allow_profile_change: bool = False,
 ) -> dict[str, Any]:
     """Extend every run in one array task's stride of the manifest.
 
@@ -266,6 +273,7 @@ def run_slice(
         slice_count: How many tasks the array has.
         config: The triage configuration.
         log_dir: Where this task's ``slices/`` log goes.
+        allow_profile_change: Accept a profile whose name, version or digest differs from a run's, and record it.
 
     Returns:
         The task's summary: its counts, its parameters, and where its log went.
@@ -274,7 +282,7 @@ def run_slice(
     mine = take_slice(read_manifest(manifest, required=("stem", "enhanced")), slice_index, slice_count)
     print(f"[slice {slice_index}/{slice_count}] {len(mine)} rows", flush=True)
 
-    log = process(mine, config)
+    log = process(mine, config, allow_profile_change=allow_profile_change)
 
     counts: dict[str, int] = {}
     for record in log:
@@ -323,6 +331,7 @@ def main(argv: list[str] | None = None) -> int:
             slice_count=args.slice_count,
             config=driver_config(args),
             log_dir=args.log_dir if args.log_dir is not None else args.manifest.parent,
+            allow_profile_change=args.allow_profile_change,
         )
     except (OSError, ValueError) as error:
         print(f"ERROR: {error}", file=sys.stderr)

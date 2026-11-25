@@ -34,9 +34,11 @@ from senselab.audio.workflows.triage.extend import (
     AUDIO_VERIFIED,
     CORPUS_INPUTS_KEY,
     DECISION_SUPERSEDED,
+    EXTEND_NODE,
     HINT_GIVEN,
     HINT_RECORDED,
     OFF_STAGES_KEY,
+    PROFILE_CHANGE_STEP,
     PROFILE_KEY,
     REFOLD_MARKER_STEP,
     REFOLD_NODE,
@@ -46,6 +48,7 @@ from senselab.audio.workflows.triage.extend import (
     REVIEW_KEY,
     REVIEW_STATES,
     IdentityChangeRefused,
+    ProfileChangeRefused,
     ReplayInputs,
     ReplayRefused,
     check_replay_inputs,
@@ -57,6 +60,7 @@ from senselab.audio.workflows.triage.extend import (
     read_store,
     realign_stimulus,
     record_moved,
+    record_profile_change,
     record_replayed_hint,
     replay_decisions,
     replay_run_id,
@@ -792,6 +796,126 @@ def _checked(root: Path, **kwargs: Any) -> ReplayInputs:  # noqa: ANN401
     )
 
 
+def _record_profile(root: Path, source: Path, **change: str) -> dict[str, Any]:
+    """Write a ``run.json`` recording the fixture profile, with ``change`` applied to its name, version or digest.
+
+    Args:
+        root: The run root.
+        source: The recording ``run.json`` names.
+        **change: The fields to record differently from the profile in use.
+
+    Returns:
+        The recorded profile.
+    """
+    profile = load_triage_config(profile=ACTIVE).profile
+    assert profile is not None
+    recorded = {"name": profile.name, "version": profile.version, "digest": profile.digest, **change}
+    (root / "run" / "run.json").write_text(json.dumps({"source": str(source), "config": {"profile": recorded}}))
+    return recorded
+
+
+class TestAChangedProfileIsRefusedUnlessAllowed:
+    """Replay refuses a profile whose name, version or digest differs from the run's, unless the caller opts in."""
+
+    def test_the_same_profile_passes(self, tmp_path: Path) -> None:
+        """The profile the run recorded, unchanged, is no change."""
+        root = tmp_path / "rec-0001_20260920-030808"
+        _record_profile(root, _seed_run(root))
+        inputs = _checked(root)
+        assert inputs.profile is None
+        assert inputs.marker_parameters()["profile_change"] is None
+
+    def test_a_changed_version_is_refused(self, tmp_path: Path) -> None:
+        """Same name and files, another version: refused, naming the old and the new version."""
+        root = tmp_path / "rec-0001_20260920-030808"
+        recorded = _record_profile(root, _seed_run(root), version="0-not-this-one")
+        with pytest.raises(ProfileChangeRefused, match="0-not-this-one") as refused:
+            _checked(root)
+        assert refused.value.fields == ["version"]
+        assert refused.value.change["recorded"] == recorded
+        assert "--allow-profile-change" in str(refused.value)
+
+    def test_a_changed_digest_is_refused(self, tmp_path: Path) -> None:
+        """Same name and version, edited files: refused, naming the old and the new digest."""
+        root = tmp_path / "rec-0001_20260920-030808"
+        _record_profile(root, _seed_run(root), digest="an-edited-profile")
+        profile = load_triage_config(profile=ACTIVE).profile
+        assert profile is not None
+        with pytest.raises(ProfileChangeRefused, match="an-edited-profile") as refused:
+            _checked(root)
+        assert refused.value.fields == ["digest"]
+        assert profile.digest in str(refused.value)
+
+    def test_the_opt_in_passes_and_records_the_change(self, tmp_path: Path) -> None:
+        """--allow-profile-change keeps today's behavior: the replay goes ahead and its marker names the change."""
+        root = tmp_path / "rec-0001_20260920-030808"
+        recorded = _record_profile(root, _seed_run(root), version="0-not-this-one")
+        profile = load_triage_config(profile=ACTIVE).profile
+        assert profile is not None
+        inputs = _checked(root, allow_profile_change=True)
+        now = {"name": profile.name, "version": profile.version, "digest": profile.digest}
+        assert inputs.profile == {"recorded": recorded, "now": now}
+        assert inputs.marker_parameters()["profile_change"] == {"recorded": recorded, "now": now}
+
+
+class TestAnExtendPassRecordsAnAllowedProfileChange:
+    """A driver that adds measurements under another profile is refused the same way, and records it when allowed."""
+
+    def test_check_run_inputs_refuses_a_changed_profile(self, tmp_path: Path) -> None:
+        """The extend drivers' check (:func:`check_run_inputs`) refuses as replay does."""
+        root = tmp_path / "rec-0001_20260920-030808"
+        _record_profile(root, _seed_run(root), version="0-not-this-one")
+        with pytest.raises(ProfileChangeRefused):
+            check_run_inputs(read_store(root), root, load_triage_config(profile=ACTIVE))
+
+    def test_the_allowed_change_is_recorded_and_does_not_move_the_decisions(self, tmp_path: Path) -> None:
+        """The record names the driver and the profile now in use; the decisions still stand under the run's."""
+        root = tmp_path / "rec-0001_20260920-030808"
+        recorded = _record_profile(root, _seed_run(root), version="0-not-this-one")
+        store = read_store(root)
+        config = load_triage_config(profile=ACTIVE)
+        change = check_run_inputs(store, root, config, allow_profile_change=True)[1]
+        assert change is not None
+        activity_id = record_profile_change(store, change, driver="extend_quality")
+        assert activity_id is not None
+        [activity] = [a for a in store.activities() if (a.node, a.step) == (EXTEND_NODE, PROFILE_CHANGE_STEP)]
+        assert activity.parameters["driver"] == "extend_quality"
+        assert activity.parameters["profile_change"] == change
+        assert activity.parameters[PROFILE_KEY] == change["now"]
+        assert activity.ended is not None
+        assert decided_under(store, json.loads((root / "run" / "run.json").read_text()))[0] == recorded
+
+    def test_no_change_records_nothing(self, tmp_path: Path) -> None:
+        """The same profile adds no record."""
+        root = tmp_path / "rec-0001_20260920-030808"
+        _record_profile(root, _seed_run(root))
+        store = read_store(root)
+        change = check_run_inputs(store, root, load_triage_config(profile=ACTIVE))[1]
+        assert record_profile_change(store, change, driver="extend_quality") is None
+        assert not [a for a in store.activities() if a.node == EXTEND_NODE]
+
+
+_DRIVERS_PACKAGE = "senselab.audio.workflows.triage.drivers"
+_EXTEND_DRIVERS = sorted(
+    path.stem for path in Path(str(importlib.import_module(_DRIVERS_PACKAGE).__file__)).parent.glob("extend_*.py")
+)
+
+
+@pytest.mark.parametrize("driver", _EXTEND_DRIVERS)
+def test_every_extend_driver_takes_the_opt_in(driver: str) -> None:
+    """Every driver that reads a finished run's store offers --allow-profile-change, or it could not proceed at all."""
+    module = importlib.import_module(f"{_DRIVERS_PACKAGE}.{driver}")
+    parser = module.build_parser()
+    parsers = [parser]
+    for action in parser._actions:
+        choices = getattr(action, "choices", None)
+        if isinstance(choices, dict):
+            parsers = [choices[name] for name in ("collect", "apply")]
+    for each in parsers:
+        options = {option for action in each._actions for option in action.option_strings}
+        assert "--allow-profile-change" in options, (driver, each.prog)
+
+
 class TestTheReplayChecksTheRunsRecord:
     """What a replay or re-fold compares before it changes anything (plan step 3, check list)."""
 
@@ -922,16 +1046,15 @@ class TestTheReplayChecksTheRunsRecord:
         assert replayed.changed is None
 
     def test_a_refold_refuses_decisions_taken_under_another_profile_digest(self, tmp_path: Path) -> None:
-        """Same profile name, other digest: VERDICT would re-score the old reports; a replay is accepted (C3)."""
+        """Same profile name, other digest: refused for a re-fold as for a replay, unless allowed."""
         root = tmp_path / "rec-0001_20260920-030808"
         source = _seed_run(root, hint=HINT_COUGH)
-        config = load_triage_config(profile=ACTIVE)
-        assert config.profile is not None
-        recorded = {"name": config.profile.name, "version": config.profile.version, "digest": "another-digest"}
-        (root / "run" / "run.json").write_text(json.dumps({"source": str(source), "config": {"profile": recorded}}))
-        with pytest.raises(ReplayRefused, match="replay the run instead"):
+        recorded = _record_profile(root, source, digest="another-digest")
+        with pytest.raises(ProfileChangeRefused, match="digest differ"):
             _checked(root, hint=HINT_COUGH, hint_given=True, allow_hint_change=False)
-        profile = _checked(root, hint=HINT_COUGH, hint_given=True).profile
+        profile = _checked(
+            root, hint=HINT_COUGH, hint_given=True, allow_hint_change=False, allow_profile_change=True
+        ).profile
         assert profile is not None
         assert profile["recorded"] == recorded
 
@@ -1052,7 +1175,7 @@ class TestTheReplayChecksTheRunsRecord:
         assert edited.profile is not None and edited.profile.legacy_digest != config.profile.legacy_digest
         assert edited.config_hash == config.config_hash
         before = read_store(root)
-        with pytest.raises(ReplayRefused, match="replay the run instead"):
+        with pytest.raises(ProfileChangeRefused, match="digest differ"):
             check_replay_inputs(before, root, edited, hint=HINT_COUGH, hint_given=True, allow_hint_change=False)
         refold = check_replay_inputs(store, root, edited, hint=HINT_COUGH, hint_given=True, allow_hint_change=False)
         assert refold.profile is None, "no --allow-profile-change, and not recorded as a change"
