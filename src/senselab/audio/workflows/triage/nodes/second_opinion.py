@@ -196,7 +196,7 @@ def second_opinion(
     pin = pin_of(config)
     seed = int(held["seed"])
     parallel = int(held["workers"] if num_parallel is None else num_parallel)
-    context = task_context(store, hint, task_lexicon(config, declared_task_family(store, hint), hint))
+    context = task_context(store, hint, task_lexicon(config, declared_task_family(store), hint))
     original, _ = transcript_texts(store)
     masked = masked_text(store, config, hint)[1] if original.strip() else ""
     annotation = find_measurement(store, REDACTION_LLM_ANNOTATION)
@@ -208,7 +208,7 @@ def second_opinion(
     if not held["enabled"]:
         status = DISABLED
     elif not original.strip():
-        reason = bypass_reason(store, hint=hint)
+        reason = bypass_reason(store)
         if reason is not None:
             status = BYPASSED
         else:

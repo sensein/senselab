@@ -17,6 +17,7 @@ from senselab.audio.tasks.phonation import F0RangeFailed, F0RangeUnavailable
 from senselab.audio.tasks.speech_enhancement.residual import compute_residual
 from senselab.audio.tasks.speech_to_text.crisperwhisper import CrisperWhisperDecoderPositionsExceeded
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.hint_record import field_digests
 from senselab.audio.workflows.triage.nodes import preprocess as preprocess_module
 from senselab.audio.workflows.triage.nodes.airway import content_band_hz
 from senselab.audio.workflows.triage.nodes.common import (
@@ -2459,6 +2460,8 @@ class TestTheStimulusAlignmentBlock:
         assert attrs["n_unexpected"] == 0
         assert attrs["realised_fraction"] == 1.0
         assert attrs["sentence_terminators"] == config.require("stimulus.sentence_terminators")
+        [activity] = [a for a in store.activities("PREPROCESS") if a.step == STIMULUS_MEASUREMENT]
+        assert activity.parameters["expected_speech_digest"] == field_digests(hint)["expected_speech"]
         for table in ("expected", "units", "unexpected"):
             assert table not in attrs
 

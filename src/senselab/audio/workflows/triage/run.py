@@ -381,7 +381,7 @@ def drive_decisions(
             _attempt(outcomes, branch, call)
         else:
             outcomes[branch] = NodeOutcome(node=branch, state=RunState.SKIPPED, note=withheld)
-    family = declared_task_family(store, hint)
+    family = declared_task_family(store)
     for branch in BRANCHES:
         outcome = outcomes[branch]
         if outcome.state is not RunState.COMPLETED:
@@ -401,7 +401,7 @@ def drive_decisions(
                 hint,
                 run_dir=run_dir,
                 artifacts_dir=artifacts_dir,
-                task_family=declared_task_family(store, hint),
+                task_family=declared_task_family(store),
             ),
         )
         artifacts = dict(redacted.artifacts) if redacted is not None else {}
@@ -535,7 +535,7 @@ def run_triage(
             for node in GRAPH_ORDER[1:-1]:
                 outcomes[node] = NodeOutcome(node=node, state=RunState.SKIPPED)
             if admitted is not None:
-                family = declared_task_family(store, hint)
+                family = declared_task_family(store)
                 for branch in BRANCHES:
                     record_unrun_owner(store, branch, family, ADMIT_REFUSED, signal=_CONDITIONED_STREAM)
 

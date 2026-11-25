@@ -303,7 +303,7 @@ def task_context(store: ProvStore, hint: AudioHints | None, lexicon: TaskLexicon
         and ``task_words``, each omitted where the recording declares none, and ``instructions_from`` and
         ``stimulus_from`` naming where those texts came from.
     """
-    family = declared_task_family(store, hint)
+    family = declared_task_family(store)
     prompts = [
         expected.text for expected in (getattr(hint, "expected_speech", None) or []) if getattr(expected, "text", None)
     ]
@@ -398,15 +398,12 @@ def consensus_transcript(store: ProvStore) -> dict[str, Any]:
     return {"recognisers": recognisers, "words": rows, "findings_n": len(live)}
 
 
-def bypass_reason(
-    store: ProvStore, transcript: Mapping[str, Any] | None = None, hint: AudioHints | None = None
-) -> str | None:
+def bypass_reason(store: ProvStore, transcript: Mapping[str, Any] | None = None) -> str | None:
     """Why a recording whose lexical residue is empty was not read, from :func:`consensus_transcript`'s word kinds.
 
     Args:
         store: The provenance store.
         transcript: :func:`consensus_transcript` of the store, where the caller already holds it.
-        hint: The caller's declaration, read for the declared family.
 
     Returns:
         One of :data:`BYPASS_REASONS`; :data:`NON_LEXICAL_TASK` for a lexical family read as a voice task
@@ -419,7 +416,7 @@ def bypass_reason(
         return NO_WORDS
     if WORD_TASK not in kinds:
         return NON_LEXICAL_ONLY
-    family = declared_task_family(store, hint)
+    family = declared_task_family(store)
     if lexical_voice_family(family):
         return NON_LEXICAL_TASK
     if detector_state(store) != UNSCANNED_STATE:
@@ -775,7 +772,7 @@ def reading_key(store: ProvStore, config: TriageConfig, hint: AudioHints | None,
     Raises:
         ValueError: If any ``redaction.llm_check`` key is unmeasured.
     """
-    context = review_context(store, hint, task_lexicon(config, declared_task_family(store, hint), hint))
+    context = review_context(store, hint, task_lexicon(config, declared_task_family(store), hint))
     original, redacted = transcript_texts(store)
     return review_cache_key(original, redacted, context, _llm_settings(config), revision, placeable_tokens(store))
 
@@ -951,7 +948,7 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
             before any model is contacted.
     """
     settings = _llm_settings(config)
-    context = review_context(store, hint, task_lexicon(config, declared_task_family(store, hint), hint))
+    context = review_context(store, hint, task_lexicon(config, declared_task_family(store), hint))
     inputs = review_inputs(context)
     original, redacted = transcript_texts(store)
     placeable = placeable_tokens(store)
@@ -965,7 +962,7 @@ def review(store: ProvStore, config: TriageConfig, hint: AudioHints | None = Non
     if not settings["enabled"]:
         reading = _Reading(DISABLED, 0, (), "", "", "", (), "", None, None)
     elif not original.strip():
-        reason = bypass_reason(store, context.get(CONSENSUS_TRANSCRIPT), hint)
+        reason = bypass_reason(store, context.get(CONSENSUS_TRANSCRIPT))
         reading = (
             _Reading(BYPASSED, 0, (), "", "", "", (), "", None, None, bypass_reason=reason)
             if reason is not None

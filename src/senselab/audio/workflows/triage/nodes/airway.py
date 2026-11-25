@@ -20,7 +20,7 @@ from senselab.audio.data_structures import AudioHints
 from senselab.audio.tasks.classification.label_scores import label_scores
 from senselab.audio.workflows.triage.classifier_ontology import PROFILE_PATH_KEY, corroboration_sets
 from senselab.audio.workflows.triage.config import TriageConfig
-from senselab.audio.workflows.triage.identity import task_id_candidates
+from senselab.audio.workflows.triage.identity import declared_task_id
 from senselab.audio.workflows.triage.nodes.airway_task import measure_airway_task
 from senselab.audio.workflows.triage.nodes.branches import (
     AIRWAY_EXPECTATIONS,
@@ -582,15 +582,12 @@ def lexical_intrusions(store: ProvStore) -> list[Finding]:
     return out
 
 
-def declared_route(
-    expectation: Expectation, store: ProvStore, hint: AudioHints | None, params: BranchParams
-) -> str | None:
+def declared_route(expectation: Expectation, store: ProvStore, params: BranchParams) -> str | None:
     """The route the instruction prescribes, from the row or from the task's trailing index.
 
     Args:
         expectation: The row.
         store: The provenance store.
-        hint: What the recording was declared to contain.
         params: The operating points, whose config carries the index map.
 
     Returns:
@@ -599,11 +596,8 @@ def declared_route(
     if not expectation.route_from_index:
         return expectation.declared_route
     routes = {str(index): str(route) for index, route in (params.config.require(ROUTE_INDEX_KEY) or {}).items()}
-    for task_id in task_id_candidates(store, hint):
-        segment = task_id.rsplit("-", 1)[-1]
-        if segment in routes:
-            return routes[segment]
-    return None
+    segment = declared_task_id(store).rsplit("-", 1)[-1]
+    return routes.get(segment)
 
 
 def route_findings(
@@ -620,7 +614,7 @@ def route_findings(
     Returns:
         The declared route and the findings — nothing at all for a row that declares no route.
     """
-    route = declared_route(expectation, store, hint, params)
+    route = declared_route(expectation, store, params)
     if route is None and not expectation.route_from_index:
         return None, []
     return route, [
@@ -1155,7 +1149,7 @@ def airway(
     """
     params = branch_params(config)
     software = software_agent(store)
-    mode, family = mode_of(NODE, store, hint)
+    mode, family = mode_of(NODE, store)
     activity = store.activity(node=NODE, step=mode, parameters={"task_family": family, "source": source})
     store.was_associated_with(activity, software)
     stream = stream_entity(store, source)

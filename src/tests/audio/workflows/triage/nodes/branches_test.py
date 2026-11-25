@@ -110,6 +110,7 @@ from senselab.audio.workflows.triage.routing_analysis.families import (
     VOICE_ELICITING,
 )
 from senselab.utils.prov_store import Entity, ProvStore
+from tests.audio.workflows.triage.conftest import declare_hint_identity
 
 BIDS_STEM = "sub-abc123_ses-1_task-harvard-sentences-list-10-3"
 """A real stem shape: two trailing numeric segments, which ``task_family`` collapses."""
@@ -720,19 +721,23 @@ class TestTheDeclaredFamilyIsDerivedInOnePlace:
         store.entity(prov_type="stream", extent=(0.0, 1.0), attributes={"name": "recording"})
         assert declared_task_family(store) is None
 
-    def test_the_hint_metadata_carrier_is_read_first(self) -> None:
+    def test_the_recorded_hint_carrier_is_read_first(self) -> None:
         """The clean route works the moment something populates it, with no branch changing."""
-        hint = AudioHints(metadata={"task_token": "prolonged-vowel-2"})
-        assert declared_task_family(_store(), hint) == "prolonged-vowel"
+        store = _store()
+        declare_hint_identity(store, AudioHints(metadata={"task_token": "prolonged-vowel-2"}))
+        assert declared_task_family(store) == "prolonged-vowel"
 
     def test_an_empty_hint_token_falls_through_to_the_path(self) -> None:
         """A blank carrier is not a declaration of "no family"; the other carrier still speaks."""
-        hint = AudioHints(metadata={"task_token": "   "})
-        assert declared_task_family(_store(), hint) == "harvard-sentences-list"
+        store = _store()
+        declare_hint_identity(store, AudioHints(metadata={"task_token": "   "}))
+        assert declared_task_family(store) == "harvard-sentences-list"
 
     def test_a_hint_with_no_metadata_at_all_is_fine(self) -> None:
         """``AudioHints.metadata`` may be None."""
-        assert declared_task_family(_store(), AudioHints()) == "harvard-sentences-list"
+        store = _store()
+        declare_hint_identity(store, AudioHints())
+        assert declared_task_family(store) == "harvard-sentences-list"
 
     def test_a_stem_whose_task_is_literally_unknown_names_no_family(self) -> None:
         """``task_id_of`` spells an absent task ``"unknown"``; so must an explicit one."""
