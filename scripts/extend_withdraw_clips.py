@@ -84,7 +84,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=f"Where this task's {SLICES_SUBDIR}/ log goes (default: beside the manifest)",
     )
-    add_config_arguments(parser)
+    add_config_arguments(parser, allow_profile_change=True)
     return parser
 
 
@@ -104,12 +104,13 @@ def run_withdrawal(store: ProvStore, config: TriageConfig) -> str:
     return REWRITTEN if withdraw_contradicted_clips(store, config) is not None else CURRENT
 
 
-def extend_one(run_root: Path, config: TriageConfig) -> dict[str, str]:
+def extend_one(run_root: Path, config: TriageConfig, *, allow_profile_change: bool = False) -> dict[str, str]:
     """Withdraw over one finished run and write the store only if it changed.
 
     Args:
         run_root: The run root.
         config: The triage configuration.
+        allow_profile_change: Accept a profile whose name, version or digest differs from a run's, and record it.
 
     Returns:
         ``{status, withdraw_contradicted_clips}`` — ``ok`` when a span was withdrawn, ``skipped``
@@ -117,7 +118,9 @@ def extend_one(run_root: Path, config: TriageConfig) -> dict[str, str]:
         be read or carries clip spans with no amplitudes.
     """
     try:
-        store = read_checked_store(run_root, config)
+        store = read_checked_store(
+            run_root, config, allow_profile_change=allow_profile_change, driver="extend_withdraw_clips"
+        )
     except (OSError, ValueError) as error:
         return {"status": ERROR, WITHDRAW_CLIPS: describe_exception(error)}
     before = store.fingerprint()
@@ -132,12 +135,15 @@ def extend_one(run_root: Path, config: TriageConfig) -> dict[str, str]:
     return {"status": OK, WITHDRAW_CLIPS: outcome.detail}
 
 
-def process(rows: Sequence[dict[str, Any]], config: TriageConfig) -> list[dict[str, Any]]:
+def process(
+    rows: Sequence[dict[str, Any]], config: TriageConfig, *, allow_profile_change: bool = False
+) -> list[dict[str, Any]]:
     """Withdraw over every run named by these rows, one at a time.
 
     Args:
         rows: The manifest rows this task owns.
         config: The triage configuration.
+        allow_profile_change: Accept a profile whose name, version or digest differs from a run's, and record it.
 
     Returns:
         One outcome record per input row, in order.
@@ -149,7 +155,7 @@ def process(rows: Sequence[dict[str, Any]], config: TriageConfig) -> list[dict[s
         except ValueError as error:
             out.append({**row, "status": ERROR, WITHDRAW_CLIPS: describe_exception(error)})
             continue
-        out.append({**row, **extend_one(run_root, config)})
+        out.append({**row, **extend_one(run_root, config, allow_profile_change=allow_profile_change)})
     return out
 
 
@@ -160,6 +166,7 @@ def run_slice(
     slice_count: int,
     config: TriageConfig,
     log_dir: Path,
+    allow_profile_change: bool = False,
 ) -> dict[str, Any]:
     """Read every run in one array task's stride of the manifest.
 
@@ -169,6 +176,7 @@ def run_slice(
         slice_count: How many tasks the array has.
         config: The triage configuration.
         log_dir: Where this task's ``slices/`` log goes.
+        allow_profile_change: Accept a profile whose name, version or digest differs from a run's, and record it.
 
     Returns:
         The task's summary: its counts, its parameters, and where its log went.
@@ -177,7 +185,7 @@ def run_slice(
     mine = take_slice(read_manifest(manifest, required=("stem", "enhanced")), slice_index, slice_count)
     print(f"[slice {slice_index}/{slice_count}] {len(mine)} rows", flush=True)
 
-    log = process(mine, config)
+    log = process(mine, config, allow_profile_change=allow_profile_change)
 
     counts: dict[str, int] = {}
     for record in log:
@@ -229,6 +237,7 @@ def main(argv: list[str] | None = None) -> int:
             slice_count=args.slice_count,
             config=driver_config(args),
             log_dir=args.log_dir if args.log_dir is not None else args.manifest.parent,
+            allow_profile_change=args.allow_profile_change,
         )
     except (OSError, ValueError) as error:
         print(f"ERROR: {error}", file=sys.stderr)

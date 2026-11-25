@@ -75,7 +75,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--log-dir", type=Path, default=None, help=f"Where {SLICES_SUBDIR}/ goes (default: beside the manifest)"
     )
-    add_config_arguments(parser)
+    add_config_arguments(parser, allow_profile_change=True)
     return parser
 
 
@@ -99,7 +99,11 @@ def sessions_of(rows: Sequence[dict[str, Any]]) -> list[tuple[str, list[dict[str
 
 
 def process_session(
-    session: str, rows: Sequence[dict[str, Any]], config: TriageConfig | None = None
+    session: str,
+    rows: Sequence[dict[str, Any]],
+    config: TriageConfig | None = None,
+    *,
+    allow_profile_change: bool = False,
 ) -> list[dict[str, Any]]:
     """Write the session floor into every member store of one session.
 
@@ -108,6 +112,7 @@ def process_session(
         rows: Its members' manifest rows.
         config: The configuration each store is checked against (:func:`read_checked_store`), or None for the
             recording alone.
+        allow_profile_change: Accept a profile whose name, version or digest differs from a run's, and record it.
 
     Returns:
         One outcome record per member. Where any member's run is refused (:class:`ReplayRefused`: a stale row, or
@@ -120,7 +125,20 @@ def process_session(
     for row in rows:
         try:
             run_root = run_root_of(Path(row["enhanced"]))
-            opened.append((row, run_root, read_checked_store(run_root, config, row=row), ""))
+            opened.append(
+                (
+                    row,
+                    run_root,
+                    read_checked_store(
+                        run_root,
+                        config,
+                        row=row,
+                        allow_profile_change=allow_profile_change,
+                        driver="extend_session_floor",
+                    ),
+                    "",
+                )
+            )
         except (OSError, ValueError) as error:
             if isinstance(error, StaleManifestRow):
                 stale.append(str(row["stem"]))
@@ -169,7 +187,13 @@ def process_session(
 
 
 def run_slice(
-    manifest: Path, *, slice_index: int, slice_count: int, log_dir: Path, config: TriageConfig | None = None
+    manifest: Path,
+    *,
+    slice_index: int,
+    slice_count: int,
+    log_dir: Path,
+    config: TriageConfig | None = None,
+    allow_profile_change: bool = False,
 ) -> dict[str, Any]:
     """Write the session floor for every session in one array task's stride.
 
@@ -179,6 +203,7 @@ def run_slice(
         slice_count: How many tasks the array has.
         log_dir: Where this task's ``slices/`` log goes.
         config: As :func:`process_session`.
+        allow_profile_change: Accept a profile whose name, version or digest differs from a run's, and record it.
 
     Returns:
         The task's summary.
@@ -189,7 +214,7 @@ def run_slice(
     print(f"[slice {slice_index}/{slice_count}] {len(mine)} sessions", flush=True)
     log: list[dict[str, Any]] = []
     for group in mine:
-        log.extend(process_session(group["session"], group["rows"], config))
+        log.extend(process_session(group["session"], group["rows"], config, allow_profile_change=allow_profile_change))
     counts: dict[str, int] = {}
     for record in log:
         key = f"{record['status']}:{record.get(SESSION_FLOOR)}"
@@ -238,6 +263,7 @@ def main(argv: list[str] | None = None) -> int:
             slice_count=args.slice_count,
             log_dir=args.log_dir if args.log_dir is not None else args.manifest.parent,
             config=config,
+            allow_profile_change=args.allow_profile_change,
         )
     except (OSError, ValueError) as error:
         print(f"ERROR: {error}", file=sys.stderr)

@@ -62,23 +62,28 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--log-dir", type=Path, default=None, help=f"Where {SLICES_SUBDIR}/ goes (default: beside the manifest)"
     )
-    add_config_arguments(parser)
+    add_config_arguments(parser, allow_profile_change=True)
     return parser
 
 
-def extend_one(run_root: Path, config: TriageConfig | None = None) -> tuple[str, str]:
+def extend_one(
+    run_root: Path, config: TriageConfig | None = None, *, allow_profile_change: bool = False
+) -> tuple[str, str]:
     """Give one finished run its own-floor measurement, or say why it gets none.
 
     Args:
         run_root: The run root.
         config: The configuration the store is checked against (:func:`read_checked_store`), or None for the
             recording alone.
+        allow_profile_change: Accept a profile whose name, version or digest differs from a run's, and record it.
 
     Returns:
         ``(status, detail)``.
     """
     try:
-        store = read_checked_store(run_root, config)
+        store = read_checked_store(
+            run_root, config, allow_profile_change=allow_profile_change, driver="extend_background_floor"
+        )
     except (OSError, ValueError) as error:
         return ERROR, describe_exception(error)
     if find_measurement(store, OWN_FLOOR) is not None:
@@ -92,12 +97,15 @@ def extend_one(run_root: Path, config: TriageConfig | None = None) -> tuple[str,
     return OK, outcome.detail
 
 
-def process(rows: Sequence[dict[str, Any]], config: TriageConfig | None = None) -> list[dict[str, Any]]:
+def process(
+    rows: Sequence[dict[str, Any]], config: TriageConfig | None = None, *, allow_profile_change: bool = False
+) -> list[dict[str, Any]]:
     """Extend every run named by these rows, one at a time.
 
     Args:
         rows: The manifest rows this task owns.
         config: As :func:`extend_one`.
+        allow_profile_change: Accept a profile whose name, version or digest differs from a run's, and record it.
 
     Returns:
         One outcome record per input row, in order.
@@ -109,13 +117,19 @@ def process(rows: Sequence[dict[str, Any]], config: TriageConfig | None = None) 
         except ValueError as error:
             out.append({**row, "status": ERROR, OWN_FLOOR: describe_exception(error)})
             continue
-        status, detail = extend_one(run_root, config)
+        status, detail = extend_one(run_root, config, allow_profile_change=allow_profile_change)
         out.append({**row, "status": status, OWN_FLOOR: detail})
     return out
 
 
 def run_slice(
-    manifest: Path, *, slice_index: int, slice_count: int, log_dir: Path, config: TriageConfig | None = None
+    manifest: Path,
+    *,
+    slice_index: int,
+    slice_count: int,
+    log_dir: Path,
+    config: TriageConfig | None = None,
+    allow_profile_change: bool = False,
 ) -> dict[str, Any]:
     """Extend every run in one array task's stride of the manifest.
 
@@ -125,6 +139,7 @@ def run_slice(
         slice_count: How many tasks the array has.
         log_dir: Where this task's ``slices/`` log goes.
         config: As :func:`extend_one`.
+        allow_profile_change: Accept a profile whose name, version or digest differs from a run's, and record it.
 
     Returns:
         The task's summary.
@@ -132,7 +147,7 @@ def run_slice(
     started = time.time()
     mine = take_slice(read_manifest(manifest, required=("stem", "enhanced")), slice_index, slice_count)
     print(f"[slice {slice_index}/{slice_count}] {len(mine)} rows", flush=True)
-    log = process(mine, config)
+    log = process(mine, config, allow_profile_change=allow_profile_change)
     counts: dict[str, int] = {}
     for record in log:
         counts[str(record["status"])] = counts.get(str(record["status"]), 0) + 1
@@ -179,6 +194,7 @@ def main(argv: list[str] | None = None) -> int:
             slice_count=args.slice_count,
             log_dir=args.log_dir if args.log_dir is not None else args.manifest.parent,
             config=config,
+            allow_profile_change=args.allow_profile_change,
         )
     except (OSError, ValueError) as error:
         print(f"ERROR: {error}", file=sys.stderr)

@@ -99,6 +99,7 @@ from senselab.audio.workflows.triage.extend import (
     logged,
     read_manifest,
     read_store,
+    record_profile_change,
     refold_verdict,
     require_recorded_identity,
     run_root_of,
@@ -161,7 +162,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=f"Where this task's {SLICES_SUBDIR}/ log goes (default: beside the manifest)",
     )
-    add_config_arguments(parser)
+    add_config_arguments(parser, allow_profile_change=True)
     parser.add_argument("--out-root", type=Path, default=None, help="Mirror each run root here instead of writing it")
     parser.add_argument("--apply", action="store_true", help="Also write the redacted stream from the proposal")
     parser.add_argument("--force", action="store_true", help="Re-read where an annotation already stands")
@@ -356,6 +357,7 @@ def extend_one(
     commit: str | None = None,
     finished: Path | None = None,
     refold: bool = True,
+    allow_profile_change: bool = False,
 ) -> dict[str, str]:
     """Read one finished run back, re-fold its verdict over the reading, and write the store once.
 
@@ -374,6 +376,7 @@ def extend_one(
         commit: The code revision to record on the re-fold marker.
         finished: The finished run root ``run_root`` mirrors, read for ``run.json``; None when they are one.
         refold: Whether to decide the file again over a reading that landed (False for ``--no-refold``).
+        allow_profile_change: Accept a profile whose name, version or digest differs from a run's, and record it.
 
     Returns:
         ``{status, REVIEW}`` -- ``ok`` when a reading landed, ``present`` when one already stood,
@@ -399,13 +402,24 @@ def extend_one(
     inputs: ReplayInputs | None = None
     try:
         if hint is None or build_hint is None or source is None or not refold:
-            check_run_inputs(store, log_root, config, source=source)
+            change = check_run_inputs(
+                store, log_root, config, source=source, allow_profile_change=allow_profile_change
+            )[1]
         else:
             inputs = check_replay_inputs(
-                store, log_root, config, hint=hint, hint_given=True, allow_hint_change=False, source=source
+                store,
+                log_root,
+                config,
+                hint=hint,
+                hint_given=True,
+                allow_hint_change=False,
+                source=source,
+                allow_profile_change=allow_profile_change,
             )
+            change = inputs.profile
     except ReplayRefused as refusal:
         return {"status": REFUSED, NODE: str(refusal)}
+    record_profile_change(store, change, driver="extend_llm_review")
     before = store.fingerprint()
     with record_venv_use() as used:
         outcome = attempt_derivation(
@@ -494,6 +508,7 @@ def process(
     commit: str | None = None,
     log: SliceLog | None = None,
     refold: bool = True,
+    allow_profile_change: bool = False,
 ) -> list[dict[str, Any]]:
     """Read back every run named by these rows, one at a time.
 
@@ -508,6 +523,7 @@ def process(
         commit: The code revision to record on each re-fold marker.
         log: Where each row's record is appended as it lands, or None.
         refold: Whether to decide each file again over a reading that landed.
+        allow_profile_change: Accept a profile whose name, version or digest differs from a run's, and record it.
 
     A row's own ``source`` wins over the run's log, because a mirrored run root carries no log.
 
@@ -539,6 +555,7 @@ def process(
                 commit=commit,
                 finished=finished,
                 refold=refold,
+                allow_profile_change=allow_profile_change,
             ),
         }
 
@@ -558,6 +575,7 @@ def run_slice(
     hints: Path | None = None,
     commit: str | None = None,
     refold: bool = True,
+    allow_profile_change: bool = False,
 ) -> dict[str, Any]:
     """Read back every run in one array task's stride of the manifest.
 
@@ -574,6 +592,7 @@ def run_slice(
             recorded verdict alone.
         commit: The code revision to record on each re-fold marker.
         refold: Whether to decide each file again over a reading that landed (False for ``--no-refold``).
+        allow_profile_change: Accept a profile whose name, version or digest differs from a run's, and record it.
 
     Returns:
         The task's summary: its counts, its parameters, and where its log went.
@@ -598,6 +617,7 @@ def run_slice(
             commit=commit,
             log=rows_log,
             refold=refold,
+            allow_profile_change=allow_profile_change,
         )
     finally:
         rows_log.close()
@@ -669,6 +689,7 @@ def main(argv: list[str] | None = None) -> int:
             hints=args.hints,
             commit=args.commit,
             refold=not args.no_refold,
+            allow_profile_change=args.allow_profile_change,
         )
     except (OSError, ValueError) as error:
         print(f"ERROR: {error}", file=sys.stderr)

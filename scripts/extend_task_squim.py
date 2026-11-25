@@ -44,9 +44,8 @@ from senselab.audio.workflows.triage.extend import (
     driver_config,
     export_prov,
     logged,
+    read_checked_store,
     read_manifest,
-    read_store,
-    require_recorded_identity,
     run_root_of,
     take_slice,
     write_store,
@@ -80,7 +79,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--out-root", type=Path, default=None, help="Write each run's store under this tree instead of in place"
     )
-    add_config_arguments(parser)
+    add_config_arguments(parser, allow_profile_change=True)
     return parser
 
 
@@ -115,7 +114,9 @@ def mirror_run_root(run_root: Path, out_root: Path) -> Path:
     return dest
 
 
-def measure_one(run_root: Path, config: TriageConfig, *, stem: str, out_root: Path | None) -> dict[str, Any]:
+def measure_one(
+    run_root: Path, config: TriageConfig, *, stem: str, out_root: Path | None, allow_profile_change: bool = False
+) -> dict[str, Any]:
     """Measure one finished run and write its store only if the measurement moved.
 
     Args:
@@ -123,6 +124,7 @@ def measure_one(run_root: Path, config: TriageConfig, *, stem: str, out_root: Pa
         config: The triage configuration.
         stem: The recording's BIDS stem.
         out_root: Where to write the store instead of in place, or None.
+        allow_profile_change: Accept a profile whose name, version or digest differs from a run's, and record it.
 
     Returns:
         ``status`` (``ok``, ``present``, ``absent`` or ``error``), the reason for ``absent``, and the
@@ -130,8 +132,9 @@ def measure_one(run_root: Path, config: TriageConfig, *, stem: str, out_root: Pa
     """
     try:
         target = mirror_run_root(run_root, out_root) if out_root is not None else run_root
-        store = read_store(target)
-        require_recorded_identity(store, target)
+        store = read_checked_store(
+            target, config, allow_profile_change=allow_profile_change, driver="extend_task_squim"
+        )
     except (OSError, ValueError) as error:
         return {"status": ERROR, NODE: describe_exception(error)}
     try:
@@ -155,6 +158,7 @@ def process(
     *,
     out_root: Path | None = None,
     log: SliceLog | None = None,
+    allow_profile_change: bool = False,
 ) -> list[dict[str, Any]]:
     """Measure every run named by these rows, one at a time.
 
@@ -163,6 +167,7 @@ def process(
         config: The triage configuration.
         out_root: Where to write stores instead of in place, or None.
         log: Where each row's record is appended as it lands, or None.
+        allow_profile_change: Accept a profile whose name, version or digest differs from a run's, and record it.
 
     Returns:
         One outcome record per input row, in order.
@@ -174,7 +179,9 @@ def process(
             run_root = run_root_of(Path(row["enhanced"]))
         except ValueError as error:
             return {**row, "status": ERROR, NODE: describe_exception(error)}
-        record = measure_one(run_root, config, stem=str(row["stem"]), out_root=out_root)
+        record = measure_one(
+            run_root, config, stem=str(row["stem"]), out_root=out_root, allow_profile_change=allow_profile_change
+        )
         return {**row, **record, "elapsed_s": round(time.time() - started, 3)}
 
     return logged(rows, one, log)
@@ -188,6 +195,7 @@ def run_slice(
     config: TriageConfig,
     log_dir: Path,
     out_root: Path | None = None,
+    allow_profile_change: bool = False,
 ) -> dict[str, Any]:
     """Measure every run in one array task's stride of the manifest.
 
@@ -198,6 +206,7 @@ def run_slice(
         config: The triage configuration.
         log_dir: Where this task's ``slices/`` log goes.
         out_root: Where to write stores instead of in place, or None.
+        allow_profile_change: Accept a profile whose name, version or digest differs from a run's, and record it.
 
     Returns:
         The task's summary: its counts, its parameters, and where its log went.
@@ -211,7 +220,7 @@ def run_slice(
     log_path = slices_dir / f"{label}.jsonl"
     rows_log = SliceLog(log_path, slice_index=slice_index, slice_count=slice_count, total=len(mine))
     try:
-        log = process(mine, config, out_root=out_root, log=rows_log)
+        log = process(mine, config, out_root=out_root, log=rows_log, allow_profile_change=allow_profile_change)
     finally:
         rows_log.close()
 
@@ -262,6 +271,7 @@ def main(argv: list[str] | None = None) -> int:
             config=config,
             log_dir=args.log_dir if args.log_dir is not None else args.manifest.parent,
             out_root=args.out_root,
+            allow_profile_change=args.allow_profile_change,
         )
     except (OSError, ValueError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
