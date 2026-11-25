@@ -563,7 +563,9 @@ def run_triage(
         source: The recording to triage.
         out_dir: Where the run root is created.
         config: The triage configuration.
-        hint: What the recording was declared to contain, if anything.
+        hint: What the recording was declared to contain, if anything. A hint, or none, declaring no participant,
+            session or task is run as given, with no identity: refusing one is the caller's decision (the
+            ``triage_audio`` and ``triage_corpus`` drivers refuse it unless told to run without an identity).
         enrollment: The target speaker's enrollment, handed to SPEECH when the caller supplied one.
         corpus_root: The corpus's root: the recording's path relative to it is its id where the hint declares none
             (plan step 9b); without one, and without a declared id, the id is the file stem.

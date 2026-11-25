@@ -1,0 +1,183 @@
+"""The review rows driver: the replayed recordings whose review must be read again, split by whether they have words."""
+
+from __future__ import annotations
+
+import importlib
+import json
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from senselab.audio.workflows.triage.dataset_profile import active_profile
+from senselab.audio.workflows.triage.extend import activate_in_worker
+
+rows_driver = importlib.import_module("senselab.audio.workflows.triage.drivers.triage_review_rows")
+
+
+def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    return path
+
+
+def _row(stem: str, root: Path) -> dict[str, str]:
+    return {"stem": stem, "enhanced": str(root / stem / "run" / "streams" / "enhanced.flac"), "source": f"/{stem}.wav"}
+
+
+def test_rereads_are_the_replayed_rows_marked_needs_reread(tmp_path: Path) -> None:
+    """Only ``needs_reread`` rows are picked; every state is counted, a later log line for a stem winning."""
+    manifest = _write_jsonl(tmp_path / "replay.jsonl", [_row(stem, tmp_path) for stem in ("a", "b", "c", "d")])
+    logs = tmp_path / "logs"
+    _write_jsonl(logs / "slices" / "replay-0.jsonl", [{"stem": "a", "review": "none"}, {"stem": "b", "review": "none"}])
+    _write_jsonl(logs / "slices" / "replay-1.jsonl", [{"stem": "b", "review": "needs_reread"}, {"stem": "c"}])
+    out = tmp_path / "rows_needs_reread.jsonl"
+    summary = rows_driver.pick_rereads(manifest, logs, out)
+    assert [json.loads(line)["stem"] for line in out.read_text().splitlines()] == ["b"]
+    assert summary["states"] == {"needs_reread": 1, "none": 1, "not_in_replay_log": 1, "unrecorded": 1}
+    assert summary["rule"] == "needs_reread" and summary["picked"] == 1
+    assert json.loads((tmp_path / "rows_needs_reread.counts.json").read_text()) == summary
+
+
+def test_all_unread_takes_every_row_whose_reading_does_not_stand(tmp_path: Path) -> None:
+    """A corpus never reviewed: every row the replay neither read nor carried forward is picked, unlogged ones too."""
+    manifest = _write_jsonl(tmp_path / "replay.jsonl", [_row(stem, tmp_path) for stem in ("a", "b", "c", "d")])
+    logs = tmp_path / "logs"
+    states = [{"stem": "a", "review": "none"}, {"stem": "b", "review": "read"}, {"stem": "c", "review": "carried"}]
+    _write_jsonl(logs / "slices" / "replay-0.jsonl", states)
+    out = tmp_path / "rows.jsonl"
+    summary = rows_driver.pick_rereads(manifest, logs, out, all_unread=True)
+    assert [json.loads(line)["stem"] for line in out.read_text().splitlines()] == ["a", "d"]
+    assert summary["rule"] == "all_unread" and summary["picked"] == 2
+
+
+def test_rereads_exits_3_when_the_logs_record_no_review_state(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Rows the logs do not name, or name without a review key, are counted on stderr and make ``rereads`` exit 3."""
+    manifest = _write_jsonl(tmp_path / "replay.jsonl", [_row(stem, tmp_path) for stem in ("a", "b", "c", "d")])
+    logs = tmp_path / "logs"
+    states = [{"stem": "a", "review": "needs_reread"}, {"stem": "b", "status": "error"}, {"stem": "c"}]
+    _write_jsonl(logs / "slices" / "replay-0.jsonl", states)
+    out = tmp_path / "rows.jsonl"
+    argv = ["rereads", str(manifest), "--replay-logs", str(logs), "--out", str(out)]
+    assert rows_driver.main(argv) == rows_driver.UNRECORDED_EXIT == 3
+    assert [json.loads(line)["stem"] for line in out.read_text().splitlines()] == ["a"]
+    assert "WARNING: 3 rows left out" in capsys.readouterr().err
+    assert json.loads((tmp_path / "rows.counts.json").read_text())["unrecorded_left_out"] == 3
+    _write_jsonl(logs / "slices" / "replay-1.jsonl", [{"stem": s, "review": "read"} for s in ("b", "c", "d")])
+    assert rows_driver.main(argv) == 0
+
+
+def test_all_unread_never_picks_a_row_whose_replay_did_not_happen(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``error`` and ``refused`` rows are left out, counted as ``not_replayed``, and make ``rereads`` exit 3."""
+    manifest = _write_jsonl(tmp_path / "replay.jsonl", [_row(stem, tmp_path) for stem in ("a", "b", "c", "d")])
+    logs = tmp_path / "logs"
+    states = [
+        {"stem": "a", "status": "ok", "review": "none"},
+        {"stem": "b", "status": "error"},
+        {"stem": "c", "status": "refused"},
+    ]
+    _write_jsonl(logs / "slices" / "replay-0.jsonl", states)
+    out = tmp_path / "rows.jsonl"
+    argv = ["rereads", str(manifest), "--replay-logs", str(logs), "--out", str(out), "--all-unread"]
+    assert rows_driver.main(argv) == 3
+    assert [json.loads(line)["stem"] for line in out.read_text().splitlines()] == ["a", "d"]
+    counts = json.loads((tmp_path / "rows.counts.json").read_text())
+    assert counts["not_replayed"] == {"error": 1, "refused": 1} and counts["unrecorded_left_out"] == 2
+    assert "WARNING: 2 rows left out" in capsys.readouterr().err
+    _write_jsonl(logs / "slices" / "replay-1.jsonl", [{"stem": "b", "status": "ok", "review": "none"}])
+    _write_jsonl(logs / "slices" / "replay-2.jsonl", [{"stem": "c", "status": "present", "review": "carried"}])
+    assert rows_driver.main(argv) == 0
+    assert [json.loads(line)["stem"] for line in out.read_text().splitlines()] == ["a", "b", "d"]
+
+
+def test_a_picked_row_keeps_its_recording_id_and_target_speaker(tmp_path: Path) -> None:
+    """The join key and the declared target speaker go on with the row; other manifest columns do not."""
+    row = {**_row("a", tmp_path), "recording_id": "rec-a", "target_speaker": "spk1", "participant": "p1"}
+    manifest = _write_jsonl(tmp_path / "replay.jsonl", [row])
+    logs = tmp_path / "logs"
+    _write_jsonl(logs / "slices" / "replay-0.jsonl", [{"stem": "a", "review": "needs_reread"}])
+    out = tmp_path / "rows.jsonl"
+    rows_driver.pick_rereads(manifest, logs, out)
+    (picked,) = [json.loads(line) for line in out.read_text().splitlines()]
+    assert picked == {key: row[key] for key in ("stem", "enhanced", "source", "recording_id", "target_speaker")}
+
+
+def test_split_follows_the_reviewers_words_test(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A transcript with words is a words row, a blank one a nowords row, a store that will not open neither."""
+    texts = {"talk": "hello there", "quiet": "   ", "broken": None}
+
+    def read_store(run_root: Path) -> str:
+        if texts[run_root.name] is None:
+            raise OSError("no store")
+        return run_root.name
+
+    redact = importlib.import_module("senselab.audio.workflows.triage.nodes.redact")
+    monkeypatch.setattr(rows_driver, "read_store", read_store)
+    monkeypatch.setattr(redact, "transcript_texts", lambda store: (texts[store], None))
+    flat = {"stem": "flat", "enhanced": str(tmp_path / "flat" / "enhanced.flac"), "source": "/flat.wav"}
+    first = _write_jsonl(tmp_path / "one.jsonl", [_row("talk", tmp_path), _row("quiet", tmp_path)])
+    second = _write_jsonl(tmp_path / "two.jsonl", [_row("talk", tmp_path), _row("broken", tmp_path), flat])
+    out = tmp_path / "split"
+    counts = rows_driver.split_rows([first, second], out, workers=1)
+    assert counts["rows"] == 4 and (counts["words"], counts["nowords"], counts["error"]) == (1, 1, 2)
+    assert [json.loads(line)["stem"] for line in (out / "rows_words.jsonl").read_text().splitlines()] == ["talk"]
+    assert [json.loads(line)["stem"] for line in (out / "rows_nowords.jsonl").read_text().splitlines()] == ["quiet"]
+    assert (out / "errors.txt").read_text() == "broken\terror:OSError\nflat\terror:ValueError\n"
+
+
+def test_split_hands_its_workers_the_drivers_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``split`` activates the profile it was given and passes it to every worker it starts.
+
+    Reading a transcript reads the profile's values, and a spawned worker starts with none: a dataset's canary chain
+    (2026-11-09) split 74 rows without it, and every row with words failed to read.
+    """
+    from tests.conftest import FIXTURE_PROFILE
+
+    seen: dict[str, Any] = {}
+
+    def split_rows(paths: list[Path], out_dir: Path, *, workers: int, worker_config: Any) -> dict[str, Any]:  # noqa: ANN401
+        seen.update(workers=workers, worker_config=worker_config)
+        return {"error": 0}
+
+    monkeypatch.setattr(rows_driver, "split_rows", split_rows)
+    rows = _write_jsonl(tmp_path / "rows.jsonl", [_row("one", tmp_path)])
+    argv = ["split", str(rows), "--out-dir", str(tmp_path / "out"), "--workers", "2", "--profile", str(FIXTURE_PROFILE)]
+    assert rows_driver.main(argv) == 0
+    override, profile, digest, config_hash = seen["worker_config"]
+    assert seen["workers"] == 2 and override is None and config_hash is not None
+    assert profile is not None and Path(profile).resolve() == Path(FIXTURE_PROFILE).resolve()
+    active = active_profile()
+    assert active is not None and digest == active.digest
+
+
+def test_split_pool_hands_each_worker_the_profile_active_here(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    triage_profile: Any,  # noqa: ANN401 -- the fixture's profile
+) -> None:
+    """Called with no worker configuration, the pool's initializer gets this process's profile and its digest."""
+    seen: dict[str, Any] = {}
+
+    class _Pool:
+        def __init__(self, workers: int, *, initializer: Any, initargs: Any) -> None:  # noqa: ANN401
+            seen.update(initializer=initializer, initargs=initargs)
+
+        def __enter__(self) -> _Pool:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+        def map(self, one: Any, rows: list[dict[str, Any]], chunksize: int = 1) -> list[tuple[dict[str, Any], str]]:  # noqa: ANN401
+            return [(row, rows_driver.NOWORDS) for row in rows]
+
+    monkeypatch.setattr(rows_driver, "ProcessPoolExecutor", _Pool)
+    rows = _write_jsonl(tmp_path / "rows.jsonl", [_row("one", tmp_path), _row("two", tmp_path)])
+    rows_driver.split_rows([rows], tmp_path / "out", workers=2)
+    active = active_profile()
+    assert active is not None and seen["initializer"] is activate_in_worker
+    assert seen["initargs"] == (None, str(active.root), active.digest, None)

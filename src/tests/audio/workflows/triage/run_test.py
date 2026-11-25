@@ -8,11 +8,10 @@ lives in the per-node suites.
 
 from __future__ import annotations
 
-import importlib.util
+import importlib
 import inspect
 import json
 import re
-import sys
 import types
 from dataclasses import replace
 from pathlib import Path
@@ -78,9 +77,6 @@ def _withheld_alone_is_reviewed(monkeypatch: pytest.MonkeyPatch) -> None:
     """These tests read other rules: the release review is narrowed to ``withheld``, its relaxed setting."""
     monkeypatch.setattr(vocabulary_module, "reviewed_releases", lambda: frozenset({"withheld"}))
 
-
-REPO_ROOT = Path(__file__).resolve().parents[5]
-CLI = REPO_ROOT / "scripts" / "triage_audio.py"
 
 GRAPH = (
     "ADMIT",
@@ -1185,13 +1181,8 @@ class TestTheEntityPath:
 
 
 def _cli() -> types.ModuleType:
-    """Import ``scripts/triage_audio.py`` as a module so its helpers can be driven directly."""
-    spec = importlib.util.spec_from_file_location("triage_audio_under_test", CLI)
-    assert spec is not None and spec.loader is not None, f"could not load {CLI}"
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["triage_audio_under_test"] = module
-    spec.loader.exec_module(module)
-    return module
+    """The ``triage_audio`` driver module, so its helpers can be driven directly."""
+    return importlib.import_module("senselab.audio.workflows.triage.drivers.triage_audio")
 
 
 @pytest.fixture
@@ -1230,7 +1221,7 @@ class TestCli:
         override = tmp_path / "override.yaml"
         override.write_text("redaction:\n  padding_ms: 50\n")
         hint_file = tmp_path / "hint.yaml"
-        hint_file.write_text("may_contain: [cough]\nenvironment: clinic\n")
+        hint_file.write_text("may_contain: [cough]\nenvironment: clinic\nmetadata: {participant_id: p01}\n")
         seen: dict[str, Any] = {}
 
         def _fake_run(source: Path, out_dir: Path, config: TriageConfig, **kwargs: Any) -> Any:  # noqa: ANN401
@@ -1254,7 +1245,35 @@ class TestCli:
         assert seen["source"] == source
         assert seen["out_dir"] == tmp_path / "out"
         assert seen["config"].config_hash != config.config_hash
-        assert seen["hint"] == AudioHints(may_contain=["cough"], environment="clinic")
+        assert seen["hint"] == AudioHints(
+            may_contain=["cough"], environment="clinic", metadata={PARTICIPANT_KEY: "p01"}
+        )
+
+    def test_a_hint_declaring_no_identity_is_refused_unless_no_identity(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_result: Callable[..., Any]
+    ) -> None:
+        """A hint with no participant, session or task exits 2 with no run: senselab reads no file name.
+
+        ``--no-identity`` runs it as given, as ``triage_corpus --no-hint`` does; ``run_triage`` refuses nothing.
+        """
+        cli = _cli()
+        source = tmp_path / "recording.wav"
+        source.write_bytes(b"")
+        hint_file = tmp_path / "hint.yaml"
+        hint_file.write_text("may_contain: [cough]\n")
+        calls: list[Any] = []
+
+        def _fake_run(source: Path, out_dir: Path, config: TriageConfig, **kwargs: Any) -> Any:  # noqa: ANN401
+            calls.append(kwargs["hint"])
+            return fake_result()
+
+        monkeypatch.setattr(cli, "run_triage", _fake_run)
+        out = ["--out", str(tmp_path / "out")]
+        assert cli.main([str(source), *out, "--hint", str(hint_file)]) == 2 and calls == []
+        assert cli.main([str(source), *out, "--hint", str(hint_file), "--no-identity"]) == 0
+        assert calls == [AudioHints(may_contain=["cough"])]
+        hint_file.write_text("may_contain: [cough]\ntask: sustained-vowel\n")
+        assert cli.main([str(source), *out, "--hint", str(hint_file)]) == 0 and len(calls) == 2
 
     def test_it_defaults_the_out_dir_and_the_hint(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """With only a recording, the packaged config runs and no hint is declared."""
@@ -1341,7 +1360,7 @@ class TestCli:
         cli = _cli()
         parser = cli.build_parser()
         options = {action.dest for action in parser._actions if action.dest != "help"}
-        assert options == {"audio", "out", "config", "profile", "hint", "enrollment", "corpus_root"}
+        assert options == {"audio", "out", "config", "profile", "hint", "no_identity", "enrollment", "corpus_root"}
 
     def test_a_hints_table_is_refused_rather_than_read_as_an_empty_hint(self, tmp_path: Path) -> None:
         """AudioHints ignores unknown keys, so a filename-keyed hints table validated to may_contain=[].

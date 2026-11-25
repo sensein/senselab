@@ -2,18 +2,12 @@
 
 from __future__ import annotations
 
-import importlib.util
-import sys
+import importlib
 from pathlib import Path
 
 import pytest
 
-SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "triage_speaker_vectors.py"
-_spec = importlib.util.spec_from_file_location("triage_speaker_vectors_under_test", SCRIPT)
-assert _spec is not None and _spec.loader is not None
-cli = importlib.util.module_from_spec(_spec)
-sys.modules["triage_speaker_vectors_under_test"] = cli
-_spec.loader.exec_module(cli)
+cli = importlib.import_module("senselab.audio.workflows.triage.drivers.triage_speaker_vectors")
 
 
 def test_without_a_profile_the_driver_exits_2_naming_it(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

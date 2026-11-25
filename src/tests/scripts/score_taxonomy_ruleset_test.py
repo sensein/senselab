@@ -2,18 +2,12 @@
 
 from __future__ import annotations
 
-import importlib.util
-import sys
+import importlib
 from pathlib import Path
 
 import pytest
 
-SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "score_taxonomy_ruleset.py"
-_spec = importlib.util.spec_from_file_location("score_taxonomy_ruleset_under_test", SCRIPT)
-assert _spec is not None and _spec.loader is not None
-cli = importlib.util.module_from_spec(_spec)
-sys.modules["score_taxonomy_ruleset_under_test"] = cli
-_spec.loader.exec_module(cli)
+cli = importlib.import_module("senselab.audio.workflows.triage.drivers.score_taxonomy_ruleset")
 
 
 def test_without_a_profile_the_driver_exits_2_naming_it(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

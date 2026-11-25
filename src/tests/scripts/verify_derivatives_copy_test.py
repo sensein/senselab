@@ -2,21 +2,14 @@
 
 from __future__ import annotations
 
-import importlib.util
+import importlib
 import json
 import shutil
-import sys
 from pathlib import Path
 
 import pytest
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-_CLI = _REPO_ROOT / "scripts" / "verify_derivatives_copy.py"
-_spec = importlib.util.spec_from_file_location("verify_derivatives_copy_under_test", _CLI)
-assert _spec is not None and _spec.loader is not None, f"could not load {_CLI}"  # noqa: S101
-cli = importlib.util.module_from_spec(_spec)
-sys.modules["verify_derivatives_copy_under_test"] = cli
-_spec.loader.exec_module(cli)
+cli = importlib.import_module("senselab.audio.workflows.triage.drivers.verify_derivatives_copy")
 
 NEEDLE = "/orcd/scratch"
 

@@ -10,9 +10,8 @@ in miniature: FLAC streams on disk, per-span classifier measurements carrying ``
 
 from __future__ import annotations
 
-import importlib.util
+import importlib
 import json
-import sys
 from pathlib import Path
 from typing import Any, Callable
 
@@ -52,13 +51,7 @@ from tests.audio.workflows.triage.conftest import seed_recorded_identity
 pytestmark = pytest.mark.usefixtures("triage_profile")
 """The drivers' internals these tests call read the fixture profile's data; a driver run is given ``--profile``."""
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-_CLI = _REPO_ROOT / "scripts" / "extend_reprocessed_outputs.py"
-_spec = importlib.util.spec_from_file_location("extend_reprocessed_outputs_under_test", _CLI)
-assert _spec is not None and _spec.loader is not None, f"could not load {_CLI}"  # noqa: S101
-cli = importlib.util.module_from_spec(_spec)
-sys.modules["extend_reprocessed_outputs_under_test"] = cli
-_spec.loader.exec_module(cli)
+cli = importlib.import_module("senselab.audio.workflows.triage.drivers.extend_reprocessed_outputs")
 
 SR = 16000
 """The fixture's sampling rate, the one every triage stream is resampled to."""
