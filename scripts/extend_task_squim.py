@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.dataset_profile import require_dataset_values
 from senselab.audio.workflows.triage.extend import (
     ERROR,
     RUN_SUBDIR,
@@ -53,6 +54,12 @@ from senselab.audio.workflows.triage.task_squim import NODE, measure_task_squim
 
 STORE_FILE = "store.jsonl"
 PROV_SUBDIR = "prov"
+
+
+def _checked(config: Any) -> Any:  # noqa: ANN401 -- a TriageConfig
+    """The configuration, once the profile is checked to supply every value a run needs."""
+    require_dataset_values(config.values)
+    return config
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -250,7 +257,7 @@ def main(argv: list[str] | None = None) -> int:
             args.manifest,
             slice_index=args.slice_index,
             slice_count=args.slice_count,
-            config=load_triage_config(args.config) if args.config else load_triage_config(),
+            config=_checked(load_triage_config(args.config) if args.config else load_triage_config()),
             log_dir=args.log_dir if args.log_dir is not None else args.manifest.parent,
             out_root=args.out_root,
         )

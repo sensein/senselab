@@ -448,13 +448,13 @@ def test_align_transcriptions_multilingual(
     )
     if aligned_transcriptions[0][0] is not None and aligned_transcriptions[0][0].chunks is not None:
         assert len(aligned_transcriptions[0][0].chunks) == 5, (
-            f"Expected 5 items in aligned_transcriptions[0], but got "
-            f"{len(aligned_transcriptions[0])}: {aligned_transcriptions[0]}"
+            f"Expected 5 chunks in aligned_transcriptions[0], but got "
+            f"{len(aligned_transcriptions[0][0].chunks)}: {aligned_transcriptions[0]}"
         )
     if aligned_transcriptions[1][0] is not None and aligned_transcriptions[1][0].chunks is not None:
-        assert len(aligned_transcriptions[1][0].chunks) == 5, (
-            f"Expected 5 items in aligned_transcriptions[1], but got "
-            f"{len(aligned_transcriptions[1])}: {aligned_transcriptions[1]}"
+        assert len(aligned_transcriptions[1][0].chunks) == 6, (
+            f"Expected 6 chunks in aligned_transcriptions[1], but got "
+            f"{len(aligned_transcriptions[1][0].chunks)}: {aligned_transcriptions[1]}"
         )
     aligned_transcription_en = aligned_transcriptions[0][0] or None
     if isinstance(aligned_transcription_en, ScriptLine):

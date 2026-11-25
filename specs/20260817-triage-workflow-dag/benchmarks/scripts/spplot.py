@@ -6,8 +6,8 @@ from matplotlib.patches import Rectangle
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[2]))
 from labels import LABELS
 from scipy.signal import resample_poly, hilbert, butter, filtfilt, stft
-T="/Users/satra/.claude/jobs/295c3f8a/tmp/"
-y,sr=sf.read("/Users/satra/Downloads/streaming-audio-2026-07-30T04-21-56-487Z.wav",dtype="float32",always_2d=True)
+T="${AGENT_SCRATCH}/"
+y,sr=sf.read("${LOCAL_INPUT}/streaming-audio-2026-07-30T04-21-56-487Z.wav",dtype="float32",always_2d=True)
 x=resample_poly(y.mean(axis=1),16000,sr).astype(np.float64); fs=16000; dur=len(x)/fs
 xp=np.empty_like(x); xp[0]=x[0]; xp[1:]=x[1:]-0.97*x[:-1]
 b,a=butter(4,40/(fs/2),"low")
@@ -70,5 +70,5 @@ ax[5].set_xlabel("time (s)"); ax[5].set_xlim(0,dur)
 fig.text(.5,.006,"blue band = the speech label. green bands = other scored labels. "
   "Separation cannot be scored for benefit here: speech and airway events never overlap in this file.",
   ha="center",fontsize=8.5,c="#444")
-fig.savefig("/Users/satra/Downloads/speech_branch_instruments.png",dpi=118,bbox_inches="tight")
-print("wrote /Users/satra/Downloads/speech_branch_instruments.png")
+fig.savefig("${LOCAL_INPUT}/speech_branch_instruments.png",dpi=118,bbox_inches="tight")
+print("wrote ${LOCAL_INPUT}/speech_branch_instruments.png")

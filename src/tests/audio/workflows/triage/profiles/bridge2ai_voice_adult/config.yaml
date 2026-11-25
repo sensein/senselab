@@ -1,39 +1,23 @@
-# The Bridge2AI-Voice adult settings, merged over senselab's packaged triage config. Every value is the one triage
-# used before profiles existed (senselab alpha 98c8048b6). Some equal senselab's own default and are recorded
-# here so this profile's results do not move if that default changes.
-windows:
-  yamnet:
-    default_threshold: 0.2   # owner-directed, 2026-09-10 (7a5590250); no ROC over this corpus
-    label_top_k: 4           # owner-directed, 2026-09-10
-  hear:
-    default_threshold: 0.2   # as yamnet
-    label_top_k: 4
-stimulus:
-  residue:
-    cue_families: [productive-vocabulary]
-  task_lexicons: [cinderella-story, animal-fluency, random-item-generation, random-item-generation-v2]
-diarization:
-  streams: [enhanced]        # narrowed 2026-09-20 after the corpus run
+# The Bridge2AI-Voice adult settings: what is B2AI's own, merged over senselab's packaged triage config and the
+# adult_clinical_speech reference profile this profile extends (plan step 5c). Every value is the one triage used
+# before profiles existed (senselab alpha 98c8048b6). The owner's policy carries its date; the derivations are in
+# specs/20260817-triage-workflow-dag/config-derivations.md.
 speech:
-  target_match_cosine: 0.231 # midpoint of same-speaker p5 and between-speaker p95 at 1.0 s windows (config-derivations.md)
-  secondary_exclusive_min_s: 1.0
+  target_match_cosine: 0.231 # differs from senselab's 0.25: midpoint of same-speaker p5 and between-speaker p95 at 1.0 s windows on B2AI's speaker vectors
 verdict:
-  llm_reset_redactions: true
-  condition_categories: [CONDITION]
-  person_name_review_flags: true
-  trim_protected_categories: [PERSON, NAME, LOCATION, LOC]
-  cohort_conditions: bridge2ai_voice_adult_2026-09-04
-  llm_second_speaker_flags: true
-  llm_contradiction_flags: true
-  llm_instructions_spoken_flags: true
-  uncomputed_reading_flags: true
-  second_opinion_disagreement_flags: true
-  second_opinion_confident_yes: 0.8
-  second_opinion_confident_no: 0.2
-  hint_mismatch_exempt_families: [respiration-and-cough-breath, respiration-and-cough-v2-breath]
-  model_speaker_families: [harvard-sentences-list, cape-v-sentences, cape-v-sentences-v2]
+  llm_reset_redactions: true             # owner, 2026-09-27: a reading's release entries unmask exactly the words they name
+  condition_categories: [CONDITION]      # owner, 2026-10-03 (policy v7): a listed health condition is never masked and never withholds
+  person_name_review_flags: true         # owner, 2026-10-03 (policy v7): a masked person's name flags for a human's review of name tags
+  trim_protected_categories: [PERSON, NAME, LOCATION, LOC]  # owner, 2026-09-27: a marked word written as a proper noun is never trimmed
+  cohort_conditions: bridge2ai_voice_adult_2026-09-04       # the study's recruited conditions (cohort_conditions/)
+  llm_second_speaker_flags: true         # owner, 2026-09-27: a reading that heard more than one speaker flags the recording for review
+  llm_contradiction_flags: true          # owner, 2026-09-28: a flagged reading that names no words flags the recording for review
+  llm_instructions_spoken_flags: true    # owner, 2026-10-01: a reading quoting the task's instructions spoken in the recording flags for review
+  uncomputed_reading_flags: true         # owner, 2026-09-29: a conformance reading that should exist and does not flags for review
+  second_opinion_disagreement_flags: true  # owner, 2026-10-01: a confident second-opinion disagreement with the reviewer flags for review
+  llm_redaction_withholds: false         # a reading of residue does not withhold a recording REDACT passed (unfitted)
   gates:
-    by_family:
+    by_family:                           # per-task gate bounds, r8
       rainbow-passage:
         content_omission_fraction_max: 0.1
       caterpillar-passage:
@@ -41,17 +25,14 @@ verdict:
       word-color-stroop:
         content_omission_fraction_max: 0.2
 taxonomy:
-  consolidation_floor: 0.2
   ruleset:
-    gates:
-      speech.lexical: {threshold: 2}
-      speech.transcript_agreement: {threshold: 3}
-      voice.sustained: {threshold: 3.0}
-      voice.glide: {threshold: 0.05}
-      voice.chant: {threshold: 0.02}
-      airway.breath: {threshold: 0.10}
-      airway.cough: {threshold: 50.0}
-      airway.bracketed_event: {threshold: 1}
-      airway.ppg_silent_fraction: {threshold: 0.757}
+    emptiness:
+      active_s_max: 0.0                  # owner's rule (config-derivations.md §taxonomy): seconds of activity BACKGROUND may read over the floor in a recording that carried nothing
 pii:
-  name_words_max: 1
+  name_words_max: 1                      # owner, 2026-09-28: a name, place or organisation finding of two or more words keeps only its proper nouns
+branch:
+  phoneme_place_classes:
+    alveolar: [t, d, r]                  # `r` admitted for the buttercup tasks' flap (diadochokinesis-buttercup)
+redaction:
+  name_approvals: {}                     # owner, 2026-10-03 (policy v7): recording file stem -> person names a human approved for release
+  fill: silence                          # owner-directed (config-derivations.md §redaction): what replaces redacted audio: silence, noise or bleep

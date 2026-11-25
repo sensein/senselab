@@ -27,7 +27,7 @@ import numpy as np
 import yaml
 
 from senselab.audio.tasks.classification.label_scores import label_scores
-from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
+from senselab.audio.workflows.triage.dataset_profile import data_path, data_values, profile_cache
 from senselab.audio.workflows.triage.nodes.common import find_measurement
 from senselab.utils.prov_store import ProvStore
 
@@ -101,7 +101,7 @@ def background_speech_parameters() -> BackgroundSpeechParameters:
     Returns:
         The parameters.
     """
-    held = dict(yaml.safe_load(data_path("background_speech.yaml").read_text()) or {})
+    held = dict(data_values("background_speech.yaml"))
     labels = tuple(str(label) for label in held.pop("speech_labels"))
     band, f0, thinned = held.pop("harmonic_band_hz"), held.pop("f0_range_hz"), held.pop("thinned_db")
     return BackgroundSpeechParameters(

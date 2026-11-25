@@ -24,7 +24,7 @@ from scipy.signal import find_peaks
 
 from senselab.audio.tasks.classification.label_scores import label_scores
 from senselab.audio.workflows.triage.background_speech import background_speech_parameters
-from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
+from senselab.audio.workflows.triage.dataset_profile import data_path, data_values, profile_cache
 from senselab.audio.workflows.triage.nodes.common import find_measurement, lexical_words, live_entities, word_hull
 from senselab.audio.workflows.triage.residue import is_non_lexical
 from senselab.audio.workflows.triage.task_events import (
@@ -134,7 +134,7 @@ def modulation_parameters() -> ModulationParameters:
     Returns:
         The parameters.
     """
-    held = (yaml.safe_load(data_path("breath_pattern.yaml").read_text()) or {})["modulation"]
+    held = data_values("breath_pattern.yaml")["modulation"]
 
     def pair(key: str) -> tuple[float, float]:
         low, high = held[key]
@@ -159,7 +159,7 @@ def breath_pattern_parameters() -> BreathPatternParameters:
     Returns:
         The parameters.
     """
-    held = (yaml.safe_load(data_path("breath_pattern.yaml").read_text()) or {})["measure"]
+    held = data_values("breath_pattern.yaml")["measure"]
 
     def pair(key: str) -> tuple[float, float]:
         low, high = held[key]
@@ -234,7 +234,6 @@ class TrainParameters:
         template_corr_min: The correlation with the strong bursts' spectrum a weak burst needs.
         distance_quick_s: The least spacing between bursts for a quick-breath family.
         distance_s: The least spacing for every other family.
-        quick_families: The quick-breath families.
         burst_s: The duration range of one burst.
         flatness_min: The mean spectral flatness a burst needs.
         voiced_max: The share of a burst's frames that may be voiced.
@@ -276,7 +275,6 @@ class TrainParameters:
     template_corr_min: float
     distance_quick_s: float
     distance_s: float
-    quick_families: tuple[str, ...]
     burst_s: tuple[float, float]
     flatness_min: float
     voiced_max: float
@@ -308,14 +306,12 @@ def train_parameters() -> TrainParameters:
     Returns:
         The parameters.
     """
-    held = (yaml.safe_load(data_path("breath_pattern.yaml").read_text()) or {})["train"]
+    held = data_values("breath_pattern.yaml")["train"]
     ints = {"tonal_halfwidth_bins", "speech_words_min"}
     values: dict[str, Any] = {}
     for name, value in held.items():
         if name == "band_edges_hz":
             values[name] = tuple(float(edge) for edge in value)
-        elif name == "quick_families":
-            values[name] = tuple(str(family) for family in value)
         elif name == "burst_s":
             values[name] = (float(value[0]), float(value[1]))
         else:
@@ -350,7 +346,7 @@ def review_parameters() -> ReviewParameters:
     Returns:
         The parameters.
     """
-    held = (yaml.safe_load(data_path("breath_pattern.yaml").read_text()) or {})["review"]
+    held = data_values("breath_pattern.yaml")["review"]
     return ReviewParameters(
         min_phases=int(held["min_phases"]),
         cycle_cv_min=float(held["cycle_cv_min"]),
@@ -517,7 +513,7 @@ def veto_parameters() -> VetoParameters:
     Returns:
         The parameters.
     """
-    held = (yaml.safe_load(data_path("breath_pattern.yaml").read_text()) or {})["veto"]
+    held = data_values("breath_pattern.yaml")["veto"]
     return VetoParameters(
         speech_words_min=int(held["speech_words_min"]),
         active_fraction_min=float(held["active_fraction_min"]),
@@ -958,7 +954,7 @@ def find_bursts(
         hop_s: Seconds between frames.
         bin_hz: Hertz between frequency bins.
         voiced: Whether each frame is voiced, one per frame.
-        family: The declared task family, which fixes the least spacing between bursts.
+        family: The declared task, whose ``quick_breaths`` trait fixes the least spacing between bursts.
         parameters: The train's parameters.
         sustained: The sustained vocalisations, ``(start, end)`` in seconds (:func:`voice_segments`).
         speech: The speech segments, likewise.
@@ -981,7 +977,9 @@ def find_bursts(
     full = max(
         p.prominence_min, p.prominence_range_frac * float(np.percentile(combined, 95) - np.percentile(combined, 5))
     )
-    distance = p.distance_quick_s if family in p.quick_families else p.distance_s
+    from senselab.audio.workflows.triage.task_catalogue import QUICK_BREATHS, has_trait  # noqa: PLC0415
+
+    distance = p.distance_quick_s if has_trait(family, QUICK_BREATHS) else p.distance_s
     peaks, props = find_peaks(
         combined, distance=max(1, int(distance * fs)), prominence=full * p.weak_prominence_frac, width=1
     )

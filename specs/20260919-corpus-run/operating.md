@@ -6,7 +6,7 @@ Everything needed to launch, resume, aggregate and read it.
 
 The whole graph — ADMIT → PREPROCESS → TAXONOMY → routing → AIRWAY/SPEECH/VOICE → QUALITY →
 REDACT → VERDICT → REPORT — over all 62,578 recordings in
-`/orcd/scratch/bcs/002/satra/clipfix_20260913/manifest_all.jsonl`. Hints on, `task_token` off.
+`${ORCD_GROUP_SCRATCH}/clipfix_20260913/manifest_all.jsonl`. Hints on, `task_token` off.
 
 This is the first run of the branches at corpus scale. The 2026-09-08 run stopped at TAXONOMY:
 `specs/20260817-triage-workflow-dag/corpus-speech-census.md` says what that one does and does not
@@ -16,8 +16,8 @@ hold.
 
 | what | where |
 |---|---|
-| code | `/orcd/scratch/bcs/002/satra/senselab-corpus`, detached at `f2729d7c` |
-| job | `/orcd/scratch/bcs/002/satra/triage_design_20260919/corpus.sbatch` |
+| code | `${ORCD_GROUP_SCRATCH}/senselab-corpus`, detached at `f2729d7c` |
+| job | `${ORCD_GROUP_SCRATCH}/triage_design_20260919/corpus.sbatch` |
 | driver | `.../triage_design_20260919/corpus_driver.py` |
 | output | `.../triage_design_20260919/run/` — `rows/` and `out/` |
 | logs | `.../triage_design_20260919/logs/triage-corpus-*` |
@@ -61,7 +61,7 @@ resuming is just resubmitting the same array over the same output root — a pre
 wall-clock kill costs one recording.
 
 ```bash
-sbatch /orcd/scratch/bcs/002/satra/triage_design_20260919/corpus.sbatch
+sbatch ${ORCD_GROUP_SCRATCH}/triage_design_20260919/corpus.sbatch
 ```
 
 ### Resume is keyed on completion, not on the commit
@@ -84,7 +84,7 @@ questions are answered from the rows without reopening a store:
 
 ```bash
 uv run python scripts/triage_corpus_report.py \
-  /orcd/scratch/bcs/002/satra/triage_design_20260919/run --out <somewhere>
+  ${ORCD_GROUP_SCRATCH}/triage_design_20260919/run --out <somewhere>
 ```
 
 That writes `corpus_decisions.json` and `corpus_decisions.md`: the two axes and the discard ground,
@@ -100,7 +100,7 @@ fourteen hours again:
 
 ```bash
 RERENDER_REPO=<a checkout holding the fixed renderer> \
-  sbatch /orcd/scratch/bcs/002/satra/triage_design_20260919/rerender.sbatch
+  sbatch ${ORCD_GROUP_SCRATCH}/triage_design_20260919/rerender.sbatch
 ```
 
 200 slices over the run tree, no models, no audio beyond the conditioned stream the panels draw

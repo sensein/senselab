@@ -1,24 +1,24 @@
 # Discard where the task is absent or weak and talk outside it takes its place (discard_replaced_task.py).
 # Derivations: specs/20261007-task-events-in-background/cross-dataset.md, "E1".
 version: 2
-enabled: false                     # owner, 2026-10-12: off until a sample of the candidates has been listened to
+enabled:                           # profile value (data/profile_values.yaml)
 
 background:                        # r37 round 2: the task's events against the recording's background (task_events.background_reading)
-  enabled: false                   # read beside the other rules; off until its own listen stratum is labelled
+  enabled:                         # profile value (data/profile_values.yaml)
   kinds: [airway]
-  event_over_background_db_max:        # TO FIT: specs/20261012-r37-extents/design.md, "Events against background"
+  event_over_background_db_max:        # profile value (data/profile_values.yaml)
 
 non_lexical:                       # airway, voice, and the lexical families read as a voice task
   kinds: [airway, voice]
-  families: []                     # dataset profile (B2AI: loudness, loudness-v2)
-  free_speech_words_per_s:         # dataset profile (B2AI: 2.03): median consensus words per second over free-speech, picture-description and open-response recordings, r36
-  talk_fraction_min: 0.25          # talk outside the task at this share of that rate or more
-  extent_fraction_max: 0.5         # a task extent under this share of the recording is weak
+  voice_read: true                 # a word task the task list reads for its voice (voice_reading_text)
+  free_speech_words_per_s:         # profile value (data/profile_values.yaml)
+  talk_fraction_min:               # profile value (data/profile_values.yaml)
+  extent_fraction_max:             # profile value (data/profile_values.yaml)
 
-lexical:                           # lexical speech, less the families above
+lexical:                           # lexical speech, less the word tasks read for their voice
   kinds: [lexical_speech]
-  exclude: []                      # dataset profile (B2AI: loudness, loudness-v2)
+  voice_read: false                # less the word tasks read for their voice
 
 short_response:                    # free-response families: a response under fraction_max of the family median
-  fraction_max: 0.1
+  fraction_max:                         # profile value (data/profile_values.yaml)
   family_median_s: {}              # dataset profile: median response per family (B2AI: r36 medians)

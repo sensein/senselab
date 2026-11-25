@@ -131,7 +131,12 @@ def fake_locks(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.Mon
 def _installed_marker(venv_dir: Path, name: str, requirements: list[str], index: Optional[TorchIndex] = None) -> None:
     """Write the completion marker a finished build of this lock leaves behind."""
     lock = subprocess_venv._resolve_lock(name, requirements, "3.12", None, False)
-    data: dict[str, object] = {"lock": lock.path.name, "lock_sha256": lock.sha256, "python_version": "3.12"}
+    data: dict[str, object] = {
+        "lock": lock.path.name,
+        "lock_sha256": lock.sha256,
+        "python_version": "3.12",
+        "python_preference": "only-managed",
+    }
     if index is not None:
         data["torch_index"] = {"tag": index.tag, "url": index.url, "source": index.source}
     venv_dir.mkdir(parents=True, exist_ok=True)
@@ -160,9 +165,9 @@ class _SubprocessRecorder:
         **_: object,
     ) -> subprocess.CompletedProcess:
         self.calls.append(list(argv))
-        # Simulate ``uv venv --python X /path/to/venv`` by mkdir-ing the target.
-        if len(argv) >= 5 and argv[1] == "venv" and argv[2] == "--python":
-            Path(argv[4]).mkdir(parents=True, exist_ok=True)
+        # Simulate ``uv venv ... /path/to/venv`` by mkdir-ing the target.
+        if len(argv) >= 5 and argv[1] == "venv":
+            Path(argv[-1]).mkdir(parents=True, exist_ok=True)
         # If a hook is set, let it drive the response (raise / return).
         if self.hook is not None:
             return self.hook(self.calls)
@@ -392,6 +397,75 @@ def test_a_changed_lock_rebuilds_the_venv(
     assert written["lock_sha256"] != "0" * 64
 
 
+def test_uv_venv_selects_a_uv_managed_interpreter_only(
+    fake_cache_dir: Path,
+    fake_uv: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``uv venv`` is called with ``--python-preference only-managed`` and the marker records it."""
+    name = "t-managed-python"
+    recorder = _SubprocessRecorder()
+    monkeypatch.setattr(subprocess, "run", recorder)
+
+    venv_dir = ensure_venv(name, ["numpy>=1.26"], python_version="3.12")
+
+    venv_calls = [argv for argv in recorder.calls if argv[1] == "venv"]
+    assert venv_calls == [[fake_uv, "venv", "--python", "3.12", "--python-preference", "only-managed", str(venv_dir)]]
+    written = json.loads((venv_dir / ".senselab-installed").read_text())
+    assert written["python_preference"] == "only-managed"
+
+
+def test_a_venv_built_without_the_managed_preference_rebuilds(
+    fake_cache_dir: Path,
+    fake_uv: str,
+    force_cu128: TorchIndex,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A marker with no ``python_preference`` may sit on a host interpreter, so the venv is rebuilt."""
+    name = "t-host-python"
+    venv_dir = fake_cache_dir / f"{name}-cu128"
+    _installed_marker(venv_dir, name, ["torch>=2.8,<2.9"], force_cu128)
+    stored = json.loads((venv_dir / ".senselab-installed").read_text())
+    del stored["python_preference"]
+    (venv_dir / ".senselab-installed").write_text(json.dumps(stored))
+
+    recorder = _SubprocessRecorder()
+    monkeypatch.setattr(subprocess, "run", recorder)
+    ensure_venv(name, ["torch>=2.8,<2.9"], python_version="3.12")
+
+    assert len(recorder.calls) == 3
+    assert "only-managed" in recorder.calls[0]
+    written = json.loads((venv_dir / ".senselab-installed").read_text())
+    assert written["python_preference"] == "only-managed"
+
+
+def test_no_managed_interpreter_is_a_clear_error_not_a_host_fallback(
+    fake_cache_dir: Path,
+    fake_uv: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When uv cannot supply a managed interpreter, the error names it and no venv is left behind."""
+    name = "t-no-managed-python"
+    stderr = (
+        "error: No interpreter found for Python 3.12 in managed installations\n"
+        "hint: A managed Python download is available for Python 3.12, but Python downloads are set to 'never'"
+    )
+
+    def _hook(calls: list[list[str]]) -> subprocess.CompletedProcess:
+        raise subprocess.CalledProcessError(returncode=2, cmd=calls[-1], output="", stderr=stderr)
+
+    recorder = _SubprocessRecorder()
+    recorder.hook = _hook
+    monkeypatch.setattr(subprocess, "run", recorder)
+
+    with pytest.raises(RuntimeError, match="uv-managed Python 3.12") as info:
+        ensure_venv(name, ["numpy>=1.26"], python_version="3.12")
+
+    assert "No interpreter found for Python 3.12 in managed installations" in str(info.value)
+    assert len(recorder.calls) == 1
+    assert not (fake_cache_dir / name).exists()
+
+
 def test_a_takeover_during_build_refuses_to_certify_the_venv(
     fake_cache_dir: Path,
     fake_uv: str,
@@ -463,8 +537,8 @@ def test_stampede_on_a_slow_build_lets_every_late_arrival_reuse_the_winners_venv
         text: bool = False,
         **_: object,
     ) -> subprocess.CompletedProcess:
-        if len(argv) >= 5 and argv[1] == "venv" and argv[2] == "--python":
-            Path(argv[4]).mkdir(parents=True, exist_ok=True)
+        if len(argv) >= 5 and argv[1] == "venv":
+            Path(argv[-1]).mkdir(parents=True, exist_ok=True)
         elif len(argv) >= 3 and argv[1] == "pip" and argv[2] == "install":
             with install_lock:
                 install_calls.append(threading.get_ident())

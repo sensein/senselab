@@ -39,7 +39,7 @@ from senselab.audio.tasks.redaction.api import apply_redactions
 from senselab.audio.workflows.triage.background_model import BACKGROUND_MODEL
 from senselab.audio.workflows.triage.cohort_fold import COHORT_NODE, COHORT_READING
 from senselab.audio.workflows.triage.config import TriageConfig
-from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
+from senselab.audio.workflows.triage.dataset_profile import data_path, data_values, profile_cache
 from senselab.audio.workflows.triage.ddk_task import CYCLE, DDK_READING, SYLLABLE
 from senselab.audio.workflows.triage.live_evidence import declared_task_of
 from senselab.audio.workflows.triage.nodes.airway import EVENTS_FOUND as AIRWAY_EVENTS_FOUND
@@ -332,7 +332,7 @@ TASK_MINIMUM_DURATION_PATH = Path(__file__).parents[1] / "data" / "task_minimum_
 @profile_cache
 def _task_minimum_durations() -> tuple[float, dict[str, float]]:
     """``data/task_minimum_duration.yaml``: the default minimum and the per-family ones, in seconds."""
-    document = yaml.safe_load(data_path("task_minimum_duration.yaml").read_text()) or {}
+    document = data_values("task_minimum_duration.yaml")
     families = {str(name): float(value) for name, value in (document.get("families") or {}).items()}
     return float(document["default_s"]), families
 
@@ -340,7 +340,7 @@ def _task_minimum_durations() -> tuple[float, dict[str, float]]:
 @profile_cache
 def _discard_contested() -> dict[str, Any]:
     """The dataset profile's ``discard_contested.yaml``, as written."""
-    return yaml.safe_load(data_path("discard_contested.yaml").read_text()) or {}
+    return data_values("discard_contested.yaml")
 
 
 def contest_events_min(instructed: int | None, event: str = "cough") -> int:
@@ -393,11 +393,12 @@ def minimum_duration_s(declared_family: str | None) -> float | None:
 
 @profile_cache
 def _airway_event_tokens() -> dict[str, frozenset[str]]:
-    """Per declared airway family, the event tokens naming its event (the profile's ``airway_event_tokens.yaml``)."""
-    document = yaml.safe_load(data_path("airway_event_tokens.yaml").read_text()) or {}
+    """Per airway event kind, the bracketed tokens naming it (the profile's ``airway_event_tokens.yaml``)."""
+    document = data_values("airway_event_tokens.yaml")
     return {
-        str(family): frozenset(str(token).casefold() for token in document.get(kind) or ())
-        for family, kind in (document.get("families") or {}).items()
+        str(kind): frozenset(str(token).casefold() for token in tokens or ())
+        for kind, tokens in document.items()
+        if kind != "version"
     }
 
 
@@ -409,10 +410,13 @@ def event_tokens_n(store: ProvStore, declared_family: str | None) -> int:
         declared_family: The task family the recording declares.
 
     Returns:
-        The count of ``[cough]``-like tokens for a cough family, ``[breath]``-like for a breath
-        family, and 0 for every other family or where no consensus exists.
+        The count of tokens the profile lists for the task's kind (``[cough]``-like for a cough task), and 0 for
+        a kind it lists none for, every other task, or where no consensus exists.
     """
-    tokens = _airway_event_tokens().get(declared_family or "")
+    from senselab.audio.workflows.triage.task_catalogue import BREATH_KIND, COUGH_KIND, is_kind  # noqa: PLC0415
+
+    kind = next((kind for kind in (COUGH_KIND, BREATH_KIND) if is_kind(declared_family, kind)), None)
+    tokens = _airway_event_tokens().get(kind) if kind is not None else None
     if not tokens:
         return 0
     return sum(
@@ -580,8 +584,8 @@ def _task_evidence(
 
     Returns:
         The evidence :func:`~senselab.audio.workflows.triage.vocabulary.fold_file_verdict` reads. A
-        breath family of the dataset profile's ``airway_event_requirements.yaml`` is decided on AIRWAY's breathing-
-        pattern reading and a cough family on its cough-onset reading; the reading's absent inputs
+        breath task (its kind in the task list) is decided on AIRWAY's breathing-pattern reading and a cough task
+        on its cough-onset reading; the reading's absent inputs
         then stand for the owner's, and a reading AIRWAY never wrote is itself an absent input.
     """
     owners = tuple(branch for branch, rows in EXPECTATIONS.items() if declared_family and declared_family in rows)

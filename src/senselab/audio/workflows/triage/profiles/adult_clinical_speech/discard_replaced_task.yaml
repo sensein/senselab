@@ -1,0 +1,9 @@
+# Discard where the task is absent or weak and talk outside it takes its place (discard_replaced_task.py).
+# Derivations: specs/20261007-task-events-in-background/cross-dataset.md, "E1".
+version: 2
+non_lexical:                       # airway, voice, and the lexical families read as a voice task
+  talk_fraction_min: 0.25          # talk outside the task at this share of that rate or more
+  extent_fraction_max: 0.5         # a task extent under this share of the recording is weak
+
+short_response:                    # free-response families: a response under fraction_max of the family median
+  fraction_max: 0.1

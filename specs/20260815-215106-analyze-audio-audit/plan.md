@@ -241,7 +241,7 @@ tells Sweep B and C not to trust that module's stated contract.
 
 Dispatch one agent (model: sonnet) with this prompt verbatim:
 
-> Working directory: `/Users/satra/software/sensein/senselab`, branch `feat/analyze-audio-audit`.
+> Working directory: `.`, branch `feat/analyze-audio-audit`.
 >
 > READ-ONLY. Do not modify any file under `src/`. You are producing a candidate list, not edits.
 >
@@ -337,7 +337,7 @@ this audit."
 
 Dispatch one agent (model: sonnet) with this prompt verbatim:
 
-> Working directory: `/Users/satra/software/sensein/senselab`, branch `feat/analyze-audio-audit`.
+> Working directory: `.`, branch `feat/analyze-audio-audit`.
 >
 > READ-ONLY. Do not modify any file under `src/`.
 >
@@ -452,7 +452,7 @@ belongs in utils/ where another workflow could reuse it."
 
 Dispatch one agent (model: sonnet) with this prompt verbatim:
 
-> Working directory: `/Users/satra/software/sensein/senselab`, branch `feat/analyze-audio-audit`.
+> Working directory: `.`, branch `feat/analyze-audio-audit`.
 >
 > READ-ONLY. Do not modify any file under `src/`.
 >
@@ -540,7 +540,7 @@ produced four of nine findings in the review of this code's own PR."
 
 Dispatch one agent (model: sonnet) with this prompt verbatim:
 
-> Working directory: `/Users/satra/software/sensein/senselab`, branch `feat/analyze-audio-audit`.
+> Working directory: `.`, branch `feat/analyze-audio-audit`.
 >
 > READ-ONLY. Do not modify any file under `src/`.
 >
@@ -639,7 +639,7 @@ vocabularies. Merging is a judgement task and gets its own gate.
 
 Dispatch one agent (model: sonnet) with this prompt verbatim:
 
-> Working directory: `/Users/satra/software/sensein/senselab`.
+> Working directory: `.`.
 >
 > READ-ONLY on `src/`. Read all four candidate files in
 > `specs/20260815-215106-analyze-audio-audit/candidates/` and merge them into one list.
@@ -711,7 +711,7 @@ finding silently, a wrongly separated pair costs one extra verification."
 For each candidate `F-<n>`, dispatch an agent (model: sonnet) with this prompt, substituting the
 candidate's fields:
 
-> Working directory: `/Users/satra/software/sensein/senselab`.
+> Working directory: `.`.
 >
 > READ-ONLY. Your job is to **refute** the following claimed defect. You are not evaluating
 > whether it is interesting; you are trying to show it is wrong. **Default to REFUTED when you
@@ -789,7 +789,7 @@ copied into the next fix."
 
 For each surviving candidate, dispatch an agent (model: sonnet) with this prompt:
 
-> Working directory: `/Users/satra/software/sensein/senselab`.
+> Working directory: `.`.
 >
 > Write a script that **demonstrates** this defect by executing real code, and run it.
 >

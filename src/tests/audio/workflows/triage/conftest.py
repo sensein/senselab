@@ -25,6 +25,9 @@ from senselab.audio.workflows.triage.identity import (
 )
 from senselab.audio.workflows.triage.task_catalogue import task_attributes
 from senselab.utils.prov_store import ProvStore
+from tests.conftest import activate_b2ai_profile_for_collection  # noqa: E402
+
+activate_b2ai_profile_for_collection()
 
 _ADMITTED_PATH = "/admitted/recording.wav"
 """The path a store seeded without a ``recording`` stream is given one at: a stem that names no task."""

@@ -18,7 +18,7 @@ from typing import Sequence
 
 import yaml
 
-from senselab.audio.workflows.triage.dataset_profile import data_path, profile_cache
+from senselab.audio.workflows.triage.dataset_profile import data_path, data_values, profile_cache
 from senselab.audio.workflows.triage.nodes.redact import category_family, name_families
 from senselab.audio.workflows.triage.residue import is_content_word, is_proper_form
 
@@ -107,7 +107,7 @@ def _whole_runs(target: str, keys: Sequence[str]) -> list[tuple[int, int]]:
 
 @profile_cache
 def _temporal() -> tuple[frozenset[str], tuple[str, ...]]:
-    raw = yaml.safe_load(data_path("temporal_words.yaml").read_text()) or {}
+    raw = data_values("temporal_words.yaml")
     numbers = tuple(sorted({str(word) for word in raw.get("number_words") or ()}, key=len, reverse=True))
     words = {str(word) for key in ("units", "calendar", "relative") for word in raw.get(key) or ()}
     return frozenset(words | set(numbers)), numbers

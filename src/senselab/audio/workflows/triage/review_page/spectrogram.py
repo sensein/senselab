@@ -15,16 +15,17 @@ from typing import Any
 import numpy as np
 import yaml
 
+from senselab.audio.workflows.triage.dataset_profile import data_values, profile_cache
 
-@cache
+
+@profile_cache
 def settings() -> dict[str, Any]:
     """The page settings.
 
     Returns:
         ``data/review_page.yaml``, parsed.
     """
-    text = resources.files("senselab.audio.workflows.triage.data").joinpath("review_page.yaml").read_text()
-    return dict(yaml.safe_load(text))
+    return dict(data_values("review_page.yaml"))
 
 
 def _band_edges(bands: int, f_min: float, f_max: float) -> np.ndarray:
