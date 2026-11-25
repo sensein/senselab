@@ -297,7 +297,7 @@ def replay_one(
         commit: The code revision to record on the marker.
         force: Replay even when this configuration's and revision's marker is already present.
         no_hint: Replay with no hint where none is given or recorded.
-        allow_profile_change: Accept a profile whose name differs from the run's.
+        allow_profile_change: Accept a profile whose name, version or digest differs from the run's, and record it.
         allow_identity_change: Accept a hint naming another participant or session than the run records.
 
     Returns:
@@ -425,7 +425,7 @@ def process(
         log: Where each row's record is appended as it lands, or None.
         force: Replay runs that already carry this configuration's and revision's marker.
         no_hint: Replay with no hint where none is given or recorded.
-        allow_profile_change: Accept a profile whose name differs from a run's.
+        allow_profile_change: Accept a profile whose name, version or digest differs from a run's, and record it.
         allow_identity_change: Accept a hint naming another participant or session than a run records.
 
     Returns:
@@ -500,7 +500,7 @@ def run_slice(
         commit: The code revision to record on each marker.
         force: Replay runs that already carry this configuration's and revision's marker.
         no_hint: Replay with no hint where none is given or recorded.
-        allow_profile_change: Accept a profile whose name differs from a run's.
+        allow_profile_change: Accept a profile whose name, version or digest differs from a run's, and record it.
         allow_identity_change: Accept a hint naming another participant or session than a run records.
 
     Returns:

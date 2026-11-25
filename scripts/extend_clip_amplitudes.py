@@ -83,7 +83,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=f"Where this task's {SLICES_SUBDIR}/ log goes (default: beside the manifest)",
     )
-    add_config_arguments(parser)
+    add_config_arguments(parser, allow_profile_change=True)
     return parser
 
 
@@ -106,19 +106,22 @@ def measure(store: ProvStore, config: TriageConfig, *, run_dir: Path) -> str:
     return NO_SPAN if measurement_id is None else measurement_id
 
 
-def extend_one(run_root: Path, config: TriageConfig) -> tuple[str, str]:
+def extend_one(run_root: Path, config: TriageConfig, *, allow_profile_change: bool = False) -> tuple[str, str]:
     """Give one finished run the measurement it is missing, or say why it gets none.
 
     Args:
         run_root: The run root.
         config: The triage configuration.
+        allow_profile_change: Accept a profile whose name, version or digest differs from a run's, and record it.
 
     Returns:
         ``(status, detail)`` — ``ok`` and the measurement id, ``skipped`` and why nothing was
         needed, or ``error`` and the reason.
     """
     try:
-        store = read_checked_store(run_root, config)
+        store = read_checked_store(
+            run_root, config, allow_profile_change=allow_profile_change, driver="extend_clip_amplitudes"
+        )
     except (OSError, ValueError) as error:
         return ERROR, describe_exception(error)
     if find_measurement(store, CLIP_AMPLITUDE_MEASUREMENT) is not None:
@@ -135,7 +138,9 @@ def extend_one(run_root: Path, config: TriageConfig) -> tuple[str, str]:
     return OK, outcome.detail
 
 
-def process(rows: Sequence[dict[str, Any]], config: TriageConfig) -> list[dict[str, Any]]:
+def process(
+    rows: Sequence[dict[str, Any]], config: TriageConfig, *, allow_profile_change: bool = False
+) -> list[dict[str, Any]]:
     """Extend every run named by these rows, one at a time.
 
     A recording whose store will not open, whose source recording has moved or whose bytes changed
@@ -144,6 +149,7 @@ def process(rows: Sequence[dict[str, Any]], config: TriageConfig) -> list[dict[s
     Args:
         rows: The manifest rows this task owns.
         config: The triage configuration.
+        allow_profile_change: Accept a profile whose name, version or digest differs from a run's, and record it.
 
     Returns:
         One outcome record per input row, in order.
@@ -155,7 +161,7 @@ def process(rows: Sequence[dict[str, Any]], config: TriageConfig) -> list[dict[s
         except ValueError as error:
             out.append({**row, "status": ERROR, "clip_amplitude": describe_exception(error)})
             continue
-        status, detail = extend_one(run_root, config)
+        status, detail = extend_one(run_root, config, allow_profile_change=allow_profile_change)
         out.append({**row, "status": status, "clip_amplitude": detail})
     return out
 
@@ -167,6 +173,7 @@ def run_slice(
     slice_count: int,
     config: TriageConfig,
     log_dir: Path,
+    allow_profile_change: bool = False,
 ) -> dict[str, Any]:
     """Extend every run in one array task's stride of the manifest.
 
@@ -176,6 +183,7 @@ def run_slice(
         slice_count: How many tasks the array has.
         config: The triage configuration.
         log_dir: Where this task's ``slices/`` log goes.
+        allow_profile_change: Accept a profile whose name, version or digest differs from a run's, and record it.
 
     Returns:
         The task's summary: its counts, its parameters, and where its log went.
@@ -184,7 +192,7 @@ def run_slice(
     mine = take_slice(read_manifest(manifest, required=("stem", "enhanced")), slice_index, slice_count)
     print(f"[slice {slice_index}/{slice_count}] {len(mine)} rows", flush=True)
 
-    log = process(mine, config)
+    log = process(mine, config, allow_profile_change=allow_profile_change)
 
     counts: dict[str, int] = {}
     for record in log:
@@ -233,6 +241,7 @@ def main(argv: list[str] | None = None) -> int:
             slice_count=args.slice_count,
             config=driver_config(args),
             log_dir=args.log_dir if args.log_dir is not None else args.manifest.parent,
+            allow_profile_change=args.allow_profile_change,
         )
     except (OSError, ValueError) as error:
         print(f"ERROR: {error}", file=sys.stderr)

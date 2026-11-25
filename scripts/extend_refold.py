@@ -130,7 +130,7 @@ def refold_one(
         source: The recording the run was over.
         commit: The code revision to record on the marker.
         no_hint: Re-fold with no hint where none is given or recorded.
-        allow_profile_change: Accept a profile whose name differs from the run's.
+        allow_profile_change: Accept a profile whose name, version or digest differs from the run's, and record it.
 
     Returns:
         ``{status, REFOLD}`` -- ``ok`` with the two axes where the fold moved, ``unchanged`` where it
@@ -224,7 +224,7 @@ def process(
         commit: The code revision to record on each marker.
         log: Where each row's record is appended as it lands, or None.
         no_hint: Re-fold with no hint where none is given or recorded.
-        allow_profile_change: Accept a profile whose name differs from a run's.
+        allow_profile_change: Accept a profile whose name, version or digest differs from a run's, and record it.
 
     Returns:
         One outcome record per input row, in order.
@@ -276,7 +276,7 @@ def run_slice(
         hints: The directory holding ``hints.py``, or None to use the hint each run recorded.
         commit: The code revision to record on each marker.
         no_hint: Re-fold with no hint where none is given or recorded.
-        allow_profile_change: Accept a profile whose name differs from a run's.
+        allow_profile_change: Accept a profile whose name, version or digest differs from a run's, and record it.
 
     Returns:
         The task's summary: its counts, its parameters, and where its log went.

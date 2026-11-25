@@ -121,7 +121,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=f"Where this task's {SLICES_SUBDIR}/ log goes (default: beside the manifest)",
     )
-    add_config_arguments(parser)
+    add_config_arguments(parser, allow_profile_change=True)
     parser.add_argument(
         "--force",
         action="store_true",
@@ -215,6 +215,7 @@ def process_batch(
     device: DeviceType | None,
     used_venvs: dict[str, Path],
     force: bool = False,
+    allow_profile_change: bool = False,
 ) -> list[dict[str, Any]]:
     """Extend every run in one batch with one diarization per configured stream.
 
@@ -234,6 +235,7 @@ def process_batch(
         used_venvs: The venv-use record the slice opened, read when each store is written.
         force: Re-derive every stream on stores that already hold one, superseding the stored
             reading when the new one differs.
+        allow_profile_change: Accept a profile whose name, version or digest differs from a run's, and record it.
 
     Returns:
         One outcome record per input row, in order.
@@ -243,7 +245,9 @@ def process_batch(
     for row in rows:
         try:
             run_root = run_root_of(Path(row["enhanced"]))
-            store = read_checked_store(run_root, config)
+            store = read_checked_store(
+                run_root, config, allow_profile_change=allow_profile_change, driver="extend_diarization"
+            )
         except (OSError, ValueError) as error:
             reason = describe_exception(error)
             written.append({**row, "status": ERROR, **{f"{name}_diarization": reason for name in streams}})
@@ -311,6 +315,7 @@ def run_slice(
     config: TriageConfig,
     log_dir: Path,
     force: bool = False,
+    allow_profile_change: bool = False,
 ) -> dict[str, Any]:
     """Diarize every run in one array task's stride of the manifest.
 
@@ -323,6 +328,7 @@ def run_slice(
         config: The triage configuration.
         log_dir: Where this task's ``slices/`` log goes.
         force: Re-derive on stores that already hold a diarization.
+        allow_profile_change: Accept a profile whose name, version or digest differs from a run's, and record it.
 
     Returns:
         The task's summary: its counts, its parameters, and where its log went.
@@ -335,7 +341,16 @@ def run_slice(
     with record_venv_use() as used_venvs:
         for number, batch in enumerate(batches(mine, batch_size), start=1):
             batch_started = time.time()
-            log.extend(process_batch(batch, config, device=device, used_venvs=used_venvs, force=force))
+            log.extend(
+                process_batch(
+                    batch,
+                    config,
+                    device=device,
+                    used_venvs=used_venvs,
+                    force=force,
+                    allow_profile_change=allow_profile_change,
+                )
+            )
             print(
                 f"[slice {slice_index}/{slice_count}] batch {number}: {len(batch)} recordings in "
                 f"{time.time() - batch_started:.0f}s",
@@ -403,6 +418,7 @@ def main(argv: list[str] | None = None) -> int:
             config=driver_config(args),
             log_dir=args.log_dir if args.log_dir is not None else args.manifest.parent,
             force=args.force,
+            allow_profile_change=args.allow_profile_change,
         )
     except (OSError, ValueError) as error:
         print(f"ERROR: {error}", file=sys.stderr)

@@ -183,6 +183,13 @@ REPLAY_MARKER_STEP = "decisions_replayed"
 REFOLD_MARKER_STEP = "verdict_refolded"
 """The step of the marker activity a re-fold writes last, carrying its config hash and commit."""
 
+EXTEND_NODE = "EXTEND"
+"""The node name of the record an extend driver adds when it writes into a run under another profile."""
+
+PROFILE_CHANGE_STEP = "profile_change_allowed"
+"""The step of that record: which driver wrote under which profile, and the profile the run's decisions were taken
+under. It does not move :func:`decided_under`: an extend pass adds measurements and decides nothing."""
+
 DECISION_SUPERSEDED = "decision_superseded"
 """The step of the activity retiring one decision a replay is about to make again."""
 
@@ -310,7 +317,7 @@ def add_config_arguments(parser: argparse.ArgumentParser, *, allow_profile_chang
 
     Args:
         parser: The driver's parser.
-        allow_profile_change: Also add ``--allow-profile-change`` (the replay and re-fold drivers).
+        allow_profile_change: Also add ``--allow-profile-change`` (every driver that reads a finished run's store).
     """
     parser.add_argument("--config", type=Path, default=None, help="Partial YAML deep-merged over the packaged config")
     parser.add_argument(
@@ -322,7 +329,7 @@ def add_config_arguments(parser: argparse.ArgumentParser, *, allow_profile_chang
         parser.add_argument(
             "--allow-profile-change",
             action="store_true",
-            help="Accept a profile whose name differs from the one a run was made with",
+            help="Accept a profile whose name, version or digest differs from a run's, and record the change",
         )
 
 
@@ -1234,6 +1241,28 @@ class StaleManifestRow(ReplayRefused):
     """A manifest row whose identity is not the one its run records; the whole group it joined is refused."""
 
 
+class ProfileChangeRefused(ReplayRefused):
+    """A pass whose profile is not the one the run's decisions were taken under, without ``--allow-profile-change``.
+
+    Attributes:
+        change: ``{"recorded": ..., "now": ...}``, each the profile's name, version and digest (``now`` None where the
+            pass has no profile).
+        fields: Which of ``name``, ``version`` and ``digest`` differ.
+    """
+
+    def __init__(self, message: str, change: dict[str, Any], fields: list[str]) -> None:
+        """Build the refusal.
+
+        Args:
+            message: Why the pass is refused.
+            change: The recorded profile and the current one.
+            fields: Which of them differ.
+        """
+        super().__init__(message)
+        self.change = change
+        self.fields = fields
+
+
 @dataclass(frozen=True)
 class ReplayInputs:
     """What a replay or re-fold checked against the run's record, and the hint it runs with.
@@ -1298,6 +1327,22 @@ def _same_profile(recorded: Mapping[str, Any] | None, profile: DatasetProfile | 
     ) and recorded_digest_matches(recorded.get("digest"), profile)
 
 
+def _changed_profile_fields(recorded: Mapping[str, Any], profile: DatasetProfile | None) -> list[str]:
+    """Which of a recorded profile's name, version and digest the current profile does not match."""
+    if profile is None:
+        return ["name", "version", "digest"]
+    changed = [key for key in ("name", "version") if recorded.get(key) != getattr(profile, key)]
+    if not recorded_digest_matches(recorded.get("digest"), profile):
+        changed.append("digest")
+    return changed
+
+
+def _describe_profile(fields: Mapping[str, Any] | None) -> str:
+    if fields is None:
+        return "no profile"
+    return f"{fields.get('name')!r} version {fields.get('version')!r} (digest {fields.get('digest')})"
+
+
 def _check_recording_and_profile(
     store: ProvStore,
     attributes: Mapping[str, Any],
@@ -1308,7 +1353,7 @@ def _check_recording_and_profile(
     source: Path | None,
     hash_always: bool = False,
 ) -> tuple[str, dict[str, Any] | None]:
-    """Checks 2 and 3 of :func:`check_replay_inputs`: the recording's digest and the profile's name.
+    """Checks 2 and 3 of :func:`check_replay_inputs`: the recording's digest and the profile.
 
     The profile compared is the one the store's live decisions were last taken under (:func:`decided_under`): the
     run's, or the latest replay or re-fold marker's.
@@ -1318,7 +1363,8 @@ def _check_recording_and_profile(
         attributes: What ADMIT recorded.
         log: The run's ``run.json``.
         config: The configuration now in use; None checks the recording alone.
-        allow_profile_change: Accept a profile whose name differs from the run's.
+        allow_profile_change: Accept a profile whose name, version or digest differs from the run's; the change is
+            returned for the caller to record.
         source: The recording to re-hash; None reads the one ``run.json`` names.
         hash_always: Re-hash the recording even where its size and modification time match ADMIT's record.
 
@@ -1329,8 +1375,12 @@ def _check_recording_and_profile(
     size and modification time match ADMIT's record is not re-hashed and is :data:`AUDIO_STAT_MATCHED`; any other is
     hashed.
 
+    A profile is the same when its name and version match and its digest matches the recorded one
+    (:func:`_same_profile`). A run that records no profile is compared with nothing.
+
     Raises:
-        ReplayRefused: On a differing recording, or a profile name that differs without ``allow_profile_change``.
+        ReplayRefused: On a differing recording.
+        ProfileChangeRefused: On a profile whose name, version or digest differs, without ``allow_profile_change``.
     """
     recorded_digest = attributes.get(CHECKSUM_KEY)
     audio = AUDIO_UNRECORDED
@@ -1358,17 +1408,18 @@ def _check_recording_and_profile(
         return audio, None
     recorded_profile = decided_under(store, log)[0]
     current_profile = _profile_fields(config.profile)
-    profile = None
-    if recorded_profile is not None:
-        name_differs = current_profile is None or current_profile["name"] != recorded_profile["name"]
-        if name_differs and not allow_profile_change:
-            raise ReplayRefused(
-                f"this run was made with profile {recorded_profile['name']!r} and this pass has "
-                f"{None if current_profile is None else current_profile['name']!r}; pass --profile, or "
-                "--allow-profile-change where the driver takes it"
-            )
-        if not _same_profile(recorded_profile, config.profile):
-            profile = {"recorded": recorded_profile, "now": current_profile}
+    if recorded_profile is None or _same_profile(recorded_profile, config.profile):
+        return audio, None
+    profile = {"recorded": recorded_profile, "now": current_profile}
+    if not allow_profile_change:
+        fields = _changed_profile_fields(recorded_profile, config.profile)
+        raise ProfileChangeRefused(
+            f"this run's decisions were taken under profile {_describe_profile(recorded_profile)} and this pass has "
+            f"{_describe_profile(current_profile)} ({', '.join(fields)} differ); pass the run's profile with "
+            "--profile, or --allow-profile-change to go ahead and record the change",
+            profile,
+            fields,
+        )
     return audio, profile
 
 
@@ -1388,7 +1439,7 @@ def check_run_inputs(
         run_root: The finished run root, read for ``run.json``.
         config: The configuration now in use; None checks the recording alone.
         source: The recording to re-hash; None reads the one ``run.json`` names.
-        allow_profile_change: Accept a profile whose name differs from the run's.
+        allow_profile_change: Accept a profile whose name, version or digest differs from the run's.
         hash_always: Re-hash even where size and modification time match (:func:`_check_recording_and_profile`).
 
     Returns:
@@ -1415,15 +1466,20 @@ def read_checked_store(
     *,
     run_id: str | None = None,
     allow_profile_change: bool = False,
+    driver: str | None = None,
     row: Mapping[str, Any] | None = None,
 ) -> ProvStore:
     """:func:`read_store`, refusing a run whose recording or profile differs from the record.
+
+    Where ``allow_profile_change`` lets a differing profile through, the store gains the
+    :func:`record_profile_change` record, so whatever the driver writes next is named as written under it.
 
     Args:
         run_root: The run root.
         config: The configuration now in use; None checks the recording alone.
         run_id: As :func:`read_store`.
-        allow_profile_change: Accept a profile whose name differs from the run's.
+        allow_profile_change: Accept a profile whose name, version or digest differs from the run's.
+        driver: The driver reading the store, named in that record.
         row: The manifest row the run was grouped by; refused where its identity is not the one the run records.
 
     Returns:
@@ -1436,7 +1492,7 @@ def read_checked_store(
         ManifestWithoutIdentity: If ``row`` carries no identity columns.
     """
     store = read_store(run_root, run_id=run_id)
-    check_run_inputs(store, run_root, config, allow_profile_change=allow_profile_change)
+    change = check_run_inputs(store, run_root, config, allow_profile_change=allow_profile_change)[1]
     require_recorded_identity(store, run_root)
     if row is not None:
         named, recorded = row_identity(row), recorded_identity(store)
@@ -1451,7 +1507,32 @@ def read_checked_store(
                 f"the manifest row for {row.get('stem')!r} disagrees with the run's record on {', '.join(disagree)}: "
                 "rebuild the corpus table and the manifest"
             )
+    record_profile_change(store, change, driver=driver)
     return store
+
+
+def record_profile_change(store: ProvStore, change: Mapping[str, Any] | None, *, driver: str | None) -> str | None:
+    """Record that a driver writes into a run under a profile its decisions were not taken under.
+
+    The record (node :data:`EXTEND_NODE`, step :data:`PROFILE_CHANGE_STEP`) carries the driver, the change and the
+    profile now in use under :data:`PROFILE_KEY`. A pass that repeats it keeps one record, its ``ended`` moved.
+
+    Args:
+        store: The run's store, about to be written.
+        change: What :func:`check_run_inputs` returned as the profile change; None records nothing.
+        driver: The driver that is writing.
+
+    Returns:
+        The record's activity id, or None where there was no change.
+    """
+    if change is None:
+        return None
+    return store.activity(
+        node=EXTEND_NODE,
+        step=PROFILE_CHANGE_STEP,
+        parameters={"driver": driver, "profile_change": dict(change), PROFILE_KEY: change.get("now")},
+        ended=_marker_end(),
+    )
 
 
 def decided_under(store: ProvStore, log: Mapping[str, Any]) -> tuple[dict[str, Any] | None, frozenset[str] | None]:
@@ -1529,18 +1610,12 @@ the digest is taken now; None where it ran with no profile. A marker written bef
 ``profile_change``."""
 
 
-def _refold_refusal(
-    store: ProvStore, log: Mapping[str, Any], config: TriageConfig, *, allow_profile_change: bool
-) -> str | None:
-    """Why a re-fold would fold decisions taken under another profile or stage set, or None where it would not."""
-    profile, off = decided_under(store, log)
-    current = _profile_fields(config.profile)
-    if profile is not None and not _same_profile(profile, config.profile) and not allow_profile_change:
-        return (
-            f"this run's decisions were taken under profile {profile} and this pass has {current}; VERDICT would "
-            "score the old reports against another task list: replay the run instead, or pass --allow-profile-change "
-            "where the driver takes it"
-        )
+def _refold_refusal(store: ProvStore, log: Mapping[str, Any], config: TriageConfig) -> str | None:
+    """Why a re-fold would fold decisions taken with another stage set, or None where it would not.
+
+    A profile change is refused before this, for every pass, by :func:`_check_recording_and_profile`.
+    """
+    off = decided_under(store, log)[1]
     now = frozenset(off_notes(config.values))
     if off is not None and off != now:
         return (
@@ -1565,9 +1640,9 @@ def check_replay_inputs(
 ) -> ReplayInputs:
     """Check a finished run's recorded inputs before a replay or re-fold, and settle the hint it runs with.
 
-    Refused: a recording whose bytes differ from the digest ADMIT recorded; a profile whose name differs
-    from the one the run's decisions were last taken under (:func:`decided_under`), or none where that had one,
-    unless ``allow_profile_change``; no hint given where the
+    Refused: a recording whose bytes differ from the digest ADMIT recorded; a profile whose name, version or digest
+    differs from the one the run's decisions were last taken under (:func:`decided_under`), or none where that had
+    one (:class:`ProfileChangeRefused`), unless ``allow_profile_change``; no hint given where the
     store records none, unless ``no_hint``; a store that records no task (written before ADMIT recorded one),
     unless a hint is given or ``no_hint``, since its recorded hint names no task and every branch would take its
     out-of-family mode; a recorded hint that carried a ``target_speaker`` (only its digest is stored), unless a
@@ -1576,9 +1651,9 @@ def check_replay_inputs(
     or session than the run records (:class:`IdentityChangeRefused`), unless ``allow_identity_change`` (a run that
     records no identity yet, a field the run records empty or the hint does not declare, and a changed task, are not
     refused). A re-fold (``allow_hint_change`` False) is refused too where the store records no hint to compare its
-    hint with (replay the run first), and where the run's decisions were taken under another profile (unless
-    ``allow_profile_change``) or another set of stages off (:func:`decided_under`), since VERDICT would re-score the
-    old reports. Anything else is accepted and recorded on :class:`ReplayInputs`.
+    hint with (replay the run first), and where the run's decisions were taken with another set of stages off
+    (:func:`decided_under`), since VERDICT would re-score the old reports. Anything else is accepted and recorded on
+    :class:`ReplayInputs`.
 
     Args:
         store: The run's store.
@@ -1587,7 +1662,8 @@ def check_replay_inputs(
         hint: The hint the caller built, when ``hint_given``.
         hint_given: Whether the caller built a hint (``--hints``).
         no_hint: Whether the caller asked to run with no hint (``--no-hint``).
-        allow_profile_change: Accept a profile whose name differs from the run's.
+        allow_profile_change: Accept a profile whose name, version or digest differs from the run's; the change is
+            recorded on :class:`ReplayInputs` and in the replay or re-fold marker.
         allow_hint_change: Accept a hint that differs from the recorded one; False for a re-fold.
         allow_identity_change: Accept a replay hint that names another participant or session than the run records.
         source: The recording to re-hash; None reads the one ``run.json`` names.
@@ -1599,6 +1675,7 @@ def check_replay_inputs(
 
     Raises:
         IdentityChangeRefused: For a participant or session change without ``allow_identity_change``.
+        ProfileChangeRefused: For a profile change without ``allow_profile_change``.
         ReplayRefused: For each other refusal above.
     """
     record = admit_record(store)
@@ -1614,7 +1691,7 @@ def check_replay_inputs(
         hash_always=allow_hint_change,
     )
     if not allow_hint_change:
-        refusal = _refold_refusal(store, log, config, allow_profile_change=allow_profile_change)
+        refusal = _refold_refusal(store, log, config)
         if refusal is not None:
             raise ReplayRefused(refusal)
 

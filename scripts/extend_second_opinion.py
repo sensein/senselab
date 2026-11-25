@@ -100,7 +100,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--slice-index", type=int, required=True, help="This task's index, 0-based")
     parser.add_argument("--slice-count", type=int, required=True, help="How many tasks the array has")
     parser.add_argument("--log-dir", type=Path, default=None, help=f"Where {SLICES_SUBDIR}/ goes (default: beside it)")
-    add_config_arguments(parser)
+    add_config_arguments(parser, allow_profile_change=True)
     parser.add_argument("--ollama-binary", type=Path, default=None, help="The ollama executable")
     parser.add_argument("--ollama-models", type=Path, default=None, help="The Ollama model store (OLLAMA_MODELS)")
     parser.add_argument(
@@ -295,6 +295,7 @@ def extend_one(
     source: Path | None,
     num_parallel: int = 1,
     recorded_hint_default: bool = False,
+    allow_profile_change: bool = False,
 ) -> dict[str, str]:
     """Ask about one finished run and write the opinion into its store.
 
@@ -308,6 +309,7 @@ def extend_one(
         num_parallel: How many requests the server answers at once, recorded on the opinion.
         recorded_hint_default: Ask with the hint the run recorded where ``build_hint`` is None, refusing a
             store that records none (the command line without ``--hints``).
+        allow_profile_change: Accept a profile whose name, version or digest differs from a run's, and record it.
 
     Returns:
         ``{status, SECOND_OPINION}`` -- ``ok`` when an opinion landed, ``present`` when one already
@@ -316,7 +318,9 @@ def extend_one(
         written its annotation, or the model was asked and did not answer. An unanswered ask is not written.
     """
     try:
-        store = read_checked_store(run_root, config)
+        store = read_checked_store(
+            run_root, config, allow_profile_change=allow_profile_change, driver="extend_second_opinion"
+        )
     except (OSError, ValueError) as error:
         return {"status": ERROR, NODE: describe_exception(error)}
     held = standing(store, config)
@@ -373,6 +377,7 @@ def process(
     workers: int = 1,
     log: SliceLog | None = None,
     recorded_hint_default: bool = False,
+    allow_profile_change: bool = False,
 ) -> list[dict[str, Any]]:
     """Ask about every run named by these rows, ``workers`` at a time.
 
@@ -385,6 +390,7 @@ def process(
         workers: How many rows are asked at once, which is also the server's parallelism.
         log: Where each row's record is appended as it lands, or None.
         recorded_hint_default: As :func:`extend_one`.
+        allow_profile_change: Accept a profile whose name, version or digest differs from a run's, and record it.
 
     Returns:
         One outcome record per input row, in order.
@@ -412,6 +418,7 @@ def process(
                 source=source,
                 num_parallel=workers,
                 recorded_hint_default=recorded_hint_default,
+                allow_profile_change=allow_profile_change,
             ),
         }
 
@@ -430,6 +437,7 @@ def run_slice(
     hints: Path | None = None,
     workers: int = 1,
     recorded_hint_default: bool = False,
+    allow_profile_change: bool = False,
 ) -> dict[str, Any]:
     """Ask about every run in one array task's stride of the manifest.
 
@@ -444,6 +452,7 @@ def run_slice(
         hints: The directory holding ``hints.py``, or None to ask without the declaration's task context.
         workers: How many rows are asked at once; the asker must answer as many in parallel.
         recorded_hint_default: As :func:`extend_one`.
+        allow_profile_change: Accept a profile whose name, version or digest differs from a run's, and record it.
 
     Returns:
         The task's summary: its counts, its parameters, and where its log went.
@@ -470,6 +479,7 @@ def run_slice(
             workers=workers,
             log=rows_log,
             recorded_hint_default=recorded_hint_default,
+            allow_profile_change=allow_profile_change,
         )
     finally:
         rows_log.close()
@@ -567,6 +577,7 @@ def main(argv: list[str] | None = None) -> int:
             hints=args.hints,
             workers=workers,
             recorded_hint_default=args.hints is None,
+            allow_profile_change=args.allow_profile_change,
         )
     except SliceAbortedError as error:
         print(f"ABORTED: {error}", file=sys.stderr)
