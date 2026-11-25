@@ -13,16 +13,16 @@ is not already done:
    the disagreements. Effectively free.
 
 **Check step 1 first.** The brief names existing runs at
-`/orcd/scratch/bcs/002/satra/routing_scratch/{full_out,final_out,deriv_out}/`. Each of those is an
+`${ORCD_GROUP_SCRATCH}/routing_scratch/{full_out,final_out,deriv_out}/`. Each of those is an
 `out_dir` of `analyze_routing_evidence.py`, so each should already hold a `features/` shard
 directory beside its `sweeps_by_family.json`:
 
 ```bash
-ls -la /orcd/scratch/bcs/002/satra/routing_scratch/full_out/features/ | head
+ls -la ${ORCD_GROUP_SCRATCH}/routing_scratch/full_out/features/ | head
 uv run python -c "
 from pathlib import Path
 from senselab.audio.workflows.triage.routing_analysis.report import shard_files, load_feature_column
-d = Path('/orcd/scratch/bcs/002/satra/routing_scratch/full_out/features')
+d = Path('${ORCD_GROUP_SCRATCH}/routing_scratch/full_out/features')
 print(len(shard_files(d)), 'shards')
 print(sum(len(load_feature_column(s, 'stem')) for s in shard_files(d)), 'recordings')
 "
@@ -72,22 +72,22 @@ would have several workers racing to write `part-00000.parquet`.
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=32G
 #SBATCH --time=04:00:00
-#SBATCH --output=/orcd/scratch/bcs/002/satra/gate_matrix/logs/%x-%j.out
-#SBATCH --error=/orcd/scratch/bcs/002/satra/gate_matrix/logs/%x-%j.err
+#SBATCH --output=${ORCD_GROUP_SCRATCH}/gate_matrix/logs/%x-%j.out
+#SBATCH --error=${ORCD_GROUP_SCRATCH}/gate_matrix/logs/%x-%j.err
 set -euo pipefail
 
-REPO=/orcd/scratch/bcs/002/satra/senselab
-OUT=/orcd/scratch/bcs/002/satra/gate_matrix
-RUNS=/orcd/scratch/bcs/002/satra/triage_full_20260908/out
+REPO=${ORCD_GROUP_SCRATCH}/senselab
+OUT=${ORCD_GROUP_SCRATCH}/gate_matrix
+RUNS=${ORCD_GROUP_SCRATCH}/triage_full_20260908/out
 
 # A Slurm job does not inherit the login shell, and torchcodec dlopen()s FFmpeg by soname at
 # IMPORT time -- verified: `gate_family_matrix.py --help` already has torchcodec loaded. Without
 # this the job dies on `import`, not on reading audio, and the message names a .so rather than
 # ffmpeg. This is the single most likely reason for the job to fail.
-export LD_LIBRARY_PATH="/orcd/scratch/bcs/002/satra/miniforge/lib:${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="${ORCD_GROUP_SCRATCH}/miniforge/lib:${LD_LIBRARY_PATH:-}"
 export PATH="$HOME/.local/bin:$PATH"          # uv
 export UV_PROJECT_ENVIRONMENT="$REPO/.venv"
-export HF_HOME=/orcd/scratch/bcs/002/satra/hf   # nothing is downloaded; keeps any cache off $HOME
+export HF_HOME=${ORCD_GROUP_SCRATCH}/hf   # nothing is downloaded; keeps any cache off $HOME
 export MPLBACKEND=Agg                           # the heatmap is written headless
 export OMP_NUM_THREADS=1                         # 16 reader processes, not 16x16 BLAS threads
 

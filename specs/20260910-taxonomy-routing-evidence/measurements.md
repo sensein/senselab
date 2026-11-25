@@ -8,7 +8,7 @@ stored evidence.
 ## The corpus and how it was resolved
 
 A completed triage run of the b2ai adult tree at
-`/orcd/scratch/bcs/002/satra/triage_full_20260908/out/` (config hash `05a76991f1a7fcff`). Each
+`${ORCD_GROUP_SCRATCH}/triage_full_20260908/out/` (config hash `05a76991f1a7fcff`). Each
 recording was resolved through its own `<stem>.summary.json`'s `run_root`, remapped onto the local
 directory by basename; run directories were never globbed, because preemption left partial
 duplicates a glob would pick up and no summary names.
@@ -411,17 +411,17 @@ The run reported here, on ORCD (one node, 32 workers, ~3 minutes wall):
 
 ```bash
 export LD_LIBRARY_PATH="$(readlink -f ~/orcd/scratch)/miniforge/lib:${LD_LIBRARY_PATH:-}"
-/orcd/scratch/bcs/002/satra/senselab-bench/.venv/bin/python \
+${ORCD_GROUP_SCRATCH}/senselab-bench/.venv/bin/python \
   scripts/analyze_routing_evidence.py \
-  /orcd/scratch/bcs/002/satra/triage_full_20260908/out \
-  /orcd/scratch/bcs/002/satra/routing_scratch/final_out \
+  ${ORCD_GROUP_SCRATCH}/triage_full_20260908/out \
+  ${ORCD_GROUP_SCRATCH}/routing_scratch/final_out \
   --workers 32 --expect 62550
 ```
 
 `prevalence.json`, `sweeps.json` and `index.json` from that run are beside this file. The full set —
 `sweeps_by_family.json` (2.0 MB), `label_prevalence.json` (0.5 MB), `disagreements.json` (9.9 MB,
 every case with its transcript and evidence), `summary.md` and the 573 MB `features/features.jsonl`
-— stays at `/orcd/scratch/bcs/002/satra/routing_scratch/final_out/`.
+— stays at `${ORCD_GROUP_SCRATCH}/routing_scratch/final_out/`.
 
 ## Moved from `routing_analysis/report.py` (2026-09-20)
 

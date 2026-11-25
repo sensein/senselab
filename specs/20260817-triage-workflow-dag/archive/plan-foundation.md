@@ -1577,7 +1577,7 @@ Run: `uv run python specs/20260817-triage-workflow-dag/benchmarks/scripts/localg
 producer, applying the same rules (`K` = 18 dB, onset `peak − 15 dB`, offset fraction 0.7, 120 ms
 hangover, 50 ms minimum, 150 ms separation). `floor.py` beside it is a floor comparison, not the
 span producer. Caveat before running: `s2b.py` reads its stage-1 envelope from job scratch on the
-machine that produced the benchmark (`/Users/satra/.claude/jobs/295c3f8a/tmp/stage1.npz`); on any
+machine that produced the benchmark (`${AGENT_SCRATCH}/stage1.npz`); on any
 other host it cannot run and this step is a recorded expectation, not a check.
 Expected: **six** spans at `K = 18 dB` on the clean file on the clean reference recording — the `K` = 18 dB row of
 `benchmarks/spans.md`'s "Propose threshold `K`" table. That file records the count, not the
