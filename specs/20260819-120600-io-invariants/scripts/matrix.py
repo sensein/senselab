@@ -16,7 +16,7 @@ import numpy as np
 import soundfile as sf
 import torch
 
-TMP = os.environ.get("IOAUDIT_TMP", "/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work")
+TMP = os.environ.get("IOAUDIT_TMP", "${AGENT_SCRATCH}/io-audit/work")
 os.makedirs(TMP, exist_ok=True)
 
 SR = 22050

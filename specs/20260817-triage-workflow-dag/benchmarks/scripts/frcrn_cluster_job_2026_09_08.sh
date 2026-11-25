@@ -4,17 +4,17 @@
 # job -- no computation on the login node.
 set -euo pipefail
 
-REPO=/orcd/scratch/bcs/002/satra/frcrn-torch-arch-20260908
+REPO=${ORCD_GROUP_SCRATCH}/frcrn-torch-arch-20260908
 INPUTS_DIR="$REPO/inputs"
-OUT_ROOT=/orcd/scratch/bcs/002/satra/frcrn-torch-arch-20260908/results
+OUT_ROOT=${ORCD_GROUP_SCRATCH}/frcrn-torch-arch-20260908/results
 mkdir -p "$OUT_ROOT"
 
-GS=/orcd/scratch/bcs/002/satra
+GS=${ORCD_GROUP_SCRATCH}
 export PATH="$HOME/ffmpeg/bin:$HOME/.local/bin:$PATH"
 export LD_LIBRARY_PATH="$HOME/ffmpeg/lib:${LD_LIBRARY_PATH:-}"
 export UV_CACHE_DIR="$GS/uv-cache"
 export SENSELAB_VENV_CACHE="$GS/senselab-venvs"
-export HF_HOME=/orcd/data/satra/002/huggingface
+export HF_HOME=${ORCD_DATA}/huggingface
 export HF_HUB_CACHE="$HF_HOME/hub"
 export HF_HUB_ENABLE_HF_TRANSFER=0
 export TOKENIZERS_PARALLELISM=false

@@ -5,7 +5,7 @@
 # and the publish BUILD only (rvec -> merge -> check, table) into $R36/recording_vectors. Every sliced stage runs
 # as a slice_pool (pool/slice_pool.py) under $R36/pools/<lane>. Publishing is PUBLISH_R36.sh, run by hand.
 # The commit below is a placeholder until SUBMIT_R36.sh writes the pinned SHA into it.
-S=/orcd/scratch/bcs/002/satra
+S=${ORCD_GROUP_SCRATCH}
 W=$S/r18d_20261010
 R34=$W/r34
 R35=$W/r35
@@ -21,8 +21,8 @@ RV=$R36/recording_vectors
 POOLS=$R36/pools
 POOL_TOOL=$W/pool/slice_pool.py
 GPU_EXCLUDE=node2119,node2621,node3002,node1702,node3804
-CPU_PARTS=pi_satra,ou_bcs_low,mit_preemptable
-GPU_PARTS=pi_satra,ou_bcs_low,ou_bcs_normal
+CPU_PARTS=${CPU_PARTITION},ou_bcs_low,mit_preemptable
+GPU_PARTS=${CPU_PARTITION},ou_bcs_low,ou_bcs_normal
 SPECS_REVIEW=$S/senselab-r36/specs/20261010-vllm-reviewer
 # Workers per pool (slices in brackets). The chain holds at most one pool's workers plus one link in the queue.
 W_REPLAY=${W_REPLAY:-16}        # [32]
