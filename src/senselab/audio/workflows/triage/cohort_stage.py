@@ -1283,7 +1283,8 @@ def consistency_check(enrollments: ParticipantEnrollments, session: str, *, boun
 
     Returns:
         The check's block: not applicable under two enrolled sessions, unavailable where the session
-        did not enroll, else the cosine and its outcome.
+        did not enroll, unavailable with the cosine where the bound is unset (a pilot run), else the cosine and
+        its outcome.
     """
     enrolled = enrollments.enrolled_sessions
     count = {"enrolled_sessions_n": len(enrolled)}
@@ -1296,9 +1297,10 @@ def consistency_check(enrollments: ParticipantEnrollments, session: str, *, boun
         return {"status": UNAVAILABLE, "reason": SESSION_NOT_ENROLLED, **count}
     if other is None or other.vector is None:
         return {"status": UNAVAILABLE, "reason": OTHER_SESSIONS_NOT_ENROLLED, **count}
-    if bound is None:
-        return {"status": UNAVAILABLE, "reason": CONSISTENCY_UNSET, **count}
     cosine = float(own.vector @ other.vector)
+    if bound is None:
+        # A pilot run has no bound yet (plan step 10): the cosine is recorded for scripts/fit_profile.py to fit one.
+        return {"status": UNAVAILABLE, "reason": CONSISTENCY_UNSET, **count, "cosine": round(cosine, 4)}
     return {
         "status": MEASURED,
         "ground": KEY_SESSION_SPEAKER_INCONSISTENT,

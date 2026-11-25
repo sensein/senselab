@@ -3,6 +3,7 @@
 version: 3
 count_in:                        # A3: a voice task's declared count-in is inside its extent
   gap_max_s: 3.0                 # the count-in ends at most this before the phonation onset: r36 p99 2.9 s (n=1232); an overlap is taken in. Round 3: 9 of 9 ok
+                                 # deliberate difference from fit (plan.md, step 10)
 completeness:                    # A5: extent_complete
   reviews: false                 # a recording whose extent is not complete goes to review
 atypical:                        # E2: an attempted task whose events fall outside its family's corpus range
