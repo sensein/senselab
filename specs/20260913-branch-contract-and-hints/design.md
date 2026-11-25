@@ -292,7 +292,7 @@ This applies to every fitted value, not only `k_db`.
 ### Where it comes from
 
 Two JSON sidecars per recording, at different grains, read off the corpus at
-`/orcd/data/satra/002/datasets/b2aivoice/4.0-release/adult/bids_adult_2026_09_04/`.
+`${ORCD_DATA}/datasets/b2aivoice/4.0-release/adult/bids_adult_2026_09_04/`.
 
 **`<stem>_recording-metadata.json`** — per recording:
 

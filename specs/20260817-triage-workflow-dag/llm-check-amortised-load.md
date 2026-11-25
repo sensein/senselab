@@ -227,7 +227,7 @@ changed floor is supposed to invalidate the tree.
 
 ## What was measured
 
-Two arms on one H100 80 GB on `pi_satra`, against the redacted transcripts the first run's 12 checked
+Two arms on one H100 80 GB on `${CPU_PARTITION}`, against the redacted transcripts the first run's 12 checked
 recordings produced — the same texts, the same node loop (`redact._llm_check`), the same config, the
 same order. The only difference between the arms is whether the worker is shut down after each
 review:
@@ -248,7 +248,7 @@ back out of each run's own store rather than from a stopwatch outside it.
 
 ### The step, arm against arm
 
-12 recordings, one H100 80 GB, `node2803` on `pi_satra`, `max_iterations: 3`, every recording
+12 recordings, one H100 80 GB, `node2803` on `${CPU_PARTITION}`, `max_iterations: 3`, every recording
 settling in one round.
 
 | | arm A — a load per round | arm B — amortised |
@@ -479,7 +479,7 @@ worker that cannot start and asserts one load attempt, which is the only shape t
 ## Reproducing
 
 ```
-/orcd/scratch/bcs/002/satra/llmamort_20260919/
+${ORCD_GROUP_SCRATCH}/llmamort_20260919/
   env.sh          ffmpeg and uv from the campaign's env_common.sh; the HF home holding gemma-4
   prep.sbatch     uv sync for the pinned checkout
   floor.sbatch    work/floor_probe.py — transformers and compressed-tensors, pinned, config only
@@ -492,7 +492,7 @@ worker that cannot start and asserts one load attempt, which is the only shape t
 Three pinned checkouts, one per measured commit, so nothing ran from a tree another job was using:
 `senselab-llmamort` (the worker), `senselab-llmamort2` (the allocator reporting),
 `senselab-llmamort3` (the residency key). The corpus denominator is a read of
-`decision.ran.REDACT` over `/orcd/scratch/bcs/002/satra/triage_design_20260919/run/rows/`, which
+`decision.ran.REDACT` over `${ORCD_GROUP_SCRATCH}/triage_design_20260919/run/rows/`, which
 belongs to a different run and was not written to.
 
 The `driver*.json` files carry counts and timings only; the run directories under `run/` and

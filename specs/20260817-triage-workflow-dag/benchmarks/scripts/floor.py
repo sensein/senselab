@@ -1,7 +1,7 @@
 import numpy as np
 from scipy.signal import find_peaks
-d=np.load("/Users/satra/.claude/jobs/295c3f8a/tmp/stage1.npz")
-y=np.load("/Users/satra/.claude/jobs/295c3f8a/tmp/yamnet.npz")
+d=np.load("${AGENT_SCRATCH}/stage1.npz")
+y=np.load("${AGENT_SCRATCH}/yamnet.npz")
 Edb=d["Edb"]; fs=int(d["fs"]); dur=float(d["dur"])
 sil=y["sil"]; st=y["start"]
 mask=np.zeros(len(Edb),bool)
@@ -36,4 +36,4 @@ for name,fl in (("10th percentile",f_pct),("YAMNet Silence median",f_yam),("YAMN
     sp=spans(fl)
     print(f"\n  {name} (floor {fl:.1f} dB) -> {len(sp)} spans, {sum(e-s for s,e in sp):.2f} s")
     print("     "+", ".join(f"{s:.2f}-{e:.2f}" for s,e in sp))
-np.save("/Users/satra/.claude/jobs/295c3f8a/tmp/silmask.npy",mask)
+np.save("${AGENT_SCRATCH}/silmask.npy",mask)

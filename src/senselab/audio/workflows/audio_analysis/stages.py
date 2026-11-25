@@ -341,7 +341,7 @@ def stage_asr(
         extra_kwargs: dict[str, Any] = {}
         # Qwen3-ASR ships its own forced-aligner companion model; allow opt-out
         # so the MMS auto-align stage can take over.
-        if model_id.startswith("Qwen/Qwen3-ASR") and not qwen_native_timestamps:
+        if model_id.startswith(("Qwen/Qwen3-ASR", "drivendata/pasketti-word")) and not qwen_native_timestamps:
             extra_kwargs["return_timestamps"] = False
             asr_params["return_timestamps"] = False
         outcome = run_task_cached(

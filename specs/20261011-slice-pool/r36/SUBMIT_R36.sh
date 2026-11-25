@@ -1,6 +1,6 @@
 #!/bin/bash
 # r36: the loudness round, as slice_pool lanes chained by r36_link.sbatch. Run on orcd-login:
-#   bash /orcd/scratch/bcs/002/satra/r18d_20261010/SUBMIT_R36.sh <40-hex sha> [REPLAY_STEMS | none]
+#   bash ${ORCD_GROUP_SCRATCH}/r18d_20261010/SUBMIT_R36.sh <40-hex sha> [REPLAY_STEMS | none]
 # REPLAY_STEMS defaults to r36/replay_stems_loudness.txt (the 1,602 _task-loudness / _task-loudness-v2 runs of
 # manifest_r34); `none` skips the replay and starts at COHORT.
 #   1. clones senselab-r36 from GitHub at <sha> (must be on origin/feat/task-events), r28 venv, PYTHONPATH r36/src
@@ -12,7 +12,7 @@
 # Refuses while any r35-* or r36-* job is queued: two rounds must never write the stores at once.
 # Stopping: CANCEL_R36.sh (links first, then the lanes downstream to upstream).
 set -euo pipefail
-S=/orcd/scratch/bcs/002/satra
+S=${ORCD_GROUP_SCRATCH}
 W=$S/r18d_20261010
 R36=$W/r36
 REPO=$S/senselab-r36

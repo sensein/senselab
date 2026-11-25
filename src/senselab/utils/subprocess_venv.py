@@ -56,6 +56,7 @@ from senselab.utils.venv_lock import VenvLock, load_lock
 logger = logging.getLogger("senselab")
 
 _DEFAULT_CACHE_DIR = Path.home() / ".cache" / "senselab" / "venvs"
+PYTHON_PREFERENCE = "only-managed"
 
 
 # ── File reference with integrity metadata ────────────────────────────
@@ -389,7 +390,9 @@ def _ensure_venv_once(
     CUDA-matched PyTorch index alone, then the lock body with ``--no-deps``. A torch-free lock is
     one ``--no-deps`` install of its body. The venv directory is ``name`` for a torch-free venv and
     ``f"{name}-{tag}"`` (e.g. ``"crisperwhisper-cu128"``) otherwise, ``tag`` being the resolved
-    ``TorchIndex.tag``. The completion marker records the lock's digest, so a changed lock rebuilds.
+    ``TorchIndex.tag``. The interpreter is always uv-managed (``PYTHON_PREFERENCE``), never a host
+    Python. The completion marker records the lock's digest and the interpreter preference, so a
+    changed lock, or a venv built without that preference, rebuilds.
 
     Args:
         name: The venv name.
@@ -399,6 +402,10 @@ def _ensure_venv_once(
 
     Returns:
         Path to the venv directory.
+
+    Raises:
+        RuntimeError: When ``uv venv`` cannot provide a uv-managed interpreter for the lock's Python,
+            e.g. with ``UV_PYTHON_DOWNLOADS=never`` and none installed.
     """
     torch_specs = list(lock.torch_pins)
     host_cuda: Optional[HostCuda] = None
@@ -433,7 +440,11 @@ def _ensure_venv_once(
         if marker.is_file():
             stored = json.loads(marker.read_text())
             stored_index_url = (stored.get("torch_index") or {}).get("url")
-            if stored.get("lock_sha256") == lock.sha256 and stored_index_url == expected_index_url:
+            if (
+                stored.get("lock_sha256") == lock.sha256
+                and stored_index_url == expected_index_url
+                and stored.get("python_preference") == PYTHON_PREFERENCE
+            ):
                 logger.debug("Reusing existing venv: %s", venv_dir)
                 return venv_dir
 
@@ -453,15 +464,18 @@ def _ensure_venv_once(
 
         try:
             subprocess.run(
-                [uv, "venv", "--python", py_ver, str(venv_dir)],
+                [uv, "venv", "--python", py_ver, "--python-preference", PYTHON_PREFERENCE, str(venv_dir)],
                 check=True,
                 capture_output=True,
                 text=True,
             )
         except subprocess.CalledProcessError as exc:
-            logger.error("Failed to create venv '%s': %s", name, exc.stderr)
             shutil.rmtree(venv_dir, ignore_errors=True)
-            raise
+            raise RuntimeError(
+                f"Failed to create venv '{name}' on a uv-managed Python {py_ver} "
+                f"(--python-preference {PYTHON_PREFERENCE}); install one with `uv python install {py_ver}` "
+                f"or allow uv Python downloads. uv said: {(exc.stderr or '').strip()}"
+            ) from exc
 
         if torch_index is not None:
             assert host_cuda is not None  # narrows the Optional for type-checkers
@@ -523,6 +537,7 @@ def _ensure_venv_once(
             "lock": lock.path.name,
             "lock_sha256": lock.sha256,
             "python_version": py_ver,
+            "python_preference": PYTHON_PREFERENCE,
         }
         if torch_index is not None:
             marker_data["torch_index"] = {

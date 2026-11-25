@@ -12,8 +12,8 @@ def env(f, add_transient=False):
     xp=np.empty_like(x); xp[0]=x[0]; xp[1:]=x[1:]-0.97*x[:-1]
     E=np.maximum(filtfilt(bb,aa,np.abs(hilbert(xp))),1e-12)
     return x, 20*np.log10(E/E.max())
-LAB="/Users/satra/Downloads/streaming-audio-2026-07-30T04-21-56-487Z.wav"
-HAP="/Users/satra/Downloads/HAPPY_ASK.wav"
+LAB="${LOCAL_INPUT}/streaming-audio-2026-07-30T04-21-56-487Z.wav"
+HAP="${LOCAL_INPUT}/HAPPY_ASK.wav"
 
 print("1. does the peak vary WITHIN a recording? sliding 1 s window max, relative to the global peak\n")
 for name,f in (("labelled (coughs+speech)",LAB),("HAPPY_ASK (speech only)",HAP)):
