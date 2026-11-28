@@ -29,7 +29,7 @@ from pydra.engine.job import Job
 from pydra.engine.lease import Lease
 from pydra.engine.result import Result
 from pydra.engine.runner import Failed, GraphRunner, NotRun, Round
-from pydra.engine.store import context_key
+from pydra.engine.store import ResultStore, context_key
 from pydra.engine.submitter import Submitter, WorkflowError
 from pydra.utils.resources import ComputeResources
 from pydra.workers.pool.pool import UnplaceableJob
@@ -111,6 +111,9 @@ class RunOutcome:
 class _EpochLease:
     """pydra's lease of a job, held without a lock file: the run's records are its own, in memory."""
 
+    exclusive = True
+    """No other taker exists: the records belong to this run alone."""
+
     def __init__(self, checksum: str, cache_dir: Path, lockfile: Path) -> None:
         """Name the job `checksum` whose directory is `cache_dir` and whose (unwritten) lock is `lockfile`."""
         self.checksum = checksum
@@ -134,7 +137,7 @@ class _EpochLease:
         return None
 
 
-class SenselabStore:
+class SenselabStore(ResultStore):  # type: ignore[misc]  # pydra is untyped
     """pydra's `ResultStore` over one run: completion records in memory by checksum and context slot, never pickled.
 
     It holds what pydra reads to resolve a downstream input and to mark a job done; `lookup` returns a record of its
@@ -173,7 +176,7 @@ class SenselabStore:
         """Return the name pydra's `ResultStore` gives the lock of job `checksum` in `context`; nothing writes it."""
         return self.cache_root / f"{checksum}-{context_key(context)}.lock"
 
-    def acquire(self, checksum: str, context: Mapping[str, Any]) -> Lease:
+    def acquire(self, checksum: str, context: Mapping[str, Any], *, resumable: bool = False) -> Lease:  # noqa: ARG002
         """Return the lease of the job `checksum` in `context`: one that takes no lock (`_EpochLease`)."""
         return _EpochLease(checksum, self.cache_dir(checksum, context), self.lockfile(checksum, context))
 

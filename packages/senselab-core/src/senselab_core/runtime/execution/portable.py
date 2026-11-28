@@ -206,10 +206,15 @@ class SenselabIdentity:
     recorded_only: frozenset[str] = RECORDED_ONLY
     name: str = IDENTITY
     fingerprint_name: ClassVar[str] = "context@5"
+    scheme: ClassVar[int | None] = None
 
     def key(self, job: "PydraJob") -> dict[str, Any]:
         """Return the record the job's checksum digests: `entry_key` of its logical key and its absence triples."""
         return entry_key(doc_of(job.task).key, job.absent)
+
+    def supplied_key(self, checksum: str) -> None:
+        """Return None: a checksum supplied from outside has no logical key, so it cannot be held."""
+        return None
 
     def check_key(self, checksum: str, key: Mapping[str, Any]) -> bool:
         """Whether `key` is a logical key whose digest, plus the absence suffix of its `absent`, is `checksum`."""
