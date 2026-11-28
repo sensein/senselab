@@ -110,6 +110,9 @@ class _Queued:
         """No job submitted yet."""
         self.handles: list[_Pending] = []
 
+    def check_root(self, root: object) -> None:
+        """Every root is reachable."""
+
     def attach(self, attachment: object) -> None:
         """Nothing to keep."""
 
@@ -136,6 +139,9 @@ class _Outage:
         self.down = True
         self.local = warm.substrate_of(RESIDENT)
 
+    def check_root(self, root: Any) -> None:  # noqa: ANN401 - a path
+        self.local.check_root(root)
+
     def attach(self, attachment: object) -> None:
         self.local.attach(attachment)
 
@@ -156,6 +162,9 @@ class _Outage:
 
 class _Refusing:
     """A substrate whose every start is refused, as a rejected `sbatch` is; it lists no worker."""
+
+    def check_root(self, root: object) -> None:
+        """Every root is reachable."""
 
     def attach(self, attachment: object) -> None:
         """Nothing to keep."""

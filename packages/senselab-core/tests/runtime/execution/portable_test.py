@@ -9,7 +9,7 @@ from pool_stack_fixture import relabel_store
 from senselab_core.kernel.identity import LogicalKey
 from senselab_core.runtime.execution import portable, warm
 from senselab_core.runtime.store import key_record
-from senselab_core.testing.pools import POOL_PROFILE
+from senselab_core.testing.pools import POOL_PROFILE, migrate_pickle_cache
 from senselab_worker.canonical import jcs_dumps
 
 KEY = LogicalKey(
@@ -158,3 +158,19 @@ def test_the_store_leases_are_bounded_by_the_profiles_lease_section(tmp_path: Pa
     assert warm.settings(POOL_PROFILE).lease == bounds
     store = portable.open_store(tmp_path / "store", tmp_path / "work", bounds)
     assert store.lease_settings == bounds and store.lease_settings.holder == "anonymous"
+
+
+@pytest.mark.contract
+def test_migrating_a_pickle_cache_skips_every_slot_and_writes_nothing(tmp_path: Path) -> None:
+    """A pydra cache's slots carry no logical key, so each is reported skipped and the store holds no entry."""
+    store = portable.open_store(tmp_path / "store", tmp_path / "work")
+    slots = migrate_pickle_cache(tmp_path / "cache", store)
+    assert slots and {status for _, status in slots} == {"skipped"}
+    assert all(store.stored(checksum) == [] for checksum, _ in slots)
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("key", [None, [], "key", 0], ids=["none", "list", "str", "int"])
+def test_a_key_that_is_not_a_mapping_is_refused(key: object) -> None:
+    """`check_key` answers False for any key that is not a mapping, never raising."""
+    assert portable.SenselabIdentity().check_key("0" * 64, key) is False  # type: ignore[arg-type]

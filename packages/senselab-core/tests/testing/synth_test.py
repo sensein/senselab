@@ -6,7 +6,7 @@ import numpy
 import pytest
 import soundfile
 from senselab_core.kernel.signals import AUDIO_GROUP, Audio, RegularGroup
-from senselab_core.testing.synth import chirp, noise, tone, write_wav
+from senselab_core.testing.synth import TONE_BASE_HZ, TONE_STEP_HZ, chirp, noise, tone, tone_set, write_wav
 
 pytestmark = pytest.mark.logic
 
@@ -25,6 +25,14 @@ def test_tone_frequency_peak() -> None:
     assert numpy.abs(x).max() <= 0.5 + 1e-6
     spectrum = numpy.abs(numpy.fft.rfft(x[0]))
     assert abs(numpy.argmax(spectrum) * sr / x.shape[1] - 440.0) <= sr / x.shape[1]
+
+
+def test_a_tone_set_steps_its_frequencies_and_cycles_its_durations() -> None:
+    """The i-th tone is `tone(TONE_BASE_HZ + i * TONE_STEP_HZ)` at the i-th duration, the durations cycled."""
+    made = tone_set(5, (1.0, 0.5), amplitude=0.1)
+    for i, audio in enumerate(made):
+        expected = tone(TONE_BASE_HZ + i * TONE_STEP_HZ, duration_s=(1.0, 0.5)[i % 2], amplitude=0.1)
+        assert numpy.array_equal(_x(audio), _x(expected))
 
 
 def test_noise_is_seeded() -> None:

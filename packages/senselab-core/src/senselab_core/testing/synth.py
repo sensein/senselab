@@ -1,5 +1,6 @@
 """Deterministic synthetic audio for tests: tones, noise and chirps, written as PCM WAV."""
 
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy
@@ -26,6 +27,20 @@ def tone(
     t = numpy.arange(_frames(duration_s, sampling_rate)) / sampling_rate
     wave = (amplitude * numpy.sin(2 * numpy.pi * freq_hz * t)).astype(numpy.float32)
     return Audio.from_array(numpy.tile(wave, (channels, 1)), sampling_rate)
+
+
+TONE_BASE_HZ = 110.0
+"""The frequency of the first tone of a `tone_set`, in the speech band."""
+TONE_STEP_HZ = 7.0
+"""The frequency step between consecutive tones of a `tone_set`."""
+
+
+def tone_set(count: int, durations_s: Sequence[float], *, amplitude: float) -> list[Audio]:
+    """Return `count` mono tones, the i-th at `TONE_BASE_HZ + i * TONE_STEP_HZ` for `durations_s[i % len]` seconds."""
+    return [
+        tone(TONE_BASE_HZ + i * TONE_STEP_HZ, duration_s=durations_s[i % len(durations_s)], amplitude=amplitude)
+        for i in range(count)
+    ]
 
 
 def noise(*, duration_s: float, sampling_rate: int = 16_000, seed: int = 0) -> Audio:

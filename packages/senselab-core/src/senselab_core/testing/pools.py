@@ -1,11 +1,26 @@
-"""A pool session whose workers run on threads of this process, for tests: `served`, `Served` and `POOL_PROFILE`."""
+"""Pydra pool helpers for tests and benchmarks.
+
+A pool served on threads (`served`, `Served`, `POOL_PROFILE`), pydra's batch probe and memory bound over measured
+values (`probe_size`, `memory_bound`), and a pydra cache migration (`migrate_pickle_cache`).
+"""
 
 import contextlib
+import statistics
 import threading
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
+from pydra.compose import python
+from pydra.engine.portable.migrate import migrate
+from pydra.engine.portable.store import PortableStore
+from pydra.engine.store import PickleStore
+from pydra.engine.submitter import Submitter
+from pydra.utils.resources import ComputeResources
+from pydra.workers.pool.calibration import MemoryFit, TimeRecord
 from pydra.workers.pool.classes import WorkerClass
+from pydra.workers.pool.fit import MeasuredFit, probe_batch
+from pydra.workers.pool.placement import FitRequest
 from pydra.workers.pool.substrate import ExternalSubstrate
 from pydra.workers.pool.worker import Worker
 
@@ -130,3 +145,63 @@ def served(
         session.close()
         pool.close()
         release_process_caches()
+
+
+def probe_size(per_unit_s: Mapping[int, Sequence[float]], bound: int, samples: int, gain: float) -> int:
+    """Return pydra's `probe_batch` size from seconds per unit measured at each batch size (median per size)."""
+    times = [TimeRecord(b, statistics.median(v), len(v)) for b, v in per_unit_s.items() if v]
+    return int(probe_batch(times, bound, samples, gain))
+
+
+@dataclass(frozen=True)
+class _OneFit:
+    """A pydra `Calibration` holding one memory fit."""
+
+    fit: MemoryFit
+
+    def memory(self, key: str, hardware: object, task: str | None = None) -> MemoryFit:  # noqa: ARG002
+        """Return the fit."""
+        return self.fit
+
+    def unfit(self, key: str) -> list[object]:  # noqa: ARG002
+        """Return no unfit record."""
+        return []
+
+    def times(self, key: str, hardware: object, task: str | None = None) -> list[TimeRecord]:  # noqa: ARG002
+        """Return no time record."""
+        return []
+
+
+@dataclass(frozen=True)
+class DeviceFit:
+    """Device memory measured for one residency: resident bytes, and the peak above them as `m0 + m1 × units`."""
+
+    resident: int
+    m0: float
+    m1: float | None
+    n: int
+
+
+def memory_bound(fit: DeviceFit, device_bytes: int, profile: ExecutionProfile, longest: float) -> int:
+    """Return pydra's `MeasuredFit.memory_bound` of `fit` on a one-GPU class of `device_bytes` under `profile`.
+
+    The class's `quantum_jobs` is the profile's `quantum_items` and the headroom its `memory_headroom`; `longest` is
+    the longest job's units.
+    """
+    cls = WorkerClass(
+        name="measured", device="cuda", gpus=1, gpu_mem=device_bytes, quantum_jobs=profile.pool.quantum_items
+    )
+    request = FitRequest(residency=(), resources=ComputeResources(), units=longest, key="measured")
+    rule = MeasuredFit(_OneFit(MemoryFit(fit.resident, fit.m0, fit.m1, fit.n)), headroom=profile.sizing.memory_headroom)
+    return int(rule.memory_bound(request, cls, [longest]))
+
+
+def _double(x: int) -> int:
+    return 2 * x
+
+
+def migrate_pickle_cache(cache: Path, store: PortableStore) -> list[tuple[str, str]]:
+    """Run one task into a pydra `PickleStore` at `cache`, migrate the cache into `store`, return each slot's status."""
+    with Submitter(worker="debug", store=PickleStore(cache), telemetry=False) as submitter:
+        submitter(python.define(_double)(x=3))
+    return [(s.checksum, s.status) for s in migrate(cache, store, trust_source=True).slots]
