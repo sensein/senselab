@@ -30,7 +30,8 @@ task or decision changes state. Newest log entries go first.
   P-39, P-40).
 - **What to build:** `design.md`, `adr/` (ADR-001..010), `execution.md`, `testing.md`, `docs.md`,
   `wire-protocol.md`.
-- **Plans:** `plans/phase-1.md`, `plans/phase-1-hardening.md`, `plans/phase-2.md`.
+- **Plans:** `plans/phase-1.md`, `plans/phase-1-hardening.md`, `plans/phase-2.md`, `plans/phase-3.md`,
+  `plans/phase-4.md` (draft, on `2x/phase-4-spec`).
 - **Migration:** `migration-ledger.md`, a mark per 1.x area (P-39) and the triage classification.
 - The controller's working notes under `.superpowers/` in the code worktree are git-excluded scratch.
   Nothing here cites them; anything a later session needs is in the files above.
@@ -134,6 +135,10 @@ match what was built), plus **fix round 1** (`b76681a9`): a holder is identified
 
 ## Log
 
+- **2026-11-28 (Phase 4 plan drafted):** `plans/phase-4.md` on `2x/phase-4-spec`: 42 tasks (Task 0 lands the pydra
+  repin #662, Task 0b batched calls and `workers_per_device`; Task 1b the task consolidation inventory; pipelines,
+  dataset profiles, the merged loader, `sl.signal`, the ports and their merges). Owner decisions listed at its end;
+  open 1.x work recorded in `migration-ledger.md`.
 - **2026-11-23 (route-B S3):** repinned to pydra `integration/senselab` @`79227e32` (W3/W5b, W10, T4, T1/T2, I9, Windows lease and drain, P9/P7). No key changed; every profile passes `LocalSubstrate`'s new stop bound. W10's batched calls are not declared: no N exists to give pydra's per-class `batch` (R-327). R-319 stays open.
 - **2026-11-22 (route-B S2):** repinned to pydra `integration/senselab` @`f191eb6c` (RFC 0004 identity group;
   `pydra-identity@2` is pydra's default; R10a/R10b, X6/X6b, P-lease, R11). senselab supplies every pydra checksum, so no

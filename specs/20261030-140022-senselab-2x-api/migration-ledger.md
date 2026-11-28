@@ -94,6 +94,22 @@ Unported in Task 9b, at `36aa9615:src/senselab/utils/vllm_server.py`: `ensure_vl
 1.x importers left under `src/` and `scripts/` (`lock_subprocess_venvs.py`, `extend_*.py`) are 1.x and outside the
 2.x checks (D-6).
 
+## Open 1.x work (2026-11-28, at Phase 4 planning)
+
+`origin/alpha` is `c4bb902b`. Open PRs into `alpha` that touch an area Phase 4 ports, and how each is handled; the
+full table, with which of them Phase 4 waits for, is in [`plans/phase-4.md`](plans/phase-4.md) § Open 1.x work.
+Phase 4 Task 1 updates this list at each reconciliation; a merge sets the area's mark above.
+
+| PR | Area | Handling |
+|---|---|---|
+| #607-#642 (stack) | `audio/workflows/triage/`, `scripts/` | measurement tasks, pipelines and the profile shape ported (Phase 4 Tasks 24-28); decision layer stays on 1.x; B2AI modules leave senselab (#639) |
+| #660 | `audio/tasks/preprocessing/`, `utils/` | already carried by `signal.resample` |
+| #649 | `audio/tasks/ssl_embeddings/` | ported into `audio.embeddings` (Phase 4 Task 14) |
+| #641 | `utils/` venv lock (ppgs) | left on 1.x; Phase 5 |
+| #646, #636, #625 | `video/tasks/` | left on 1.x; Phase 5 |
+| #645 | `utils/evaluation/`, `utils/data_structures/events*` | left on 1.x; events superseded by kernel `Events`/`Intervals` |
+| #643, #640, #622, #623 | `.github/`, `CLAUDE.md`, 1.x lock | not ported |
+
 ## Moving a use case
 
 1. Merge `alpha` into the 2.x line, so the source pool carries every 1.x change (P-39). Set the
