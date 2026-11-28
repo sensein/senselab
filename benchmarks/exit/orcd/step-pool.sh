@@ -29,15 +29,12 @@ uv run --no-sync python - "$AUDIO" "$ITEMS" <<'EOF'
 import sys
 from pathlib import Path
 
-import numpy
-import soundfile
+from senselab_core.testing.synth import tone_set, write_wav
 
 root, items = Path(sys.argv[1]), int(sys.argv[2])
 root.mkdir(parents=True, exist_ok=True)
-for i in range(items):
-    seconds = 1.0 + (i % 4)
-    t = numpy.arange(int(16000 * seconds)) / 16000
-    soundfile.write(root / f"r{i:05d}.wav", 0.1 * numpy.sin(2 * numpy.pi * (110 + 7 * i) * t), 16000)
+for i, audio in enumerate(tone_set(items, (1.0, 2.0, 3.0, 4.0), amplitude=0.1)):
+    write_wav(audio, root / f"r{i:05d}.wav")
 EOF
 set +e
 uv run --no-sync python benchmarks/scale/one_load.py --profile "$PROFILE" --audio "$AUDIO" --items "$ITEMS" \
