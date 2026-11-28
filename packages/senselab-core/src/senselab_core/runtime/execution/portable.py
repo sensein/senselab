@@ -213,11 +213,13 @@ class SenselabIdentity:
         return entry_key(doc_of(job.task).key, job.absent)
 
     def supplied_key(self, checksum: str) -> None:
-        """Return None: a checksum supplied from outside has no logical key, so it cannot be held."""
+        """Return None: senselab holds no supplied checksum, and `check_key` refuses a key-less publish."""
         return None
 
     def check_key(self, checksum: str, key: Mapping[str, Any]) -> bool:
         """Whether `key` is a logical key whose digest, plus the absence suffix of its `absent`, is `checksum`."""
+        if not isinstance(key, Mapping):
+            return False
         fields = {k: v for k, v in key.items() if k != ABSENT_KEY}
         try:
             suffix = ""

@@ -158,3 +158,31 @@ def test_the_store_leases_are_bounded_by_the_profiles_lease_section(tmp_path: Pa
     assert warm.settings(POOL_PROFILE).lease == bounds
     store = portable.open_store(tmp_path / "store", tmp_path / "work", bounds)
     assert store.lease_settings == bounds and store.lease_settings.holder == "anonymous"
+
+
+def _double(x: int) -> int:
+    return 2 * x
+
+
+@pytest.mark.contract
+def test_migrating_a_pickle_cache_skips_every_slot_and_writes_nothing(tmp_path: Path) -> None:
+    """A pydra cache's slots carry no logical key, so each is reported skipped and the store holds no entry."""
+    from pydra.compose import python
+    from pydra.engine.portable.migrate import migrate
+    from pydra.engine.store import PickleStore
+    from pydra.engine.submitter import Submitter
+
+    cache = tmp_path / "cache"
+    with Submitter(worker="debug", store=PickleStore(cache), telemetry=False) as submitter:
+        submitter(python.define(_double)(x=3))
+    store = portable.open_store(tmp_path / "store", tmp_path / "work")
+    report = migrate(cache, store, trust_source=True)
+    assert report.slots and {s.status for s in report.slots} == {"skipped"}
+    assert all(store.stored(s.checksum) == [] for s in report.slots)
+
+
+@pytest.mark.logic
+@pytest.mark.parametrize("key", [None, [], "key", 0], ids=["none", "list", "str", "int"])
+def test_a_key_that_is_not_a_mapping_is_refused(key: object) -> None:
+    """`check_key` answers False for any key that is not a mapping, never raising."""
+    assert portable.SenselabIdentity().check_key("0" * 64, key) is False  # type: ignore[arg-type]
