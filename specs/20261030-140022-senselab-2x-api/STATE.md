@@ -134,7 +134,7 @@ match what was built), plus **fix round 1** (`b76681a9`): a holder is identified
 
 ## Log
 
-- **2026-11-28 (route-B S4):** repinned to pydra `integration/senselab-r2` @`2cdd817b` (the restacked RFC chain plus pydra `main`). The store, identity, lease and substrate members are declared, not probed. No key changed. Batched calls (R-327, S4 note) and `workers_per_device` (R-328) are not wired.
+- **2026-11-28 (route-B S4):** repinned to pydra `integration/senselab-r3` @`d8fdeaa5` (the restacked RFC chain plus pydra `main`). The store, identity, lease and substrate members are declared, not probed. No key changed. Batched calls (R-327, S4 note) and `workers_per_device` (R-328) are not wired.
 - **2026-11-23 (route-B S3):** repinned to pydra `integration/senselab` @`79227e32` (W3/W5b, W10, T4, T1/T2, I9, Windows lease and drain, P9/P7). No key changed; every profile passes `LocalSubstrate`'s new stop bound. W10's batched calls are not declared: no N exists to give pydra's per-class `batch` (R-327). R-319 stays open.
 - **2026-11-22 (route-B S2):** repinned to pydra `integration/senselab` @`f191eb6c` (RFC 0004 identity group;
   `pydra-identity@2` is pydra's default; R10a/R10b, X6/X6b, P-lease, R11). senselab supplies every pydra checksum, so no

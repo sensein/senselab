@@ -907,7 +907,7 @@ roots (P9, P7). What changed for senselab:
 - **`legacy=` roots do not replace the @1 header upgrade.** They read pydra's flat `<root>/<checksum>` caches, not a
   `PortableStore` written under another identity.
 
-## Amendment 2026-11-28 (route-B S4): the repin to pydra `integration/senselab-r2` @`2cdd817b`
+## Amendment 2026-11-28 (route-B S4): the repin to pydra `integration/senselab-r3` @`d8fdeaa5`
 
 The new branch is the restacked RFC series (one linear chain) with pydra `main` merged in. What changed for senselab:
 
