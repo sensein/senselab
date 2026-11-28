@@ -912,14 +912,17 @@ roots (P9, P7). What changed for senselab:
 The new branch is the restacked RFC series (one linear chain) with pydra `main` merged in. What changed for senselab:
 
 - **Protocol members are declared, not probed.** `SenselabStore` subclasses pydra's `ResultStore` and inherits its
-  optional members' defaults, which serve nothing (`finds` False, no `read_succeeded`), and its `acquire` takes
-  `resumable`. `SenselabIdentity` declares `scheme` None (its checksums are not `pydra-identity` digests) and
-  `supplied_key` None (a checksum from outside has no logical key). `_EpochLease` declares `exclusive`: the run's
-  records belong to it alone. `PoolSession` calls the substrate's declared `check_root` instead of probing for it.
+  optional members' defaults, none of which serves anything but `lookup`'s own-slot record (`finds` is False and
+  the inherited `read_succeeded` returns None), and its `acquire` takes `resumable`. `SenselabIdentity` declares
+  `scheme` None (its checksums are not `pydra-identity` digests) and `supplied_key` None (it holds no supplied
+  checksum); its `check_key` refuses a key that is not a mapping, so `pydracli store migrate` into a senselab store
+  reports each slot skipped and writes nothing. `_EpochLease` declares `exclusive` True, so a lookup is made again
+  under it. `PoolSession` calls the substrate's declared `check_root` instead of probing for it.
 - **No key changed.** senselab supplies every pydra checksum. So pydra's `class@1` values, the `batched` code digest
   and `fill` absence suffixes do not reach a senselab key, and the digest contract tests pass unchanged. senselab
   produces no `Absent`, so pydra's default `propagate` mode and `AbsentNotAccepted` do not apply.
 - **`max_concurrent` is unused.** senselab bounds pool work by its profile's worker classes, not the submitter cap.
-- **Batched calls and `workers_per_device` are not wired** (R-327, R-328). `WarmPool` already sizes with
-  `MeasuredFit`, which probes a batch call by call when a task declares `batched` without `batch`. That removes R-327's
-  "no source for N", but `WorkerCall` still declares no `batched`.
+- **Batched calls, `gpu_mem` and `workers_per_device` are not wired** (R-327, R-328). `MeasuredFit` probes a batch
+  only on a class with a device share (`gpu_mem`), for a task with a residency key whose calibration holds a device
+  memory fit with `m1`; otherwise its batch is the declared one or 1. senselab's GPU classes set no `gpu_mem`, so the
+  pool batches nothing there even once `WorkerCall` declares `batched`.
