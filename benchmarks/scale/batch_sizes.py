@@ -32,17 +32,12 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import numpy
-from pydra.utils.resources import ComputeResources
-from pydra.workers.pool.calibration import MemoryFit, TimeRecord
-from pydra.workers.pool.classes import WorkerClass
-from pydra.workers.pool.fit import MeasuredFit, probe_batch
-from pydra.workers.pool.placement import FitRequest
-from pydra.workers.pool.settings import PoolSettings
 from senselab_core.runtime.call import RunConfig, packaged
 from senselab_core.runtime.compare import compare
 from senselab_core.runtime.config import load_yaml
 from senselab_core.runtime.execution.warm import settings
 from senselab_core.runtime.profiles import ExecutionProfile
+from senselab_core.testing.pools import DeviceFit, memory_bound, probe_size
 from senselab_core.testing.synth import tone_set
 
 AMPLITUDE = 0.1
@@ -208,17 +203,13 @@ class Bench:
             }
         return found, orders, [c for calls in runs.values() for run in calls for c in run]
 
-    def probed(self, recs: Sequence[Record], bound: int, pool: PoolSettings) -> dict[str, Any]:
-        """Run `recs` call by call at the size `probe_batch` asks for; its calls and the size it settles on."""
+    def probed(self, recs: Sequence[Record], bound: int, samples: int, gain: float) -> dict[str, Any]:
+        """Run `recs` call by call at the size pydra's probe asks for; its calls and the size it settles on."""
         per_unit: dict[int, list[float]] = {}
         calls: list[int] = []
-
-        def times() -> list[TimeRecord]:
-            return [TimeRecord(b, statistics.median(v), len(v)) for b, v in per_unit.items()]
-
         i = 0
         while i < len(recs):
-            size = probe_batch(times(), bound, pool.probe_samples, pool.probe_gain)
+            size = probe_size(per_unit, bound, samples, gain)
             call = self.send(recs[i : i + size])
             if call.size == size:
                 per_unit.setdefault(size, []).append(call.wall_s / call.audio_s)
@@ -226,51 +217,22 @@ class Bench:
             i += call.size
         return {
             "calls": calls,
-            "chosen": probe_batch(times(), bound, pool.probe_samples, pool.probe_gain),
+            "chosen": probe_size(per_unit, bound, samples, gain),
             "per_audio_s": {str(b): statistics.median(v) for b, v in sorted(per_unit.items())},
-            "samples": pool.probe_samples,
-            "gain": pool.probe_gain,
+            "samples": samples,
+            "gain": gain,
             "bound": bound,
         }
 
 
-def memory_fit(resident: int, calls: Sequence[Call]) -> MemoryFit:
+def memory_fit(resident: int, calls: Sequence[Call]) -> DeviceFit:
     """Fit each call's peak above the model as `m0 + m1 × (size × longest)`; `m1` None under two distinct units."""
     units = numpy.array([c.size * c.longest_s for c in calls])
     extra = numpy.array([c.extra_bytes for c in calls], dtype=float)
     if len(set(units.tolist())) < LINE_POINTS:
-        return MemoryFit(resident, float(extra.max()), None, len(calls))
+        return DeviceFit(resident, float(extra.max()), None, len(calls))
     m1, m0 = numpy.polyfit(units, extra, 1)
-    return MemoryFit(resident, float(m0), float(m1), len(calls))
-
-
-@dataclass(frozen=True)
-class _Measured:
-    """A pydra `Calibration` holding only the memory fit measured here."""
-
-    fit: MemoryFit
-
-    def memory(self, key: str, hardware: object, task: str | None = None) -> MemoryFit:  # noqa: ARG002
-        """Return the measured fit."""
-        return self.fit
-
-    def unfit(self, key: str) -> list[object]:  # noqa: ARG002
-        """Return no unfit record."""
-        return []
-
-    def times(self, key: str, hardware: object, task: str | None = None) -> list[TimeRecord]:  # noqa: ARG002
-        """Return no time record."""
-        return []
-
-
-def memory_bound(fit: MemoryFit, device_bytes: int, profile: ExecutionProfile, longest_s: float) -> int:
-    """Return `MeasuredFit.memory_bound` of `fit` on a one-GPU class of `device_bytes` under the profile's sizing."""
-    cls = WorkerClass(
-        name="probe", device="cuda", gpus=1, gpu_mem=device_bytes, quantum_jobs=profile.pool.quantum_items
-    )
-    request = FitRequest(residency=(), resources=ComputeResources(), units=longest_s, key="measured")
-    rule = MeasuredFit(_Measured(fit), headroom=profile.sizing.memory_headroom)
-    return int(rule.memory_bound(request, cls, [longest_s]))
+    return DeviceFit(resident, float(m0), float(m1), len(calls))
 
 
 def loaded(task: str, backend_name: str) -> Loaded:
@@ -302,7 +264,8 @@ def run(
     per_size, orders, calls = bench.explicit(recs, plan)
     fit = memory_fit(bench.resident, calls)
     bound = memory_bound(fit, device.total(), profile, max(s for _, s in recs))
-    probe = bench.probed(recs, bound, settings(profile))
+    pool = settings(profile)
+    probe = bench.probed(recs, bound, pool.probe_samples, pool.probe_gain)
     errors = sum(v["errors"] for v in per_size.values())
     agree = all(v["agree_with_alone"] == len(recs) for v in per_size.values())
     return {

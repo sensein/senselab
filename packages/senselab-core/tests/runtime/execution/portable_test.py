@@ -9,7 +9,7 @@ from pool_stack_fixture import relabel_store
 from senselab_core.kernel.identity import LogicalKey
 from senselab_core.runtime.execution import portable, warm
 from senselab_core.runtime.store import key_record
-from senselab_core.testing.pools import POOL_PROFILE
+from senselab_core.testing.pools import POOL_PROFILE, migrate_pickle_cache
 from senselab_worker.canonical import jcs_dumps
 
 KEY = LogicalKey(
@@ -160,25 +160,13 @@ def test_the_store_leases_are_bounded_by_the_profiles_lease_section(tmp_path: Pa
     assert store.lease_settings == bounds and store.lease_settings.holder == "anonymous"
 
 
-def _double(x: int) -> int:
-    return 2 * x
-
-
 @pytest.mark.contract
 def test_migrating_a_pickle_cache_skips_every_slot_and_writes_nothing(tmp_path: Path) -> None:
     """A pydra cache's slots carry no logical key, so each is reported skipped and the store holds no entry."""
-    from pydra.compose import python
-    from pydra.engine.portable.migrate import migrate
-    from pydra.engine.store import PickleStore
-    from pydra.engine.submitter import Submitter
-
-    cache = tmp_path / "cache"
-    with Submitter(worker="debug", store=PickleStore(cache), telemetry=False) as submitter:
-        submitter(python.define(_double)(x=3))
     store = portable.open_store(tmp_path / "store", tmp_path / "work")
-    report = migrate(cache, store, trust_source=True)
-    assert report.slots and {s.status for s in report.slots} == {"skipped"}
-    assert all(store.stored(s.checksum) == [] for s in report.slots)
+    slots = migrate_pickle_cache(tmp_path / "cache", store)
+    assert slots and {status for _, status in slots} == {"skipped"}
+    assert all(store.stored(checksum) == [] for checksum, _ in slots)
 
 
 @pytest.mark.logic
