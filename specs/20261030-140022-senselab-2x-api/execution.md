@@ -906,3 +906,20 @@ roots (P9, P7). What changed for senselab:
   measured N to give it.
 - **`legacy=` roots do not replace the @1 header upgrade.** They read pydra's flat `<root>/<checksum>` caches, not a
   `PortableStore` written under another identity.
+
+## Amendment 2026-11-28 (route-B S4): the repin to pydra `integration/senselab-r2` @`2cdd817b`
+
+The new branch is the restacked RFC series (one linear chain) with pydra `main` merged in. What changed for senselab:
+
+- **Protocol members are declared, not probed.** `SenselabStore` subclasses pydra's `ResultStore` and inherits its
+  optional members' defaults, which serve nothing (`finds` False, no `read_succeeded`), and its `acquire` takes
+  `resumable`. `SenselabIdentity` declares `scheme` None (its checksums are not `pydra-identity` digests) and
+  `supplied_key` None (a checksum from outside has no logical key). `_EpochLease` declares `exclusive`: the run's
+  records belong to it alone. `PoolSession` calls the substrate's declared `check_root` instead of probing for it.
+- **No key changed.** senselab supplies every pydra checksum. So pydra's `class@1` values, the `batched` code digest
+  and `fill` absence suffixes do not reach a senselab key, and the digest contract tests pass unchanged. senselab
+  produces no `Absent`, so pydra's default `propagate` mode and `AbsentNotAccepted` do not apply.
+- **`max_concurrent` is unused.** senselab bounds pool work by its profile's worker classes, not the submitter cap.
+- **Batched calls and `workers_per_device` are not wired** (R-327, R-328). `WarmPool` already sizes with
+  `MeasuredFit`, which probes a batch call by call when a task declares `batched` without `batch`. That removes R-327's
+  "no source for N", but `WorkerCall` still declares no `batched`.
