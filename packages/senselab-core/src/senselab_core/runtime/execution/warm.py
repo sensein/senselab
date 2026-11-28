@@ -366,9 +366,7 @@ class PoolSession:
                 only this node sees. Nothing is written.
         """
         chosen = substrate if substrate is not None else substrate_of(profile)
-        check_root = getattr(chosen, "check_root", None)
-        if check_root is not None:
-            check_root(Path(root))
+        chosen.check_root(Path(root))
         self.here = isinstance(chosen, LocalSubstrate) if here is None else here
         self.profile = profile
         self.classes = worker_classes(profile, placements)
