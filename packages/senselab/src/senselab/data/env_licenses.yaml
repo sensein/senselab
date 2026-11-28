@@ -507,11 +507,11 @@ envs:
       version: 2.46.3
     pydra:
       expression: Apache-2.0
-      source: pydra 1.0a14.dev341+g2cdd817b1 classifier
+      source: pydra 1.0a14.dev342+gd8fdeaa5d classifier
       verified:
         date: '2026-11-28'
         how: classifier
-      version: 1.0a14.dev341+g2cdd817b1
+      version: 1.0a14.dev342+gd8fdeaa5d
     pyyaml:
       expression: MIT
       source: pyyaml 6.0.3 license-field
